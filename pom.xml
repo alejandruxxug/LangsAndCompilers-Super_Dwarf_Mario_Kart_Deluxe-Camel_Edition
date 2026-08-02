@@ -115,8 +115,7 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
                 <configuration>
-                    <source>8</source>
-                    <target>8</target>
+                    <release>25</release>
                 </configuration>
             </plugin>
             <plugin>
@@ -129,7 +128,7 @@
                         <id>default-cli</id>
                         <configuration>
                             <mainClass>
-                                org.example.langsandcompilerssuper_dwarf_mario_kart_deluxecamel_edition/org.example.langsandcompilerssuper_dwarf_mario_kart_deluxecamel_edition.HelloApplication
+                                org.example.langsandcompilerssuper_dwarf_mario_kart_deluxecamel_edition/org.example.langsandcompilerssuper_dwarf_mario_kart_deluxecamel_edition.Launcher
                             </mainClass>
                             <launcher>app</launcher>
                             <jlinkZipName>app</jlinkZipName>
