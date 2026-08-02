@@ -4,6 +4,10 @@ target/
 !**/src/test/**/target/
 .kotlin
 
+### FXGL runtime output (written next to the working dir on every run) ###
+logs/
+system/
+
 ### IntelliJ IDEA ###
 .idea/modules.xml
 .idea/jarRepositories.xml
