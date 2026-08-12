@@ -1,0 +1,31 @@
+/*
+ * Base theme.
+ *
+ * Dark by default: the level meters, the circuit visualizer and the runner are all drawn on a
+ * Canvas over this background, and a dark ground keeps the sprite palette readable.
+ */
+
+.root-pane {
+    -fx-background-color: linear-gradient(to bottom, #12121c 0%, #1d1b2e 60%, #241f38 100%);
+}
+
+.title-text {
+    -fx-font-family: "Press Start 2P";
+    -fx-font-size: 28px;
+    -fx-fill: #ffd23f;
+    -fx-stroke: #1a1a2e;
+    -fx-stroke-width: 1.5;
+}
+
+.subtitle {
+    -fx-font-family: "Press Start 2P";
+    -fx-font-size: 11px;
+    -fx-text-fill: #6ee7ff;
+}
+
+.report {
+    -fx-font-family: "Press Start 2P";
+    -fx-font-size: 9px;
+    -fx-text-fill: #9aa3b8;
+    -fx-line-spacing: 6px;
+}

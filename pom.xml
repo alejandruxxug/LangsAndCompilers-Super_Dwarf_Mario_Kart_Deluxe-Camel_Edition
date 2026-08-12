@@ -4,105 +4,74 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>org.example</groupId>
-    <artifactId>LangsAndCompilers-Super_Dwarf_Mario_Kart_Deluxe-Camel_Edition</artifactId>
+    <groupId>com.eia</groupId>
+    <artifactId>super-dwarf-mario-kart-deluxe-camel-edition</artifactId>
     <version>1.0-SNAPSHOT</version>
-    <name>LangsAndCompilers-Super_Dwarf_Mario_Kart_Deluxe-Camel_Edition</name>
+    <!-- The display name is deliberate: underscores and hyphen included. See AppConfig.APP_NAME. -->
+    <name>Super_Dwarf_Mario_Kart_Deluxe-Camel_Edition</name>
+    <description>JavaFX music player with hand-written data structures and a beat-synced rhythm game</description>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <junit.version>5.12.1</junit.version>
+        <maven.compiler.release>25</maven.compiler.release>
+
+        <!-- Versions below were verified to resolve against Maven Central before use. -->
+        <!-- Overridden on the command line: ./mvnw javafx:run -Dsdmk.smokeTest=true
+             launches the app, prints what it verified, and closes itself. -->
+        <sdmk.smokeTest>false</sdmk.smokeTest>
+
+        <javafx.version>26.0.2</javafx.version>
+        <mp3spi.version>1.9.5.4</mp3spi.version>
+        <jackson.version>2.22.1</jackson.version>
+        <junit.version>6.1.3</junit.version>
     </properties>
 
     <dependencies>
+        <!-- ==== JavaFX (presentation only; ds/model/playback/audio/analysis must not import it) ==== -->
         <dependency>
             <groupId>org.openjfx</groupId>
             <artifactId>javafx-controls</artifactId>
-            <version>21.0.6</version>
+            <version>${javafx.version}</version>
         </dependency>
         <dependency>
             <groupId>org.openjfx</groupId>
-            <artifactId>javafx-fxml</artifactId>
-            <version>21.0.6</version>
+            <artifactId>javafx-graphics</artifactId>
+            <version>${javafx.version}</version>
         </dependency>
-        <dependency>
-            <groupId>org.openjfx</groupId>
-            <artifactId>javafx-web</artifactId>
-            <version>21.0.6</version>
-        </dependency>
+        <!-- SwingFXUtils: converting decoded/analysed images between AWT and JavaFX. -->
         <dependency>
             <groupId>org.openjfx</groupId>
             <artifactId>javafx-swing</artifactId>
-            <version>21.0.6</version>
+            <version>${javafx.version}</version>
         </dependency>
+
+        <!-- ==== MP3 decoding through the javax.sound.sampled SPI ==== -->
+        <!-- Transitively pulls jlayer + tritonus-share, which register the MPEG SPI providers. -->
         <dependency>
-            <groupId>org.openjfx</groupId>
-            <artifactId>javafx-media</artifactId>
-            <version>21.0.6</version>
-        </dependency>
-        <dependency>
-            <groupId>org.controlsfx</groupId>
-            <artifactId>controlsfx</artifactId>
-            <version>11.2.1</version>
-        </dependency>
-        <dependency>
-            <groupId>com.dlsc.formsfx</groupId>
-            <artifactId>formsfx-core</artifactId>
-            <version>11.6.0</version>
+            <groupId>com.googlecode.soundlibs</groupId>
+            <artifactId>mp3spi</artifactId>
+            <version>${mp3spi.version}</version>
             <exclusions>
+                <!-- jlayer declares JUnit 3.8.2 at compile scope, which would put an ancient
+                     test framework on the main classpath. Tests use JUnit 5 only. -->
                 <exclusion>
-                    <groupId>org.openjfx</groupId>
-                    <artifactId>*</artifactId>
+                    <groupId>junit</groupId>
+                    <artifactId>junit</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>
+
+        <!-- ==== Persistence (library, scores, beatmap cache) ==== -->
         <dependency>
-            <groupId>net.synedra</groupId>
-            <artifactId>validatorfx</artifactId>
-            <version>0.6.1</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.openjfx</groupId>
-                    <artifactId>*</artifactId>
-                </exclusion>
-            </exclusions>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
         </dependency>
-        <dependency>
-            <groupId>org.kordamp.bootstrapfx</groupId>
-            <artifactId>bootstrapfx-core</artifactId>
-            <version>0.4.0</version>
-        </dependency>
-        <dependency>
-            <groupId>eu.hansolo</groupId>
-            <artifactId>tilesfx</artifactId>
-            <version>21.0.9</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.openjfx</groupId>
-                    <artifactId>*</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-        <dependency>
-            <groupId>com.github.almasb</groupId>
-            <artifactId>fxgl</artifactId>
-            <version>11.17</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.openjfx</groupId>
-                    <artifactId>*</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
+
+        <!-- ==== Tests ==== -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter-api</artifactId>
-            <version>${junit.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter-engine</artifactId>
+            <artifactId>junit-jupiter</artifactId>
             <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
@@ -113,32 +82,30 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
-                <configuration>
-                    <release>25</release>
-                </configuration>
+                <version>3.15.0</version>
             </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.6</version>
+            </plugin>
+
             <plugin>
                 <groupId>org.openjfx</groupId>
                 <artifactId>javafx-maven-plugin</artifactId>
                 <version>0.0.8</version>
-                <executions>
-                    <execution>
-                        <!-- Default configuration for running with: mvn clean javafx:run -->
-                        <id>default-cli</id>
-                        <configuration>
-                            <mainClass>
-                                org.example.langsandcompilerssuper_dwarf_mario_kart_deluxecamel_edition/org.example.langsandcompilerssuper_dwarf_mario_kart_deluxecamel_edition.Launcher
-                            </mainClass>
-                            <launcher>app</launcher>
-                            <jlinkZipName>app</jlinkZipName>
-                            <jlinkImageName>app</jlinkImageName>
-                            <noManPages>true</noManPages>
-                            <stripDebug>true</stripDebug>
-                            <noHeaderFiles>true</noHeaderFiles>
-                        </configuration>
-                    </execution>
-                </executions>
+                <configuration>
+                    <mainClass>com.eia.superdwarfkart.app.App</mainClass>
+                    <options>
+                        <!-- Fixed heap so behaviour is identical across the team's machines
+                             rather than derived from each one's physical RAM. -->
+                        <option>-Xmx1g</option>
+                        <!-- javafx:run forks a JVM, so -D on the Maven command line does not
+                             reach the application unless it is forwarded here. -->
+                        <option>-Dsdmk.smokeTest=${sdmk.smokeTest}</option>
+                    </options>
+                </configuration>
             </plugin>
         </plugins>
     </build>

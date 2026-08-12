@@ -1,0 +1,252 @@
+# Super_Dwarf_Mario_Kart_Deluxe-Camel_Edition
+
+A JavaFX desktop music player built around three **hand-written data structures**, with a
+beat-synchronised Mario-Kart-styled rhythm game riding on top of the audio it plays.
+
+Data Structures course project, Universidad EIA.
+
+> The name is intentional, underscores and hyphen included. It is styled after a ROM filename
+> and pairs with the 8-bit font. Short form: `SDMK_Deluxe`.
+
+---
+
+## Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| **JDK 25** | Built and tested on OpenJDK 25.0.2. |
+| **Maven** | **Not required.** Use the bundled wrapper (`./mvnw`), which fetches Maven 3.8.5 on first use. |
+| Internet, once | Only to download dependencies the first time. The application itself runs fully offline — the font is bundled, nothing is fetched at runtime. |
+
+Everything else, including JavaFX 26, is resolved by Maven.
+
+## Running
+
+```bash
+./mvnw javafx:run          # launch
+./mvnw test                # run the JUnit suite
+./mvnw clean compile       # compile only
+```
+
+Verify a launch without leaving a window on screen — it starts, prints what it checked, and
+closes itself:
+
+```bash
+./mvnw javafx:run -Dsdmk.smokeTest=true
+```
+
+```
+[smoke] window shown      : true
+[smoke] window title      : Super_Dwarf_Mario_Kart_Deluxe-Camel_Edition
+[smoke] 8-bit font loaded : true
+[smoke] RESULT            : PASS
+```
+
+## Project status
+
+Built milestone by milestone; each is verified before the next begins.
+
+| # | Milestone | Status |
+|---|---|---|
+| M0 | Maven skeleton, `javafx:run` opens a styled window, font loads | ✅ |
+| M1 | Domain model + the three hand-written structures + JUnit tests | ✅ |
+| M2 | Library CRUD, search, 0–100 rating, cover display, JSON persistence | ⬜ |
+| M3 | Three playback modes behind one interface, mode selector, complexity panel | ⬜ |
+| M4 | **Structure visualizer** — circuit, starting grid, animated BST traversal, live complexity scatter, Presentation Mode | ⬜ |
+| M5 | Real playback, PCM tap, independent left/right level meters | ⬜ |
+| M6 | Offline beat analysis and beatmap cache | ⬜ |
+| M7 | The 3-lane rhythm runner | ⬜ |
+| M8 | Mini companion window | ⬜ |
+| M9 | Dark mode, favourites, history, statistics, keyboard shortcuts | ⬜ |
+| M10 | *Optional:* Spotify playback through go-librespot | ⬜ |
+
+---
+
+## The three hand-written structures
+
+None of these is backed by a `java.util` collection. All are generic, and every public method
+documents its time complexity in its Javadoc.
+
+### `CircularDoublyLinkedList<T>` — shuffle playback
+Doubly linked and circular, with no null terminators: past the tail is the head, before the head
+is the tail, so traversal never ends. `next()` and `previous()` are O(1) — being doubly linked is
+what makes stepping backwards constant rather than a full lap.
+
+The shuffle is baked into the ring **once at load time** rather than rolled per step, so
+`previous()` returns the song actually played before, and the next song is always predictable.
+
+Its iterator walks **exactly one lap** and then stops, so a `for-each` over an endless ring
+terminates.
+
+### `SimpleQueue<T>` — arrival order playback
+Strict FIFO with head and tail pointers, O(1) at both ends.
+
+The queue is a **view built from the library, never the storage of it**. Draining it consumes
+the view; the library keeps every song and the mode can be rebuilt at any time. A queue cannot
+be walked backwards, so this mode reports that it has no `previous()` and the user interface
+disables that button instead of letting it throw.
+
+### `BinarySearchTree<T>` — alphabetical playback
+Ordered by title, then artist, then identifier, case-insensitively. The tiebreakers matter: with
+title alone, two different songs sharing a title compare equal and one is silently dropped.
+
+Every node carries a **parent pointer**, and playback navigation is **real tree navigation** —
+the in-order successor descends into the right subtree and runs left to its minimum, or climbs
+through parents until it arrives from a left child; the predecessor mirrors it. The tree is never
+flattened into an array and indexed.
+
+Deletion handles all three cases (leaf, one child, two children via the in-order successor) by
+**relinking nodes rather than copying values between them**.
+
+---
+
+## Where to put assets
+
+Drop artwork anywhere under `src/main/resources/assets/` — the registry scans it recursively and
+the folder layout does not matter.
+
+Files are classified by case-insensitive keyword in the filename:
+
+| Asset | Matched keywords |
+|---|---|
+| Spinning disk | `disk`, `disc` |
+| Racer | `char`, `player`, `kart`, `racer`, `personaje` |
+| Star | `star`, `estrella` |
+| Coin | `coin`, `moneda` |
+| Explosion | `explos` |
+| Obstacle | `bump`, `obstacle` |
+| Background | `bg`, `background`, `fondo` |
+| Select screen | `select` |
+
+Spritesheets are sliced by inference: where the frame count is known (the disk is 13 frames) the
+frame width is the image width divided by that count; otherwise frames are assumed square.
+
+**Nothing here is mandatory.** Any missing asset resolves to a labelled magenta placeholder and
+logs one warning — the application always starts, with or without art.
+
+### Overriding the detection
+
+An optional `src/main/resources/assets/assets.json` overrides everything: explicit path, frame
+count, frames per second, origin. If it is absent, a template is written out on first run
+populated with whatever was detected, so it can be corrected by hand rather than written from
+scratch.
+
+*(A few Spanish keywords appear in the table above. They are there because some sprites were
+exported with Spanish filenames before the English-only rule existed. This is the only place in
+the project where Spanish appears, and only ever as a pattern to match filenames against —
+never as an identifier or as anything the user sees.)*
+
+---
+
+## How the beatmap cache works
+
+Beat detection runs **off the playback path**, on a background thread, on import or first play —
+never on the audio thread.
+
+1. The file is decoded to PCM as fast as it reads.
+2. A spectral-flux novelty curve is computed over 1024-sample windows with a 512-sample hop.
+3. Peaks above an adaptive local threshold, at least ~100 ms apart, become onsets.
+4. The tempo is estimated from a histogram of intervals between onsets; the onsets closest to
+   that grid are marked as strong beats.
+
+The result — tempo, duration, onsets, strong beats, intensity — is written to:
+
+```
+~/.superdwarfkart/beatmaps/<sha256-of-the-audio-file>.json
+```
+
+The cache key is the **content hash of the file plus the analyzer version**. Hashing the content
+means renaming or moving a file does not force reanalysis, and including the analyzer version
+means improving the algorithm invalidates every stale map automatically. A cached file is never
+re-analysed.
+
+Other per-user state lives alongside it in `~/.superdwarfkart/`: `library.json` and `scores.json`.
+
+---
+
+## Where each requirement is implemented
+
+| Requirement | Where |
+|---|---|
+| Circular doubly linked list, by hand | `ds/CircularDoublyLinkedList.java` |
+| FIFO queue, by hand | `ds/SimpleQueue.java` |
+| Binary search tree, by hand | `ds/BinarySearchTree.java` |
+| Generic types on all three | `<T>` on every structure |
+| Documented time complexity | Javadoc on every public method of `ds/` |
+| Unit tests for the structures | `src/test/java/com/eia/superdwarfkart/ds/` |
+| Encapsulation and validation | `model/Song.java` — private fields, validating setters |
+| Inheritance and polymorphism | `playback/` — `PlaybackMode` → `AbstractPlaybackMode` → three modes *(M3)* |
+| Interfaces | `PlaybackMode`, `AudioSource`, `PcmListener`, `Repository<T>`, `StepCounter` |
+| Playback mode 1 — shuffle | `playback/ShuffleMode` over the circular list *(M3)* |
+| Playback mode 2 — arrival order | `playback/ArrivalOrderMode` over the queue *(M3)* |
+| Playback mode 3 — alphabetical | `playback/AlphabeticalMode` over the tree *(M3)* |
+| Library CRUD, search, filters | `ui/LibraryView`, `persistence/LibraryRepository` *(M2)* |
+| 0–100 rating | `model/Song#setRating` — throws outside the range |
+| Persistence | `persistence/`, JSON under `~/.superdwarfkart/` *(M2)* |
+| Separation of logic and presentation | `ds/`, `model/`, `playback/`, `audio/`, `analysis/` import no JavaFX |
+| Bonus: favourites, play counts | `model/Song` |
+| Bonus: complexity instrumentation | `ds/StepCounter` → `ui/visualizer/OperationCounter` *(M4)* |
+
+---
+
+## Architecture notes
+
+**Logic and presentation are strictly separated.** Nothing in `ds/`, `model/`, `playback/`,
+`audio/` or `analysis/` imports `javafx.*` — including `javafx.util.Duration`, which is why the
+model uses `java.time.Duration`. The user interface observes shared state; it never owns it.
+
+**The step counter is declared in `ds/`, not in the visualizer that consumes it.** The structures
+must not depend on the presentation layer, so `ds/StepCounter` is the seam and
+`ui/visualizer/OperationCounter` implements it, passed in through a constructor. It defaults to a
+no-op so instrumentation never sits in a hot path.
+
+**The audio thread is never blocked.** The PCM callback copies, computes and returns; levels are
+published into atomics and the user interface polls them from an `AnimationTimer` at ~60 fps
+rather than being pushed a message per audio block.
+
+**There is no `module-info.java`.** The project runs on the classpath deliberately: `mp3spi`,
+`jlayer` and `tritonus-share` are legacy non-modular jars whose `javax.sound.sampled` service
+registration is awkward under the module system.
+
+### Audio format
+
+Everything downstream assumes one format: **PCM signed, 44100 Hz, 16-bit, stereo,
+little-endian**, 4 bytes per frame, interleaved as `[L0 R0 L1 R1 …]`.
+
+MP3 support was verified against the resolved jars before anything was built on it:
+`AudioSystem.getAudioInputStream` decodes MP3 through the mp3spi SPI and converts to the target
+format above, including resampling — a 22.05 kHz MPEG-2 Layer III file decodes to 44.1 kHz
+stereo correctly. WAV works natively.
+
+Level meters are computed **per channel, never as one combined number**: samples are
+deinterleaved (even index left, odd index right) and RMS and peak are tracked separately for each.
+
+---
+
+## Optional: Spotify playback
+
+Not built, and nothing in the application depends on it. If it is attempted, it plugs in behind
+the `AudioSource` interface and nothing outside `audio/` learns that a subprocess exists.
+
+The implementation would be **`devgianlu/go-librespot`**, run as a child process writing raw
+`s16le` PCM to a named pipe — which is exactly the format the analyzer and the meters already
+expect, so nothing downstream would change.
+
+Two settings are correctness requirements rather than preferences: `zeroconf_enabled: false` and
+`disable_autoplay: true`. If either is wrong, Spotify chooses the next track instead of the
+active playback mode, and the data structures become decorations while playback carries on
+looking normal.
+
+**`librespot-java` (`xyz.gianlu.librespot`) is deprecated and has been tested — it does not
+work.** It needs JitPack or a protoc source build, and requires a Premium account. Do not spend
+time on it. `librespot-org/librespot-golang` is a different, archived project.
+
+Spotify playback would also be POSIX-only, since it needs `mkfifo`. Local file playback stays
+portable.
+
+---
+
+## Credits
+
+**Press Start 2P** by CodeMan38, bundled under the SIL Open Font License 1.1. The full licence
+text ships alongside the font at `src/main/resources/fonts/OFL.txt`.
