@@ -1,5 +1,7 @@
 package com.eia.superdwarfkart.ui;
 
+import com.eia.superdwarfkart.assets.AssetKind;
+import com.eia.superdwarfkart.assets.AssetRegistry;
 import com.eia.superdwarfkart.assets.SpriteSheet;
 import javafx.geometry.Pos;
 import javafx.scene.layout.HBox;
@@ -14,9 +16,15 @@ import javafx.scene.layout.HBox;
  */
 public class RatingDisplay extends HBox {
 
-    /** The star strip, shared by every instance: one image for the whole interface. */
+    /**
+     * The star strip, shared by every instance: one image for the whole interface.
+     *
+     * <p>Asked for by kind rather than by filename. Whatever the artist called the file, and
+     * however many frames they drew, the registry finds it and slices it - and returns a
+     * placeholder if there is no star art at all.
+     */
     private static final SpriteSheet STAR_SHEET =
-            SpriteSheet.load("/assets/textures/Sprites/Star.png", 9);
+            AssetRegistry.shared().sheet(AssetKind.STAR);
 
     /** Opacity of the star when the song is unrated. */
     private static final double UNRATED_OPACITY = 0.15;

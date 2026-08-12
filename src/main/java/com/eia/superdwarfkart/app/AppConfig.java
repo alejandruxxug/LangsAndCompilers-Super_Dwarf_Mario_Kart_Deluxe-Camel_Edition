@@ -150,6 +150,18 @@ public final class AppConfig {
         return appHome().resolve("scores.json");
     }
 
+    /**
+     * Returns the user's own artwork folder.
+     *
+     * <p>Artwork found here overrides the artwork bundled in the jar, so new art can be dropped
+     * in without rebuilding the application - which is how art actually arrives on this project.
+     *
+     * @return the assets folder; not guaranteed to exist yet
+     */
+    public static Path assetsDir() {
+        return appHome().resolve("assets");
+    }
+
     private AppConfig() {
         throw new AssertionError("AppConfig is a constant holder and must not be instantiated");
     }

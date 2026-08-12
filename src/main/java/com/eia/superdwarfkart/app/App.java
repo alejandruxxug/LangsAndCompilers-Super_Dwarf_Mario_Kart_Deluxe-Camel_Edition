@@ -1,5 +1,7 @@
 package com.eia.superdwarfkart.app;
 
+import com.eia.superdwarfkart.assets.AssetKind;
+import com.eia.superdwarfkart.assets.AssetRegistry;
 import com.eia.superdwarfkart.model.Library;
 import com.eia.superdwarfkart.model.Song;
 import com.eia.superdwarfkart.persistence.LibraryRepository;
@@ -53,10 +55,16 @@ public class App extends Application {
 
     private Library library;
     private Repository<Song> libraryRepository;
+    private AssetRegistry assets;
 
     @Override
     public void start(Stage stage) {
         boolean pixelFont = Fonts.load();
+
+        // Scanned here rather than on first sprite lookup, so that the summary and any warning
+        // about missing artwork appear at the top of the log, and so that the manifest template
+        // is written before anything asks for a sprite. Scanning reads filenames only.
+        assets = AssetRegistry.shared();
 
         libraryRepository = new LibraryRepository();
         library = loadLibrary(libraryRepository);
@@ -148,6 +156,21 @@ public class App extends Application {
         System.out.println("[smoke] library table     : " + tablePresent);
         System.out.println("[smoke] songs loaded      : " + library.size());
         System.out.println("[smoke] library file      : " + libraryRepository.storageLocation());
+        System.out.println("[smoke] assets found      : " + assets.size());
+        System.out.println("[smoke] asset manifest    : " + assets.manifestFile());
+        // Decodes each sheet, which normal startup does not do. Worth it here: how a sheet gets
+        // sliced is inferred from its dimensions, and this is the only place that inference can
+        // be checked against the real artwork - a unit test would need a graphics toolkit.
+        for (AssetKind kind : AssetKind.values()) {
+            if (kind == AssetKind.UNKNOWN) {
+                continue;
+            }
+            String found = assets.firstEntry(kind)
+                    .map(entry -> entry.relativePath()
+                            + " (" + assets.sheet(kind).frameCount() + " frames)")
+                    .orElse("- missing, placeholder -");
+            System.out.printf("[smoke]   %-11s     : %s%n", kind.name().toLowerCase(), found);
+        }
 
         boolean ok = stage.isShowing()
                 && AppConfig.APP_NAME.equals(stage.getTitle())

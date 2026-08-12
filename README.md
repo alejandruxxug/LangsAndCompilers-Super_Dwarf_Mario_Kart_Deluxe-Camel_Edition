@@ -60,13 +60,15 @@ Built milestone by milestone; each is verified before the next begins.
 | M0 | Maven skeleton, `javafx:run` opens a styled window, font loads | ✅ |
 | M1 | Domain model + the three hand-written structures + JUnit tests | ✅ |
 | M2 | Library CRUD, search, 0–100 rating, cover display, JSON persistence | ✅ |
+| — | Asset registry: keyword classification, frame inference, `assets.json`, drop-in folder | ✅ |
 | M3 | Three playback modes behind one interface, mode selector, complexity panel | ⬜ |
 | M4 | **Structure visualizer** — circuit, starting grid, animated BST traversal, live complexity scatter, Presentation Mode | ⬜ |
 | M5 | Real playback, PCM tap, independent left/right level meters | ⬜ |
 | M6 | Offline beat analysis and beatmap cache | ⬜ |
 | M7 | The 3-lane rhythm runner | ⬜ |
 | M8 | Mini companion window | ⬜ |
-| M9 | Dark mode, favourites, history, statistics, keyboard shortcuts | ⬜ |
+| M9 | Favourites, history, statistics, keyboard shortcuts | ⬜ |
+| M11 | **Mood system** — 16-colour GBA palettes, overlay layers, pixel editor, palette import. Dark mode ships here, as two moods rather than a boolean | ⬜ |
 | M10 | *Optional:* Spotify playback through go-librespot | ⬜ |
 
 ---
@@ -111,34 +113,58 @@ Deletion handles all three cases (leaf, one child, two children via the in-order
 
 ## Where to put assets
 
-Drop artwork anywhere under `src/main/resources/assets/` — the registry scans it recursively and
-the folder layout does not matter.
+There are two places artwork can live, and the registry scans both recursively — the folder
+layout inside them does not matter:
 
-Files are classified by case-insensitive keyword in the filename:
+| Where | For what |
+|---|---|
+| `src/main/resources/assets/` | art that ships with the application; needs a rebuild |
+| `~/.superdwarfkart/assets/` | **drop-in folder — no rebuild.** Wins over a bundled file of the same name |
+
+So new art can be tried out by copying it into `~/.superdwarfkart/assets/` and restarting.
+
+Files are classified by case-insensitive keyword in the filename. **The table is in priority
+order**: a name matching more than one row takes the first, because a filename says what a sprite
+*is* and then qualifies it — `kart_explosion.png` is an explosion, `racer-select.png` is a menu.
 
 | Asset | Matched keywords |
 |---|---|
 | Spinning disk | `disk`, `disc` |
-| Racer | `char`, `player`, `kart`, `racer`, `personaje` |
+| Select screen | `select` |
 | Star | `star`, `estrella` |
 | Coin | `coin`, `moneda` |
 | Explosion | `explos` |
 | Obstacle | `bump`, `obstacle` |
 | Background | `bg`, `background`, `fondo` |
-| Select screen | `select` |
+| Racer | `char`, `player`, `kart`, `racer`, `personaje`, **and every racer's name** |
 
-Spritesheets are sliced by inference: where the frame count is known (the disk is 13 frames) the
-frame width is the image width divided by that count; otherwise frames are assumed square.
+A racer is also matched by name, because `Mario.png` contains none of those keywords. Two-letter
+keywords match only as whole words, so `bgm-theme.png` is not mistaken for a background.
+
+Spritesheets are sliced by inference: where the frame count is known the frame width is the image
+width divided by that count; otherwise **frames are assumed square**, which correctly reads the
+disk as 13 frames, the star as 9, the coin as 1 and each racer as 4 — no frame table needed.
+Scanning reads filenames only; an image is decoded the first time it is actually drawn, so a
+folder of large sheets costs nothing at startup.
 
 **Nothing here is mandatory.** Any missing asset resolves to a labelled magenta placeholder and
-logs one warning — the application always starts, with or without art.
+logs one warning — the application always starts, with or without art. Run with
+`-Dsdmk.smokeTest=true` to print what was found, what is missing, and how each sheet was sliced.
 
 ### Overriding the detection
 
-An optional `src/main/resources/assets/assets.json` overrides everything: explicit path, frame
-count, frames per second, origin. If it is absent, a template is written out on first run
-populated with whatever was detected, so it can be corrected by hand rather than written from
-scratch.
+An optional `assets.json` overrides every guess:
+
+```json
+{ "key": "untitled-4", "kind": "STAR", "file": "untitled-4.png", "frames": 9 }
+```
+
+`kind` is one of the rows above (or `UNKNOWN`); `frames` of `0` means "work it out from the
+image". If no manifest exists, one is written to **`~/.superdwarfkart/assets/assets.json`** on
+first run, already filled in with whatever was detected — so a wrong guess is corrected by
+editing a line rather than by writing the file from scratch. It goes in the user folder because
+that is the only writable location that survives `./mvnw clean`. An existing manifest is never
+overwritten.
 
 *(A few Spanish keywords appear in the table above. They are there because some sprites were
 exported with Spanish filenames before the English-only rule existed. This is the only place in

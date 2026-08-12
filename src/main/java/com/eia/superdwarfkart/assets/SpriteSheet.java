@@ -6,6 +6,7 @@ import javafx.scene.image.PixelWriter;
 import javafx.scene.image.WritableImage;
 
 import java.io.InputStream;
+import java.net.URL;
 import java.util.logging.Logger;
 
 /**
@@ -19,10 +20,11 @@ import java.util.logging.Logger;
  * placeholder and logs a warning once, because the application has to stay usable with no
  * artwork present at all. Artwork arrives incrementally.
  *
- * <p>This is the minimal loader the interface needs today. The asset registry milestone will
- * add filename-keyword scanning and the {@code assets.json} manifest on top of it; the frame
- * inference rule here - use the expected frame count when known, otherwise assume square frames
- * - is the same rule that registry will apply.
+ * <p>This is the loader only. Deciding <em>which</em> file to load, and how many frames it holds,
+ * belongs to {@link AssetRegistry}: filenames are not known in advance, so nothing outside that
+ * class should name an image file. The frame rule applied here - use the expected count when one
+ * is known, otherwise assume square frames - is what the registry relies on to slice a sheet it
+ * has never seen before.
  */
 public final class SpriteSheet {
 
@@ -54,27 +56,42 @@ public final class SpriteSheet {
      * @return the loaded sheet, or a single-frame magenta placeholder if it could not be read
      */
     public static SpriteSheet load(String resourcePath, int expectedFrames) {
-        try (InputStream in = SpriteSheet.class.getResourceAsStream(resourcePath)) {
-            if (in == null) {
-                LOG.warning("Sprite sheet not found on the classpath: " + resourcePath
-                        + " - drawing a placeholder instead");
-                return placeholder();
-            }
+        URL location = SpriteSheet.class.getResource(resourcePath);
+        if (location == null) {
+            LOG.warning("Sprite sheet not found on the classpath: " + resourcePath
+                    + " - drawing a placeholder instead");
+            return placeholder();
+        }
+        return load(location, expectedFrames, resourcePath);
+    }
+
+    /**
+     * Loads a sheet from anywhere it can be read: the jar, or a file the user dropped in.
+     *
+     * @param location       where the image bytes are
+     * @param expectedFrames how many frames the strip holds, or a value below one to infer square frames
+     * @param describedAs    name used in log messages, so a warning points at something recognisable
+     * @return the loaded sheet, or a single-frame magenta placeholder if it could not be read
+     */
+    public static SpriteSheet load(URL location, int expectedFrames, String describedAs) {
+        try (InputStream in = location.openStream()) {
             Image image = new Image(in);
             if (image.isError() || image.getWidth() <= 0 || image.getHeight() <= 0) {
-                LOG.warning("Sprite sheet could not be decoded: " + resourcePath
+                LOG.warning("Sprite sheet could not be decoded: " + describedAs
                         + " - drawing a placeholder instead");
                 return placeholder();
             }
 
-            // Known frame count divides the width; otherwise frames are assumed square.
+            // Known frame count divides the width; otherwise frames are assumed square. Square
+            // inference is what handles art that arrives without anyone saying how long it is:
+            // a 416x32 strip is 13 frames, a 288x32 strip is 9.
             int frames = expectedFrames > 0
                     ? expectedFrames
                     : Math.max(1, (int) Math.round(image.getWidth() / image.getHeight()));
             double width = image.getWidth() / frames;
             return new SpriteSheet(image, frames, width, image.getHeight(), false);
         } catch (Exception e) {
-            LOG.warning("Failed to load the sprite sheet " + resourcePath + ": " + e);
+            LOG.warning("Failed to load the sprite sheet " + describedAs + ": " + e);
             return placeholder();
         }
     }
@@ -85,7 +102,7 @@ public final class SpriteSheet {
      *
      * @return a single-frame placeholder sheet
      */
-    private static SpriteSheet placeholder() {
+    static SpriteSheet placeholder() {
         WritableImage image = new WritableImage(PLACEHOLDER_SIZE, PLACEHOLDER_SIZE);
         PixelWriter writer = image.getPixelWriter();
         for (int y = 0; y < PLACEHOLDER_SIZE; y++) {
