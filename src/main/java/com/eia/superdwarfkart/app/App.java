@@ -2,6 +2,10 @@ package com.eia.superdwarfkart.app;
 
 import com.eia.superdwarfkart.assets.AssetKind;
 import com.eia.superdwarfkart.assets.AssetRegistry;
+import com.eia.superdwarfkart.audio.AudioSource;
+import com.eia.superdwarfkart.audio.LevelAnalyzer;
+import com.eia.superdwarfkart.audio.Levels;
+import com.eia.superdwarfkart.audio.LocalFileAudioSource;
 import com.eia.superdwarfkart.model.Library;
 import com.eia.superdwarfkart.model.ModeId;
 import com.eia.superdwarfkart.model.Song;
@@ -10,10 +14,12 @@ import com.eia.superdwarfkart.persistence.PersistenceException;
 import com.eia.superdwarfkart.persistence.Repository;
 import com.eia.superdwarfkart.playback.AlphabeticalMode;
 import com.eia.superdwarfkart.playback.ArrivalOrderMode;
+import com.eia.superdwarfkart.playback.PlaybackEngine;
 import com.eia.superdwarfkart.playback.Player;
 import com.eia.superdwarfkart.playback.ShuffleMode;
 import com.eia.superdwarfkart.ui.ComplexityPanel;
 import com.eia.superdwarfkart.ui.Fonts;
+import com.eia.superdwarfkart.ui.LevelMeterView;
 import com.eia.superdwarfkart.ui.LibraryView;
 import com.eia.superdwarfkart.ui.PixelDialog;
 import com.eia.superdwarfkart.ui.PlaybackBar;
@@ -83,6 +89,14 @@ public class App extends Application {
     /** Height reserved for the complexity panel at the foot of the left column. */
     private static final double COMPLEXITY_HEIGHT = 350;
 
+    /**
+     * Width of the meter column on the right, in pixels.
+     *
+     * <p>This is where the three-lane runner goes when it is built; the meters already sit where
+     * they will flank it, so the game slots between them rather than displacing them.
+     */
+    private static final double METER_COLUMN_WIDTH = 130;
+
     /** Function key that hands the whole stage to the visualizer. */
     private static final KeyCode PRESENTATION_KEY = KeyCode.F5;
 
@@ -92,6 +106,11 @@ public class App extends Application {
     private Player player;
     private AppState state;
     private OperationCounter counter;
+
+    private AudioSource audio;
+    private Levels levels;
+    private PlaybackEngine engine;
+    private LevelMeterView meters;
 
     private BorderPane root;
     private PlaybackBar playbackBar;
@@ -123,11 +142,26 @@ public class App extends Application {
         player.addListener(state);
         state.playbackChanged(player.mode(), player.current());
 
+        // The tap is composed in here rather than owned by the audio source, so the same meters
+        // work unchanged over any implementation of AudioSource.
+        levels = new Levels();
+        audio = new LocalFileAudioSource();
+        audio.addPcmListener(new LevelAnalyzer(levels));
+        // End of track arrives on the playback thread; runLater is the hop back, and it happens
+        // once per song rather than once per audio block.
+        engine = new PlaybackEngine(player, audio, Platform::runLater);
+
         LibraryView libraryView = new LibraryView(library, libraryRepository);
         libraryView.setOnSongActivated(song -> player.select(song));
 
-        playbackBar = new PlaybackBar(player, counter);
+        playbackBar = new PlaybackBar(player, engine, counter);
         ComplexityPanel complexityPanel = new ComplexityPanel(player, counter);
+
+        meters = new LevelMeterView(levels);
+        meters.setMinWidth(METER_COLUMN_WIDTH);
+        meters.setPrefWidth(METER_COLUMN_WIDTH);
+        meters.setMaxWidth(METER_COLUMN_WIDTH);
+        meters.start();
 
         visualizer = new StructureVisualizer(player, state, assets);
         presentation = new PresentationView(counter);
@@ -145,6 +179,7 @@ public class App extends Application {
         root.setTop(new VBox(buildHeader(), playbackBar));
         root.setLeft(sideColumn);
         root.setCenter(libraryView);
+        root.setRight(meters);
 
         Scene scene = new Scene(root, AppConfig.MAIN_WIDTH, AppConfig.MAIN_HEIGHT);
         Theme.apply(scene);
@@ -173,7 +208,9 @@ public class App extends Application {
      *       nothing else wanted them. The library table uses the arrows to move its selection,
      *       the search box to move the caret, and the tree view to step through a traversal; all
      *       three consume the event first, so the transport never steals a key out from under a
-     *       control that was using it.</li>
+     *       control that was using it. Space belongs to the same group for the same reason: it
+     *       steps the tree when the tree has focus, and it presses whichever button does, and only
+     *       reaches playback when nothing else claimed it.</li>
      * </ul>
      *
      * @param scene the scene to listen on
@@ -200,6 +237,11 @@ public class App extends Application {
                 }
                 case RIGHT, TRACK_NEXT -> {
                     player.next();
+                    event.consume();
+                }
+                case SPACE, PLAY, PAUSE -> {
+                    engine.toggle();
+                    playbackBar.refresh();
                     event.consume();
                 }
                 default -> {
@@ -339,6 +381,8 @@ public class App extends Application {
         fireKey(scene, KeyCode.TAB);
         boolean tabWorks = player.mode().id() != beforeTab;
         System.out.println("[smoke] tab               : " + beforeTab + " -> " + player.mode().id());
+
+        reportAudio();
         System.out.println("[smoke] assets found      : " + assets.size());
         System.out.println("[smoke] asset manifest    : " + assets.manifestFile());
         // Decodes each sheet, which normal startup does not do. Worth it here: how a sheet gets
@@ -369,11 +413,66 @@ public class App extends Application {
 
         PauseTransition close = new PauseTransition(Duration.seconds(2));
         close.setOnFinished(e -> {
+            // The base shot first, while audio is still flowing, so the meters in it are real.
             writeScreenshotIfRequested(scene);
+            engine.pause();
             captureEveryView(scene);
             Platform.exit();
         });
         close.play();
+    }
+
+    /**
+     * Plays the current song briefly and reports what came out.
+     *
+     * <p>Everything about the audio path is invisible to both a unit test and a screenshot. A test
+     * cannot open a sound card, and a picture of a level meter proves only that a rectangle was
+     * drawn. Actually playing a second of the current song and printing the four levels is the one
+     * check that the file opened, the decoder produced the expected format, the tap fired and left
+     * and right were measured separately - and it is also the check for the mistake that matters
+     * most here, which is the two channels reading identically because they were never
+     * deinterleaved.
+     */
+    private void reportAudio() {
+        Song song = player.current();
+        System.out.println("[smoke] audio file        : "
+                + (song == null ? "- no song -" : song.getFilePath()));
+        if (song == null) {
+            return;
+        }
+
+        engine.play();
+        System.out.println("[smoke] audio loaded      : " + engine.isLoaded()
+                + (engine.failure() == null ? "" : " (" + engine.failure() + ")"));
+        if (!engine.isLoaded()) {
+            return;
+        }
+
+        // Blocking the interface thread is normally forbidden; during a smoke test nobody is
+        // waiting on it, and there is no other way to let real audio arrive before measuring it.
+        sleepQuietly(1000);
+
+        System.out.println("[smoke] audio playing     : " + engine.isPlaying());
+        System.out.println("[smoke] track length      : " + engine.duration().toSeconds() + "s");
+        System.out.println("[smoke] position after 1s : " + engine.position().toMillis() + "ms");
+        System.out.printf("[smoke] level L           : rms %.4f  peak %.4f%n",
+                levels.leftRms(), levels.leftPeak());
+        System.out.printf("[smoke] level R           : rms %.4f  peak %.4f%n",
+                levels.rightRms(), levels.rightPeak());
+        System.out.println("[smoke] channels differ   : "
+                + (levels.leftRms() != levels.rightRms()
+                        ? "yes - deinterleaved per channel"
+                        : "no - mono, silent, or NOT deinterleaved"));
+        // Deliberately left playing. The screenshot is taken a couple of seconds from here, and a
+        // picture of two meters that have already fallen to silence says nothing about either.
+    }
+
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
@@ -503,6 +602,29 @@ public class App extends Application {
             System.out.println("[smoke] screenshot        : " + file);
         } catch (Exception e) {
             System.out.println("[smoke] screenshot failed : " + e);
+        }
+    }
+
+    /**
+     * Releases everything that outlives the window.
+     *
+     * <p>The playback thread is a daemon and the frame timers stop with the toolkit, so nothing
+     * here keeps the process alive on its own - but the sound card is a shared system resource and
+     * is handed back explicitly. Called by JavaFX on every ordinary exit path.
+     */
+    @Override
+    public void stop() {
+        if (meters != null) {
+            meters.stop();
+        }
+        if (playbackBar != null) {
+            playbackBar.stopClock();
+        }
+        if (visualizer != null && visualizer.view() != null) {
+            visualizer.view().stop();
+        }
+        if (engine != null) {
+            engine.close();
         }
     }
 

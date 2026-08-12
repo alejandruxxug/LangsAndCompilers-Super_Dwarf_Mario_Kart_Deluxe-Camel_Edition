@@ -765,6 +765,47 @@
     -fx-text-fill: -sdmk-text-dim;
 }
 
+/* The play control carries the yellow, because it is the one control the eye goes to first. */
+.play-button {
+    -fx-text-fill: -sdmk-yellow;
+}
+
+/* Fixed-width digits in a fixed-width font, so the clock does not jitter as the seconds turn. */
+.time-readout {
+    -fx-font-size: 8px;
+    -fx-text-fill: -sdmk-text-dim;
+    -fx-min-width: 48px;
+}
+
+.playback-status {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-cyan;
+    -fx-min-width: 130px;
+}
+
+/* Slimmer than the rating slider: this one sits in a bar, not in a form. */
+.seek-bar .track {
+    -fx-padding: 3;
+}
+
+.seek-bar .thumb {
+    -fx-padding: 7 5 7 5;
+}
+
+/* ------------------------------------------------------------------ */
+/* Level meters                                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Only the frame is styled here. Everything inside is drawn on a Canvas through the palette by
+ * role, so the mood system recolours the bars without touching this file.
+ */
+.level-meters {
+    -fx-background-color: -sdmk-panel;
+    -fx-border-color: transparent transparent transparent -sdmk-edge;
+    -fx-border-width: 0 0 0 2;
+}
+
 /*
  * Toggle buttons are rebuilt from scratch like every other control: JavaFX draws them with
  * rounded corners and a gradient by default, which is the one thing this interface must not do.

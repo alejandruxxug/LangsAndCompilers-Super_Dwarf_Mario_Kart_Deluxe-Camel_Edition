@@ -62,8 +62,8 @@ Built milestone by milestone; each is verified before the next begins.
 | M2 | Library CRUD, search, 0–100 rating, cover display, JSON persistence | ✅ |
 | — | Asset registry: keyword classification, frame inference, `assets.json`, drop-in folder | ✅ |
 | M3 | Three playback modes behind one interface, mode selector, complexity panel | ✅ |
-| M4 | **Structure visualizer** — circuit, starting grid, animated BST traversal, live complexity scatter, Presentation Mode | ⬜ |
-| M5 | Real playback, PCM tap, independent left/right level meters | ⬜ |
+| M4 | **Structure visualizer** — circuit, starting grid, animated BST traversal, live complexity scatter, Presentation Mode | ✅ |
+| M5 | Real playback, PCM tap, independent left/right level meters | ✅ |
 | M6 | Offline beat analysis and beatmap cache | ⬜ |
 | M7 | The 3-lane rhythm runner | ⬜ |
 | M8 | Mini companion window | ⬜ |
@@ -282,13 +282,17 @@ registration is awkward under the module system.
 Everything downstream assumes one format: **PCM signed, 44100 Hz, 16-bit, stereo,
 little-endian**, 4 bytes per frame, interleaved as `[L0 R0 L1 R1 …]`.
 
-MP3 support was verified against the resolved jars before anything was built on it:
-`AudioSystem.getAudioInputStream` decodes MP3 through the mp3spi SPI and converts to the target
-format above, including resampling — a 22.05 kHz MPEG-2 Layer III file decodes to 44.1 kHz
-stereo correctly. WAV works natively.
+Every file reaches that format whatever it started as, which is what lets the meters, the beat
+analyser and the game each assume one shape of buffer and one sample rate. Getting there takes
+**one conversion where the file is already at 44.1 kHz stereo, and two where it is not** — a
+decoder only offers its output at the file's own rate and channel count, so a 22 kHz mono MP3 has
+to be decoded first and resampled second. Both stages were measured against the resolved jars
+rather than assumed.
 
 Level meters are computed **per channel, never as one combined number**: samples are
 deinterleaved (even index left, odd index right) and RMS and peak are tracked separately for each.
+The bars are drawn on a logarithmic scale from −60 dBFS, because on a linear one ordinary music
+never leaves the bottom of the bar.
 
 ---
 

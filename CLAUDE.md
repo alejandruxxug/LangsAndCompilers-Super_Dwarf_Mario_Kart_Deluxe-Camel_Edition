@@ -96,7 +96,13 @@ block (a bare `-D` on the Maven command line does **not** reach the app):
 |---|---|
 | `-Dsdmk.smokeTest=true` | Launch, print what was verified, auto-close after ~2 s. Use this to check a launch without leaving a window on screen. |
 | `-Dsdmk.home=/tmp/demo` | Use a scratch profile instead of `~/.superdwarfkart`. Seed a `library.json` there to demo against fake data without touching the user's real library. |
-| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. Also writes `out-arrival.png`, `out-alphabetical.png` and `out-presentation.png`, cycling the modes so all three structure views and Presentation Mode are captured — three of the four only exist once a mode has been selected, so one shot of the opening state proves nothing about them. |
+| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. Also writes `out-shuffle.png`, `out-arrival.png`, `out-alphabetical.png` and `out-presentation.png`, cycling the modes so all three structure views and Presentation Mode are captured — three of the four only exist once a mode has been selected, so one shot of the opening state proves nothing about them. |
+
+**The smoke test plays about three seconds of the current song** and prints the measured L/R levels,
+so a run is audible. That is the point: the base screenshot is taken while audio is still flowing,
+and a picture of two meters that have already fallen to silence says nothing about either. The
+`channels differ` line is the check for the mistake that matters most — two channels reading
+identically because they were never deinterleaved.
 
 ```bash
 # Full verification run against seeded data, leaving a screenshot behind
@@ -159,6 +165,7 @@ tooltips and dialogs are all rebuilt as hard-edged beveled blocks.
 | `←` / `→` | previous / next song |
 | media prev / next (`TRACK_PREV`, `TRACK_NEXT`) | previous / next song |
 | `Tab` | cycle the playback mode |
+| `Space` (`PLAY`, `PAUSE`) | play / pause |
 | `F5` | Presentation Mode on/off |
 | `Esc` | leave Presentation Mode |
 | `→` / `Space` *(tree view focused)* | step through one edge of a traversal |
@@ -171,6 +178,8 @@ They are wired across **both phases of event delivery**, and the split is load-b
   table uses the arrows for its selection, the search box for the caret, and the tree view for its
   step-through — all three consume the event first, so the transport never takes a key out from
   under a control that was using it. Put the arrows in a filter and all three break at once.
+  `Space` is in this group for the same reason: it steps the tree when the tree has focus, presses
+  whichever button has focus, and only reaches play/pause when nothing else claimed it.
 
 **`Tab` no longer moves focus between controls.** That is the deliberate cost of binding it; the
 interface is mouse-driven and every control is reachable by clicking.
@@ -266,9 +275,10 @@ com.eia.superdwarfkart
 ├── ds/           CircularDoublyLinkedList<T>, SimpleQueue<T>,
 │                 BinarySearchTree<T>                        ← graded core
 ├── playback/     PlaybackMode (interface), AbstractPlaybackMode,
-│                 ShuffleMode, ArrivalOrderMode, AlphabeticalMode, Player
+│                 ShuffleMode, ArrivalOrderMode, AlphabeticalMode, Player,
+│                 PlaybackEngine (running order <-> audio output)
 ├── audio/        AudioSource (interface), LocalFileAudioSource,
-│                 PcmListener, Levels, AudioException
+│                 PcmListener, Levels, LevelAnalyzer, AudioMetadata, AudioException
 ├── analysis/     BeatmapAnalyzer, Beatmap, BeatmapCache, OnsetDetector
 ├── game/         RunnerGame, Course, Lane, Entity, Obstacle, Coin,
 │                 Star, ScoreKeeper, SpeedClass
@@ -396,6 +406,53 @@ live for the active mode.
 - Don't over-buffer, or the meters lag behind what you hear.
 - Clean shutdown: stop the game loop, stop playback, drain and close the `SourceDataLine`,
   release the stage.
+
+### As built (2026-08-12, M5)
+
+- **Reaching the one format takes *two* conversions, not one, and one silently is not enough.**
+  A decoder declares its output at the file's own rate and channel count, so a 22 kHz mono MP3 can
+  be asked for 16-bit PCM but **not** for 44.1 kHz stereo 16-bit PCM — that call just fails. The
+  plain PCM→PCM providers *do* resample and *do* mix channels (measured against the resolved jars,
+  not assumed: 22050 mono → 44100 stereo comes out at 176 416 bytes for a second, the 16 spare
+  bytes being the resampler's edge handling). So `convertToPlaybackFormat` tries one step, and
+  falls back to decode-then-resample. Almost every real file takes the one-step path.
+  **Do not "simplify" this back to a single call** — it works on every file you own and breaks on
+  the first 22 kHz one somebody else brings.
+- The tap therefore sees **exactly one format, sample rate included**, which is what M6's window
+  1024 / hop 512 and M7's lookahead are entitled to assume. `LocalFileAudioSourceTest` pins it with
+  a 22 kHz mono file whose byte count at the tap can only come out right if both stages ran.
+- **`position()` reads `getLongFramePosition()`**, offset by a snapshot taken after each flush —
+  frames the card actually *rendered*. Counting bytes written runs a whole buffer ahead of the
+  music; counting frame deltas drifts. This is the clock M7 must drive everything from.
+- **Seeking decodes from the start of the track.** Linear, and it has to be: a compressed stream
+  has no byte offset corresponding to an instant. Which is exactly why the seek bar commits on
+  `valueChangingProperty` going false and never per pixel.
+- **The playback thread retires itself before announcing the end of a track**, and clears the field
+  by *identity*. Announcing first means the handler — whose whole job is to start the next song —
+  finds a pump apparently still running, starts nothing, and the running order stops dead one song
+  in. Left dead in the field, the same thing happens permanently.
+- **`play()` on a track that already finished rewinds first.** An exhausted stream has no bytes
+  left, so without this the button starts a thread that immediately reads end-of-file. It looks
+  exactly like a broken button and nothing is logged.
+- **`PlaybackEngine` (in `playback/`) is where the running order meets the sound card**, and it is
+  a separate class so that `Player` stays pure navigation and stays testable without a device.
+  It holds `playWhenReady` — what the *user* last asked for — because "is it playing" is
+  momentarily false at every transition for reasons that have nothing to do with intent.
+- **End of track checks `canGoNext()` before moving, not the result of `next()` after.** A drained
+  queue leaves its last song current and answers `next()` with `null` *but still notifies*, and
+  reacting to that notification reloads the song that just finished and plays it again, forever.
+  `PlaybackEngineTest` pins this, and the tree's equivalent: the last song alphabetically ends
+  playback, where the ring correctly wraps.
+- **Silence is published to the taps whenever output stops** — paused, sought, replaced, played
+  out. Without it the meters hold the last block and a paused player sits there showing level.
+- **The meters' colour ramp is cached against the palette by identity.** Two bars of ~70 blocks at
+  60 fps is 8 400 interpolations a second, each snapping back onto the 5-bit grid, for a ramp that
+  changes only on resize or mood switch. A `Palette` is immutable and switching mood installs a
+  different object, so the cache invalidates itself when M11 arrives.
+- Meters are drawn on a **logarithmic scale, −60 dBFS to full**. Linear, a bar sits in its bottom
+  tenth all song and every song looks identical.
+- Volume is a `MASTER_GAIN` control and is **silently ignored** where the card exposes none. The
+  system volume still works; failing over it would be absurd.
 
 ---
 
@@ -901,7 +958,7 @@ pane, the whole app is the preview.
 | — | Asset layer (§8): `AssetRegistry`, `AssetKind`, `SpriteAnimation`, `assets.json` manifest, drop-in folder | ✅ done |
 | M3 | Three modes behind the interface, selector, previous disabled in queue mode, `ComplexityPanel` | ✅ done |
 | M4 | ⭐ **Structure visualizer** — circuit, starting grid, animated BST traversal, `OperationCounter`, live scatter, Presentation Mode | ✅ done |
-| M5 | ⭐ `LocalFileAudioSource`, real playback, PCM tap, independent L/R meters | ⬜ |
+| M5 | ⭐ `LocalFileAudioSource`, real playback, PCM tap, independent L/R meters | ✅ done |
 | M6 | `BeatmapAnalyzer` + cache + debug view (BPM, onsets on a timeline) | ⬜ |
 | M7 | ⭐ 3-lane runner: lookahead spawning, coins, bumps, star, cc classes, scoring, beat pulse | ⬜ |
 | M8 | ⭐ Mini companion mode: transparent stage, disk + racer, expand/hide/quit | ⬜ |
