@@ -57,7 +57,14 @@ public class LibraryView extends BorderPane {
     private static final Logger LOG = Logger.getLogger(LibraryView.class.getName());
 
     /** Width of the details column, in pixels. */
-    private static final double DETAILS_WIDTH = 340;
+    /**
+     * Width of the details column.
+     *
+     * <p>This sets the cover's height too, because the cover spans the column and album art is
+     * square. Widening it therefore pushes the rating controls below the fold - the column was
+     * cut from 340 when the playback bar took its 62 pixels off the top of the window.
+     */
+    private static final double DETAILS_WIDTH = 280;
 
     /** Padding inside the details column, in pixels. */
     private static final double DETAILS_PADDING = 16;
@@ -101,11 +108,17 @@ public class LibraryView extends BorderPane {
     private final Label detailArtist = new Label();
     private final Label detailMeta = new Label();
     private final Slider ratingSlider = new Slider(Song.MIN_RATING, Song.MAX_RATING, 0);
-    private final RatingDisplay detailRating = new RatingDisplay(20, 22, 34, 0);
+    // Ten blocks, the star and the number have to fit the column's inner width: at 14px a block
+    // that is 158 + 8 + 28 + 10 + 22, which clears 248. Widening the blocks pushes the number
+    // off the edge.
+    private final RatingDisplay detailRating = new RatingDisplay(14, 20, 28, 0);
     private final Label ratingValue = new Label("0");
     private final CheckBox favoriteToggle = new CheckBox("FAVORITE");
 
     /** Suppresses write-back while the details panel is being populated from a selection. */
+    /** Called when the user asks for a song to be played, or {@code null} if nothing listens. */
+    private java.util.function.Consumer<Song> onSongActivated;
+
     private boolean populatingDetails;
 
     /**
@@ -303,6 +316,16 @@ public class LibraryView extends BorderPane {
             });
             return row;
         });
+        // Enter plays the highlighted song; double-click is already Edit. Browsing the library
+        // deliberately does not change what is playing - only an explicit action does.
+        table.setOnKeyPressed(event -> {
+            Song selected = table.getSelectionModel().getSelectedItem();
+            if (event.getCode() == javafx.scene.input.KeyCode.ENTER && selected != null
+                    && onSongActivated != null) {
+                onSongActivated.accept(selected);
+                event.consume();
+            }
+        });
         return table;
     }
 
@@ -371,37 +394,40 @@ public class LibraryView extends BorderPane {
         Label ratingCaption = new Label("RATING 0-100");
         ratingCaption.getStyleClass().add("detail-caption");
 
-        VBox details = new VBox(12,
-                coverHolder,
-                detailTitle,
-                detailArtist,
-                detailMeta,
-                new Separator(),
-                ratingCaption,
-                meterRow,
-                ratingRow,
-                favoriteToggle);
-        details.setPadding(new Insets(DETAILS_PADDING));
-        details.getStyleClass().add("details-content");
+        // Only the description scrolls. The cover is as tall as the column is wide, so on a short
+        // window it pushes whatever follows it off the bottom - and what followed it was the
+        // rating controls, which then could not be reached at all without a scrollbar nobody
+        // wants. Splitting them fixes that for good: the editable controls are pinned to the
+        // bottom of the column and are always on screen whatever the window height.
+        VBox description = new VBox(10, coverHolder, detailTitle, detailArtist, detailMeta);
+        description.setPadding(new Insets(DETAILS_PADDING, DETAILS_PADDING, 0, DETAILS_PADDING));
+        description.getStyleClass().add("details-content");
 
-        // A full-width cover leaves little room below it, and the metadata underneath must not
-        // be silently clipped, so the column scrolls when the window is short.
-        ScrollPane scroller = new ScrollPane(details);
+        ScrollPane scroller = new ScrollPane(description);
         scroller.setFitToWidth(true);
-        scroller.setPrefWidth(DETAILS_WIDTH);
-        scroller.setMinWidth(DETAILS_WIDTH);
-        scroller.setMaxWidth(DETAILS_WIDTH);
-        // No visible scrollbars: the panel is laid out to fit, and a bar appearing along the
-        // edge is visual noise on a panel this narrow. The wheel still scrolls, so a very short
-        // window can still reach everything.
+        // No visible scrollbars: a bar along the edge is visual noise on a panel this narrow.
+        // The wheel still scrolls, so a very short window can still reach everything.
         scroller.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         scroller.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-        scroller.getStyleClass().add("details-pane");
+        scroller.getStyleClass().add("details-scroll");
+
+        VBox editor = new VBox(8, new Separator(), ratingCaption, meterRow, ratingRow,
+                favoriteToggle);
+        editor.setPadding(new Insets(0, DETAILS_PADDING, DETAILS_PADDING, DETAILS_PADDING));
+        editor.getStyleClass().add("details-content");
+
+        BorderPane column = new BorderPane();
+        column.setCenter(scroller);
+        column.setBottom(editor);
+        column.setPrefWidth(DETAILS_WIDTH);
+        column.setMinWidth(DETAILS_WIDTH);
+        column.setMaxWidth(DETAILS_WIDTH);
+        column.getStyleClass().add("details-pane");
 
         // The cover spans the full width of the column inside its padding, and its height
         // follows, because album art is square. Binding rather than hardcoding keeps the two in
         // step as the column width changes, for instance when the scrollbar appears.
-        var side = details.widthProperty().subtract(DETAILS_PADDING * 2);
+        var side = description.widthProperty().subtract(DETAILS_PADDING * 2);
         coverHolder.minWidthProperty().bind(side);
         coverHolder.prefWidthProperty().bind(side);
         coverHolder.maxWidthProperty().bind(side);
@@ -415,7 +441,19 @@ public class LibraryView extends BorderPane {
         coverImage.fitWidthProperty().bind(imageSide);
         coverImage.fitHeightProperty().bind(imageSide);
 
-        return scroller;
+        return column;
+    }
+
+    /**
+     * Registers what happens when the user activates a song with Enter.
+     *
+     * <p>A callback rather than a reference to the player: the library view shows the library,
+     * and knows nothing about how songs are ordered for playback.
+     *
+     * @param handler receives the activated song, or {@code null} to do nothing
+     */
+    public void setOnSongActivated(java.util.function.Consumer<Song> handler) {
+        this.onSongActivated = handler;
     }
 
     private HBox buildStatusBar() {

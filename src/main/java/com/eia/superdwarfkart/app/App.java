@@ -7,9 +7,13 @@ import com.eia.superdwarfkart.model.Song;
 import com.eia.superdwarfkart.persistence.LibraryRepository;
 import com.eia.superdwarfkart.persistence.PersistenceException;
 import com.eia.superdwarfkart.persistence.Repository;
+import com.eia.superdwarfkart.playback.Player;
+import com.eia.superdwarfkart.playback.ShuffleMode;
+import com.eia.superdwarfkart.ui.ComplexityPanel;
 import com.eia.superdwarfkart.ui.Fonts;
 import com.eia.superdwarfkart.ui.LibraryView;
 import com.eia.superdwarfkart.ui.PixelDialog;
+import com.eia.superdwarfkart.ui.PlaybackBar;
 import com.eia.superdwarfkart.ui.Theme;
 import javafx.animation.PauseTransition;
 import javafx.application.Application;
@@ -22,6 +26,7 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
+import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 
@@ -56,6 +61,8 @@ public class App extends Application {
     private Library library;
     private Repository<Song> libraryRepository;
     private AssetRegistry assets;
+    private Player player;
+    private AppState state;
 
     @Override
     public void start(Stage stage) {
@@ -69,11 +76,23 @@ public class App extends Application {
         libraryRepository = new LibraryRepository();
         library = loadLibrary(libraryRepository);
 
+        // Shuffle is the mode the application opens in. The player is handed a concrete mode and
+        // never learns which one it is; the bar swaps the object when the user picks another.
+        player = new Player(library, new ShuffleMode());
+        state = new AppState();
+        player.addListener(state);
+        state.playbackChanged(player.mode(), player.current());
+
         LibraryView libraryView = new LibraryView(library, libraryRepository);
+        libraryView.setOnSongActivated(song -> player.select(song));
+
+        PlaybackBar playbackBar = new PlaybackBar(player);
+        ComplexityPanel complexityPanel = new ComplexityPanel(player);
 
         BorderPane root = new BorderPane();
         root.getStyleClass().add("root-pane");
-        root.setTop(buildHeader());
+        root.setTop(new VBox(buildHeader(), playbackBar));
+        root.setLeft(complexityPanel);
         root.setCenter(libraryView);
 
         Scene scene = new Scene(root, AppConfig.MAIN_WIDTH, AppConfig.MAIN_HEIGHT);
@@ -156,6 +175,11 @@ public class App extends Application {
         System.out.println("[smoke] library table     : " + tablePresent);
         System.out.println("[smoke] songs loaded      : " + library.size());
         System.out.println("[smoke] library file      : " + libraryRepository.storageLocation());
+        System.out.println("[smoke] playback mode     : " + player.mode().id().displayName()
+                + " over " + player.mode().structureName());
+        System.out.println("[smoke] mode holds        : " + player.mode().size() + " songs");
+        System.out.println("[smoke] previous enabled  : " + player.canGoPrevious());
+        System.out.println("[smoke] state mode        : " + state.getModeId());
         System.out.println("[smoke] assets found      : " + assets.size());
         System.out.println("[smoke] asset manifest    : " + assets.manifestFile());
         // Decodes each sheet, which normal startup does not do. Worth it here: how a sheet gets

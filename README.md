@@ -61,7 +61,7 @@ Built milestone by milestone; each is verified before the next begins.
 | M1 | Domain model + the three hand-written structures + JUnit tests | ✅ |
 | M2 | Library CRUD, search, 0–100 rating, cover display, JSON persistence | ✅ |
 | — | Asset registry: keyword classification, frame inference, `assets.json`, drop-in folder | ✅ |
-| M3 | Three playback modes behind one interface, mode selector, complexity panel | ⬜ |
+| M3 | Three playback modes behind one interface, mode selector, complexity panel | ✅ |
 | M4 | **Structure visualizer** — circuit, starting grid, animated BST traversal, live complexity scatter, Presentation Mode | ⬜ |
 | M5 | Real playback, PCM tap, independent left/right level meters | ⬜ |
 | M6 | Offline beat analysis and beatmap cache | ⬜ |
@@ -173,6 +173,39 @@ never as an identifier or as anything the user sees.)*
 
 ---
 
+## The three playback modes
+
+The mode selector at the top of the window does not change a setting — it swaps the data
+structure the library is played from. `Player` holds a `PlaybackMode` and never asks which one
+it is holding: no `instanceof`, no switch. Everything that follows from the choice is read back
+off the interface.
+
+| Mode | Structure | Order | Going back |
+|---|---|---|---|
+| Shuffle | `CircularDoublyLinkedList` | shuffled once at load, then fixed | O(1), and the ring wraps |
+| Arrival order | `SimpleQueue` | as added to the library | **not possible** |
+| Alphabetical | `BinarySearchTree` | by title, then artist | O(log n) predecessor |
+
+The **complexity panel** on the left lists what the active mode's operations cost and the
+current `n`, straight from `PlaybackMode.complexities()`. Switching mode changes the list — the
+same search is O(n) over the ring and O(log n) in the tree, and the panel says so.
+
+In arrival order the **previous button is disabled**, with a tooltip explaining why, rather than
+being left to fail. A queue has no backwards; the interface says that instead of hiding it.
+
+Two things this design protects:
+
+- **Playing never empties your library.** A mode is a view built *from* the library, not the
+  storage of it. Drain the queue to the end and the library still has every song — switching
+  mode rebuilds from it.
+- **Editing a song does not reorder playback.** Moving the rating slider would otherwise re-draw
+  the shuffle on every pixel of travel, changing the running order while you listen.
+
+Select a song in the table and press **Enter** to jump to it. Double-click still opens the
+editor.
+
+---
+
 ## How the beatmap cache works
 
 Beat detection runs **off the playback path**, on a background thread, on import or first play —
@@ -210,11 +243,11 @@ Other per-user state lives alongside it in `~/.superdwarfkart/`: `library.json` 
 | Documented time complexity | Javadoc on every public method of `ds/` |
 | Unit tests for the structures | `src/test/java/com/eia/superdwarfkart/ds/` |
 | Encapsulation and validation | `model/Song.java` — private fields, validating setters |
-| Inheritance and polymorphism | `playback/` — `PlaybackMode` → `AbstractPlaybackMode` → three modes *(M3)* |
+| Inheritance and polymorphism | `playback/` — `PlaybackMode` → `AbstractPlaybackMode` → three modes |
 | Interfaces | `PlaybackMode`, `AudioSource`, `PcmListener`, `Repository<T>`, `StepCounter` |
-| Playback mode 1 — shuffle | `playback/ShuffleMode` over the circular list *(M3)* |
-| Playback mode 2 — arrival order | `playback/ArrivalOrderMode` over the queue *(M3)* |
-| Playback mode 3 — alphabetical | `playback/AlphabeticalMode` over the tree *(M3)* |
+| Playback mode 1 — shuffle | `playback/ShuffleMode` over the circular list |
+| Playback mode 2 — arrival order | `playback/ArrivalOrderMode` over the queue |
+| Playback mode 3 — alphabetical | `playback/AlphabeticalMode` over the tree |
 | Library CRUD, search, filters | `model/Library`, `ui/LibraryView` |
 | 0–100 rating | `model/Song#setRating` — throws outside the range; slider in `ui/LibraryView` and `ui/SongDialog` |
 | Persistence | `persistence/LibraryRepository` — JSON under `~/.superdwarfkart/` |

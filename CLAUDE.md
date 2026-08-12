@@ -311,6 +311,31 @@ modes. `Player` holds a `PlaybackMode` and **never type-checks it**; swapping mo
 polymorphism. `complexities()` returns a `Map<String,String>` that `ComplexityPanel` renders
 live for the active mode.
 
+**As built (2026-08-12, M3):**
+
+- `AbstractPlaybackMode.load()` and `.previous()` are **`final`**. `load` resets the current song
+  before delegating to `build()`, so no subclass can leave a stale song from the previous
+  ordering — a bug that only shows after switching modes twice. `previous()` holds the
+  `supportsPrevious()` guard in one place, so a one-way mode never invents its own behaviour.
+- **`Player.previous()` returns `null` rather than propagating** when the mode is one-way. The
+  control is already disabled; a keyboard shortcut arriving anyway must do nothing, not raise the
+  mode's exception at the user. The exception still exists and is still tested — it is what the
+  *mode* does, not what the *player* does.
+- **An edit is not a structural change.** `Player` ignores `LibraryChange.UPDATED`. Rebuilding on
+  it would re-draw the shuffle every time the rating slider moved, changing the running order
+  under the user mid-listen. `ADDED` / `REMOVED` / `RELOADED` do rebuild.
+- **Arrival order takes the front song as current at load**, so all three modes come up with a
+  song playing. Leaving it queued would make the first `next()` replay it.
+- `select()` in arrival order **dequeues everything in front of the target** — that is what FIFO
+  means — but checks membership first, non-destructively. Draining the queue hunting for a song
+  that was never in it would throw the whole running order away.
+- `tree.first()` **throws on an empty tree**; alphabetical mode guards it. Every mode returns
+  `null` from navigation when empty, because an empty library is an ordinary state (ground rule 5).
+- Modes take a `StepCounter` now, defaulting to `NO_OP`, so M4's `OperationCounter` is an
+  injection rather than a rewrite.
+- `PlaybackModeContractTest` runs the shared guarantees against all three modes; a fourth mode is
+  held to the same contract by adding one line.
+
 ---
 
 ## 6. Audio invariants
@@ -717,7 +742,7 @@ pane, the whole app is the preview.
 | M1 | `model/` + three hand-written structures + JUnit tests | ✅ done |
 | M2 | Library CRUD, search, 0–100 rating, cover display, JSON persistence | ✅ done |
 | — | Asset layer (§8): `AssetRegistry`, `AssetKind`, `SpriteAnimation`, `assets.json` manifest, drop-in folder | ✅ done |
-| M3 | Three modes behind the interface, selector, previous disabled in queue mode, `ComplexityPanel` | ⬜ |
+| M3 | Three modes behind the interface, selector, previous disabled in queue mode, `ComplexityPanel` | ✅ done |
 | M4 | ⭐ **Structure visualizer** — circuit, starting grid, animated BST traversal, `OperationCounter`, live scatter, Presentation Mode | ⬜ |
 | M5 | ⭐ `LocalFileAudioSource`, real playback, PCM tap, independent L/R meters | ⬜ |
 | M6 | `BeatmapAnalyzer` + cache + debug view (BPM, onsets on a timeline) | ⬜ |

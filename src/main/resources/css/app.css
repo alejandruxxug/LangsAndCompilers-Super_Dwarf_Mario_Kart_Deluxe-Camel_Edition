@@ -499,8 +499,11 @@
     -fx-padding: 0;
 }
 
-.details-pane > .viewport {
+/* The scroll area inside the details column: no chrome of its own, no ground of its own. */
+.details-scroll,
+.details-scroll > .viewport {
     -fx-background-color: transparent;
+    -fx-padding: 0;
 }
 
 .details-content {
@@ -735,4 +738,104 @@
 .song-form .label {
     -fx-font-size: 8px;
     -fx-text-fill: -sdmk-text-dim;
+}
+
+/* ------------------------------------------------------------------ */
+/* Playback bar - mode selector and transport                          */
+/* ------------------------------------------------------------------ */
+
+.playback-bar {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-border-color: -sdmk-edge transparent -sdmk-edge transparent;
+    -fx-border-width: 2 0 2 0;
+}
+
+.bar-caption {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-text-faint;
+}
+
+.now-playing {
+    -fx-font-size: 9px;
+    -fx-text-fill: -sdmk-yellow;
+}
+
+.up-next {
+    -fx-font-size: 8px;
+    -fx-text-fill: -sdmk-text-dim;
+}
+
+/*
+ * Toggle buttons are rebuilt from scratch like every other control: JavaFX draws them with
+ * rounded corners and a gradient by default, which is the one thing this interface must not do.
+ * The selected state inverts the bevel, so the active mode reads as a key held down.
+ */
+.toggle-button {
+    -fx-font-family: "Press Start 2P";
+    -fx-font-size: 8px;
+    -fx-background-color: -sdmk-face;
+    -fx-background-radius: 0;
+    -fx-background-insets: 0;
+    -fx-text-fill: -sdmk-text-dim;
+    -fx-border-color: -sdmk-bevel-light -sdmk-bevel-dark -sdmk-bevel-dark -sdmk-bevel-light;
+    -fx-border-width: 2;
+    -fx-border-radius: 0;
+    -fx-padding: 8 12 8 12;
+    -fx-cursor: hand;
+    -fx-effect: null;
+}
+
+.toggle-button:hover {
+    -fx-background-color: -sdmk-face-hover;
+    -fx-text-fill: -sdmk-text;
+}
+
+.toggle-button:focused {
+    -fx-border-color: -sdmk-yellow;
+}
+
+.toggle-button:selected {
+    -fx-background-color: -sdmk-bevel-dark;
+    -fx-text-fill: -sdmk-yellow;
+    -fx-border-color: -sdmk-bevel-dark -sdmk-bevel-light -sdmk-bevel-light -sdmk-bevel-dark;
+}
+
+.toggle-button:selected:hover {
+    -fx-text-fill: -sdmk-yellow;
+}
+
+/* ------------------------------------------------------------------ */
+/* Complexity panel                                                    */
+/* ------------------------------------------------------------------ */
+
+.complexity-panel {
+    -fx-background-color: -sdmk-panel;
+    -fx-border-color: transparent -sdmk-edge transparent transparent;
+    -fx-border-width: 0 2 0 0;
+}
+
+.panel-heading {
+    -fx-font-size: 9px;
+    -fx-text-fill: -sdmk-cyan;
+}
+
+.complexity-structure {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-text;
+}
+
+.complexity-size {
+    -fx-font-size: 8px;
+    -fx-text-fill: -sdmk-yellow;
+}
+
+.complexity-operation {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-text;
+}
+
+.complexity-cost {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-text-dim;
+    -fx-padding: 0 0 0 10;
 }
