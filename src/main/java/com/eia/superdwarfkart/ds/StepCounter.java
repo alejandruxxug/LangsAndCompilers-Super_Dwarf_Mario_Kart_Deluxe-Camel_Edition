@@ -33,4 +33,29 @@ public interface StepCounter {
 
     /** Records one traversal of a link between nodes. */
     void pointerHop();
+
+    /**
+     * Marks the start of an operation whose cost is being measured.
+     *
+     * <p>The steps counted between this call and the matching {@link #end()} are what the
+     * complexity panel shows beside the theoretical figure, so the bracket has to sit tightly
+     * around the structure call itself. Wrapping the notification that follows it as well would
+     * fold the cost of redrawing the "up next" label - which peeks, and in a tree that is a whole
+     * successor walk - into the measurement of the navigation.
+     *
+     * <p>Nested calls fold into the outermost one rather than starting a second measurement.
+     *
+     * @param operation the operation's name, spelled as {@code complexities()} spells it so the
+     *                  measured value lands on the matching row
+     * @param structure the hand-written structure doing the work
+     * @param n         how many elements the structure holds as the operation begins
+     */
+    default void begin(String operation, String structure, int n) {
+        // intentionally empty
+    }
+
+    /** Marks the end of the operation started by {@link #begin(String, String, int)}. */
+    default void end() {
+        // intentionally empty
+    }
 }

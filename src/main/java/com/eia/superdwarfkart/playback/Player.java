@@ -1,11 +1,13 @@
 package com.eia.superdwarfkart.playback;
 
+import com.eia.superdwarfkart.ds.StepCounter;
 import com.eia.superdwarfkart.model.Library;
 import com.eia.superdwarfkart.model.LibraryListener;
 import com.eia.superdwarfkart.model.ModeId;
 import com.eia.superdwarfkart.model.Song;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -25,22 +27,75 @@ import java.util.Objects;
  */
 public class Player {
 
+    /** Names the operations, spelled as every mode's {@code complexities()} spells them. */
+    private static final String OP_NEXT = "next()";
+    private static final String OP_PREVIOUS = "previous()";
+    private static final String OP_SELECT = "select(song)";
+    private static final String OP_BUILD = "build";
+
     private final Library library;
     private final List<PlaybackListener> listeners = new ArrayList<>();
+
+    /**
+     * Instrumentation, wrapped around each structure call.
+     *
+     * <p>The bracket sits here rather than in the controls because it has to close before the
+     * listeners run: redrawing the bar peeks at the next song, and in the tree a peek is a whole
+     * successor walk that would otherwise be billed to the navigation that triggered it.
+     */
+    private final StepCounter counter;
 
     private PlaybackMode mode;
 
     /**
-     * Creates a player over a library.
+     * Creates a player over a library, with instrumentation disabled.
      *
      * @param library     the canonical collection; must not be {@code null}
      * @param initialMode the mode to start in; must not be {@code null}
      */
     public Player(Library library, PlaybackMode initialMode) {
+        this(library, initialMode, StepCounter.NO_OP);
+    }
+
+    /**
+     * Creates a player that reports the cost of each operation it drives.
+     *
+     * @param library     the canonical collection; must not be {@code null}
+     * @param initialMode the mode to start in; must not be {@code null}
+     * @param counter     receives the measurement scopes; must not be {@code null}
+     */
+    public Player(Library library, PlaybackMode initialMode, StepCounter counter) {
         this.library = Objects.requireNonNull(library, "library must not be null");
         this.mode = Objects.requireNonNull(initialMode, "initialMode must not be null");
-        this.mode.load(library.all());
+        this.counter = Objects.requireNonNull(counter, "counter must not be null; use StepCounter.NO_OP");
+        measured(OP_BUILD, library.size(), () -> mode.load(library.all()));
         library.addListener(this::onLibraryChanged);
+    }
+
+    /**
+     * Runs a mode operation inside a measurement scope.
+     *
+     * @param <R>       the result type
+     * @param operation the operation's name, matching the mode's complexity table
+     * @param n         how many elements the structure works over; taken before the call, because
+     *                  a queue is smaller afterwards and a build starts from an empty structure
+     * @param work      the call to measure
+     * @return whatever the work returned
+     */
+    private <R> R measured(String operation, int n, java.util.function.Supplier<R> work) {
+        counter.begin(operation, mode.structureName(), n);
+        try {
+            return work.get();
+        } finally {
+            counter.end();
+        }
+    }
+
+    private void measured(String operation, int n, Runnable work) {
+        measured(operation, n, () -> {
+            work.run();
+            return null;
+        });
     }
 
     // ------------------------------------------------------------------
@@ -50,6 +105,11 @@ public class Player {
     /** @return the active mode */
     public PlaybackMode mode() {
         return mode;
+    }
+
+    /** @return the canonical collection every mode is built from */
+    public Library library() {
+        return library;
     }
 
     /**
@@ -67,10 +127,12 @@ public class Player {
         }
         Song playing = mode.current();
         mode = newMode;
-        mode.load(library.all());
-        if (playing != null) {
-            mode.select(playing);
-        }
+        measured(OP_BUILD, library.size(), () -> {
+            mode.load(library.all());
+            if (playing != null) {
+                mode.select(playing);
+            }
+        });
         notifyListeners();
     }
 
@@ -89,7 +151,7 @@ public class Player {
      * @return the song now playing, or {@code null} if there is nothing to advance to
      */
     public Song next() {
-        Song song = mode.next();
+        Song song = measured(OP_NEXT, mode.size(), mode::next);
         notifyListeners();
         return song;
     }
@@ -107,7 +169,7 @@ public class Player {
         if (!canGoPrevious()) {
             return null;
         }
-        Song song = mode.previous();
+        Song song = measured(OP_PREVIOUS, mode.size(), mode::previous);
         notifyListeners();
         return song;
     }
@@ -119,7 +181,7 @@ public class Player {
      * @return whether the active mode could move to it
      */
     public boolean select(Song song) {
-        boolean moved = mode.select(song);
+        boolean moved = measured(OP_SELECT, mode.size(), () -> mode.select(song));
         if (moved) {
             notifyListeners();
         }
@@ -179,11 +241,31 @@ public class Player {
      * Rebuilds the active mode from the library, keeping the current song where possible.
      */
     public void reload() {
+        reload(library.all());
+    }
+
+    /**
+     * Rebuilds the active mode from a specific ordering of the songs.
+     *
+     * <p>Insertion order is the only thing that decides a binary search tree's shape, so this is
+     * what lets the tree view demonstrate the worst case: reinserting the library already sorted
+     * degenerates the tree into a straight line, and its measured search cost jumps from about
+     * log n to n in a single click. Passing the library's own order is the ordinary reload.
+     *
+     * <p>The ordering affects only how this mode's structure is built. The library itself is
+     * untouched, so the next change to it rebuilds from the canonical order again.
+     *
+     * @param ordering the songs in the order they should be inserted; must not be {@code null}
+     */
+    public void reload(Collection<Song> ordering) {
+        Objects.requireNonNull(ordering, "ordering must not be null");
         Song playing = mode.current();
-        mode.load(library.all());
-        if (playing != null) {
-            mode.select(playing);
-        }
+        measured(OP_BUILD, ordering.size(), () -> {
+            mode.load(ordering);
+            if (playing != null) {
+                mode.select(playing);
+            }
+        });
         notifyListeners();
     }
 

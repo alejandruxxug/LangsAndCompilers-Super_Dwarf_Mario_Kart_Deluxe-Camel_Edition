@@ -808,15 +808,21 @@
 /* Complexity panel                                                    */
 /* ------------------------------------------------------------------ */
 
+/* The panel sits under the visualizer in the left column, so its divider is on its top edge. */
 .complexity-panel {
     -fx-background-color: -sdmk-panel;
-    -fx-border-color: transparent -sdmk-edge transparent transparent;
-    -fx-border-width: 0 2 0 0;
+    -fx-border-color: -sdmk-edge transparent transparent transparent;
+    -fx-border-width: 2 0 0 0;
 }
 
 .panel-heading {
     -fx-font-size: 9px;
     -fx-text-fill: -sdmk-cyan;
+}
+
+.panel-caption {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-text-faint;
 }
 
 .complexity-structure {
@@ -838,4 +844,107 @@
     -fx-font-size: 7px;
     -fx-text-fill: -sdmk-text-dim;
     -fx-padding: 0 0 0 10;
+}
+
+/* The measured count is the line that turns a claim into an observation, so it is the one
+   coloured like a live value rather than like body text. */
+.complexity-measured {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-cyan;
+    -fx-padding: 0 0 0 10;
+}
+
+.complexity-unmeasured {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-text-faint;
+    -fx-padding: 0 0 0 10;
+}
+
+/* The rows scroll so the plot underneath them is never pushed off a short window. */
+.complexity-scroll,
+.complexity-scroll > .viewport {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+}
+
+.compare-button {
+    -fx-font-size: 7px;
+}
+
+.complexity-scatter {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-border-color: -sdmk-bevel-dark -sdmk-edge -sdmk-edge -sdmk-bevel-dark;
+    -fx-border-width: 2;
+}
+
+/* ------------------------------------------------------------------ */
+/* Structure visualizer                                                */
+/* ------------------------------------------------------------------ */
+
+.structure-visualizer {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-border-color: transparent -sdmk-edge transparent transparent;
+    -fx-border-width: 0 2 0 0;
+}
+
+.structure-view {
+    -fx-background-color: transparent;
+}
+
+.visualizer-controls {
+    -fx-background-color: -sdmk-panel;
+    -fx-border-color: -sdmk-edge transparent transparent transparent;
+    -fx-border-width: 2 0 0 0;
+}
+
+.visualizer-controls .button,
+.visualizer-controls .toggle-button {
+    -fx-font-size: 7px;
+    -fx-padding: 5 7 5 7;
+}
+
+.visualizer-readout {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-cyan;
+}
+
+.visualizer-placeholder {
+    -fx-font-size: 8px;
+    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-alignment: center;
+}
+
+/* ------------------------------------------------------------------ */
+/* Presentation mode                                                   */
+/* ------------------------------------------------------------------ */
+
+.presentation-view {
+    -fx-background-color: -sdmk-bg;
+}
+
+.presentation-header {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-border-color: transparent transparent -sdmk-yellow transparent;
+    -fx-border-width: 0 0 3 0;
+}
+
+.presentation-title {
+    -fx-font-size: 11px;
+    -fx-text-fill: -sdmk-yellow;
+}
+
+.presentation-app-name {
+    -fx-font-size: 8px;
+    -fx-text-fill: -sdmk-text-dim;
+}
+
+.presentation-hint {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-text-faint;
+}
+
+.presentation-plot-column {
+    -fx-background-color: -sdmk-panel;
+    -fx-border-color: transparent transparent transparent -sdmk-edge;
+    -fx-border-width: 0 0 0 2;
 }

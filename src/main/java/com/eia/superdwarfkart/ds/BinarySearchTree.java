@@ -34,8 +34,34 @@ import java.util.function.Consumer;
  */
 public class BinarySearchTree<T> implements Iterable<T> {
 
+    /**
+     * A read-only window onto a node, so a view can draw the tree's actual shape without being
+     * able to change it.
+     *
+     * <p>The visualizer needs real links - which node is whose left child, and how deep each one
+     * sits - and it must not be able to relink anything while drawing. Returning this interface
+     * rather than the node itself gives it exactly that, with no copying: the node implements the
+     * interface directly.
+     *
+     * @param <T> element type
+     */
+    public interface NodeRef<T> {
+
+        /** @return the element stored at this node */
+        T value();
+
+        /** @return the left child, or {@code null} */
+        NodeRef<T> left();
+
+        /** @return the right child, or {@code null} */
+        NodeRef<T> right();
+
+        /** @return the parent, or {@code null} at the root */
+        NodeRef<T> parent();
+    }
+
     /** A node with both child links and a parent link. */
-    private static final class Node<T> {
+    private static final class Node<T> implements NodeRef<T> {
         private final T value;
         private Node<T> left;
         private Node<T> right;
@@ -43,6 +69,26 @@ public class BinarySearchTree<T> implements Iterable<T> {
 
         private Node(T value) {
             this.value = value;
+        }
+
+        @Override
+        public T value() {
+            return value;
+        }
+
+        @Override
+        public NodeRef<T> left() {
+            return left;
+        }
+
+        @Override
+        public NodeRef<T> right() {
+            return right;
+        }
+
+        @Override
+        public NodeRef<T> parent() {
+            return parent;
         }
     }
 
@@ -291,11 +337,23 @@ public class BinarySearchTree<T> implements Iterable<T> {
      * @return the node holding it, or {@code null} if absent
      */
     private Node<T> findNode(T value) {
+        return findNode(value, null);
+    }
+
+    /**
+     * Walks down from the root comparing at each step, optionally recording the nodes it touches.
+     *
+     * @param value the element to find
+     * @param trace collects every node visited, in order; {@code null} to record nothing
+     * @return the node holding it, or {@code null} if absent
+     */
+    private Node<T> findNode(T value, List<Node<T>> trace) {
         if (value == null) {
             return null;
         }
         Node<T> current = root;
         while (current != null) {
+            visit(trace, current);
             counter.comparison();
             int cmp = comparator.compare(value, current.value);
             if (cmp == 0) {
@@ -350,41 +408,135 @@ public class BinarySearchTree<T> implements Iterable<T> {
     }
 
     /**
-     * @param node the node to step forward from
+     * Returns the nodes walked to reach the in-order successor, in the order they are touched.
+     *
+     * <p>Time complexity: O(log n) average, O(n) worst case - the same walk
+     * {@link #successor(Object)} performs, recorded rather than discarded.
+     *
+     * <p>This is what makes the tree view animate the traversal instead of only showing its
+     * result. Consecutive elements of the returned list are the edges to light up, in sequence:
+     * either a step into the right subtree followed by a run to its minimum, or a climb through
+     * parents until arriving from a left child.
+     *
+     * @param value the element to step forward from
+     * @return the elements on the path, starting with {@code value} and ending with its
+     *         successor. When there is no successor the path is the climb that established
+     *         that - up to the root, arriving from the right every time - because that walk is
+     *         work the structure genuinely did and the animation shows it happening.
+     * @throws NoSuchElementException if the element is not in the tree
+     */
+    public List<T> successorPath(T value) {
+        List<Node<T>> trace = new ArrayList<>();
+        successorNode(requireNode(value), trace);
+        return values(trace);
+    }
+
+    /**
+     * Returns the nodes walked to reach the in-order predecessor, in the order they are touched.
+     *
+     * <p>Time complexity: O(log n) average, O(n) worst case.
+     *
+     * @param value the element to step back from
+     * @return the elements on the path, starting with {@code value} and ending with its
+     *         predecessor, or with the climb to the root when there is none
+     * @throws NoSuchElementException if the element is not in the tree
+     */
+    public List<T> predecessorPath(T value) {
+        List<Node<T>> trace = new ArrayList<>();
+        predecessorNode(requireNode(value), trace);
+        return values(trace);
+    }
+
+    /**
+     * Returns the nodes compared while searching from the root, in order.
+     *
+     * <p>Time complexity: O(log n) average, O(n) worst case.
+     *
+     * <p>The length of this path <em>is</em> the search cost, which is why the tree view can show
+     * it and the circular list cannot show anything comparable: one descends, the other walks.
+     *
+     * @param value the element searched for
+     * @return the elements compared against, root first; empty if the tree is empty. The last
+     *         element is the match when there was one.
+     */
+    public List<T> searchPath(T value) {
+        List<Node<T>> trace = new ArrayList<>();
+        findNode(value, trace);
+        return values(trace);
+    }
+
+    private Node<T> successorNode(Node<T> node) {
+        return successorNode(node, null);
+    }
+
+    /**
+     * @param node  the node to step forward from
+     * @param trace collects every node visited, in order; {@code null} to record nothing
      * @return the in-order successor node, or {@code null} if none
      */
-    private Node<T> successorNode(Node<T> node) {
+    private Node<T> successorNode(Node<T> node, List<Node<T>> trace) {
+        visit(trace, node);
         if (node.right != null) {
             counter.pointerHop();
-            return minimumNode(node.right);
+            return minimumNode(node.right, trace);
         }
         Node<T> child = node;
         Node<T> ancestor = node.parent;
         while (ancestor != null && child == ancestor.right) {
+            visit(trace, ancestor);
             child = ancestor;
             ancestor = ancestor.parent;
             counter.pointerHop();
         }
+        visit(trace, ancestor);
         return ancestor;
     }
 
+    private Node<T> predecessorNode(Node<T> node) {
+        return predecessorNode(node, null);
+    }
+
     /**
-     * @param node the node to step back from
+     * @param node  the node to step back from
+     * @param trace collects every node visited, in order; {@code null} to record nothing
      * @return the in-order predecessor node, or {@code null} if none
      */
-    private Node<T> predecessorNode(Node<T> node) {
+    private Node<T> predecessorNode(Node<T> node, List<Node<T>> trace) {
+        visit(trace, node);
         if (node.left != null) {
             counter.pointerHop();
-            return maximumNode(node.left);
+            return maximumNode(node.left, trace);
         }
         Node<T> child = node;
         Node<T> ancestor = node.parent;
         while (ancestor != null && child == ancestor.left) {
+            visit(trace, ancestor);
             child = ancestor;
             ancestor = ancestor.parent;
             counter.pointerHop();
         }
+        visit(trace, ancestor);
         return ancestor;
+    }
+
+    /**
+     * Appends a node to a trace, ignoring both a missing trace and a missing node.
+     *
+     * @param trace where to record, or {@code null} to record nothing
+     * @param node  the node visited, or {@code null} when a walk ran off the end
+     */
+    private void visit(List<Node<T>> trace, Node<T> node) {
+        if (trace != null && node != null) {
+            trace.add(node);
+        }
+    }
+
+    private List<T> values(List<Node<T>> nodes) {
+        List<T> out = new ArrayList<>(nodes.size());
+        for (Node<T> node : nodes) {
+            out.add(node.value);
+        }
+        return out;
     }
 
     /**
@@ -418,19 +570,31 @@ public class BinarySearchTree<T> implements Iterable<T> {
     }
 
     private Node<T> minimumNode(Node<T> from) {
+        return minimumNode(from, null);
+    }
+
+    private Node<T> minimumNode(Node<T> from, List<Node<T>> trace) {
         Node<T> current = from;
+        visit(trace, current);
         while (current.left != null) {
             current = current.left;
             counter.pointerHop();
+            visit(trace, current);
         }
         return current;
     }
 
     private Node<T> maximumNode(Node<T> from) {
+        return maximumNode(from, null);
+    }
+
+    private Node<T> maximumNode(Node<T> from, List<Node<T>> trace) {
         Node<T> current = from;
+        visit(trace, current);
         while (current.right != null) {
             current = current.right;
             counter.pointerHop();
+            visit(trace, current);
         }
         return current;
     }
@@ -483,6 +647,21 @@ public class BinarySearchTree<T> implements Iterable<T> {
         inOrder(node.left, action);
         action.accept(node.value);
         inOrder(node.right, action);
+    }
+
+    /**
+     * Returns a read-only handle on the root, from which the whole shape can be walked.
+     *
+     * <p>Time complexity: O(1).
+     *
+     * <p>The tree view needs the real links to lay nodes out - in-order position across, depth
+     * down - and must not be able to relink anything while it draws. {@link NodeRef} gives it
+     * that without copying the tree.
+     *
+     * @return the root, or {@code null} when the tree is empty
+     */
+    public NodeRef<T> rootRef() {
+        return root;
     }
 
     /**

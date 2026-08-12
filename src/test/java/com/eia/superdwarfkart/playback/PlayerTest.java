@@ -197,7 +197,7 @@ class PlayerTest {
     @Test
     @DisplayName("complexities come from whichever mode is active")
     void complexitiesFollowTheMode() {
-        assertTrue(player.complexities().get("next() successor").contains("log n"));
+        assertTrue(player.complexities().get("next()").contains("log n"));
 
         player.setMode(new ShuffleMode());
 

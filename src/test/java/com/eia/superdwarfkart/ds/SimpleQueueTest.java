@@ -157,4 +157,39 @@ class SimpleQueueTest {
         assertTrue(counter.pointerHops() <= 2, "a FIFO dequeue must stay constant time, got "
                 + counter.pointerHops() + " hops");
     }
+
+    @Test
+    @DisplayName("contains walks the queue without consuming it")
+    void containsIsNonDestructive() {
+        SimpleQueue<String> queue = new SimpleQueue<>();
+        queue.enqueue("A");
+        queue.enqueue("B");
+        queue.enqueue("C");
+
+        assertTrue(queue.contains("C"));
+        assertFalse(queue.contains("D"));
+
+        assertEquals(3, queue.size(), "looking something up must not remove anything");
+        assertEquals("A", queue.peek());
+    }
+
+    @Test
+    @DisplayName("contains costs a comparison per element, which is why a queue is the wrong "
+            + "structure for lookup")
+    void containsIsLinear() {
+        CountingStepCounter counter = new CountingStepCounter();
+        SimpleQueue<Integer> queue = new SimpleQueue<>(counter);
+        for (int i = 0; i < 100; i++) {
+            queue.enqueue(i);
+        }
+
+        counter.reset();
+        assertTrue(queue.contains(99));
+        assertEquals(100, counter.comparisons(),
+                "reaching the last element means comparing against every element");
+
+        counter.reset();
+        assertFalse(queue.contains(-1));
+        assertEquals(100, counter.comparisons(), "a failed lookup walks the whole queue");
+    }
 }

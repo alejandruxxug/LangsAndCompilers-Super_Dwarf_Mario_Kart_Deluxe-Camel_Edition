@@ -1,5 +1,6 @@
 package com.eia.superdwarfkart.ui;
 
+import com.eia.superdwarfkart.ds.StepCounter;
 import com.eia.superdwarfkart.model.ModeId;
 import com.eia.superdwarfkart.model.Song;
 import com.eia.superdwarfkart.playback.AlphabeticalMode;
@@ -21,6 +22,8 @@ import javafx.scene.layout.VBox;
 
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Random;
 import java.util.function.Supplier;
 
 /**
@@ -61,15 +64,19 @@ public class PlaybackBar extends VBox {
     /**
      * Builds the bar.
      *
-     * @param player the player to drive
+     * @param player  the player to drive; must not be {@code null}
+     * @param counter handed to every mode this bar builds, so a mode selected after startup is
+     *                instrumented exactly like the one the application opened with; must not be
+     *                {@code null}, pass {@link StepCounter#NO_OP} to disable
      */
-    public PlaybackBar(Player player) {
+    public PlaybackBar(Player player, StepCounter counter) {
         super(10);
-        this.player = player;
+        this.player = Objects.requireNonNull(player, "player must not be null");
+        Objects.requireNonNull(counter, "counter must not be null; use StepCounter.NO_OP");
 
-        factories.put(ModeId.SHUFFLE, ShuffleMode::new);
-        factories.put(ModeId.ARRIVAL_ORDER, ArrivalOrderMode::new);
-        factories.put(ModeId.ALPHABETICAL, AlphabeticalMode::new);
+        factories.put(ModeId.SHUFFLE, () -> new ShuffleMode(new Random(), counter));
+        factories.put(ModeId.ARRIVAL_ORDER, () -> new ArrivalOrderMode(counter));
+        factories.put(ModeId.ALPHABETICAL, () -> new AlphabeticalMode(counter));
 
         getStyleClass().add("playback-bar");
         setPadding(new Insets(12, 16, 12, 16));
@@ -108,6 +115,20 @@ public class PlaybackBar extends VBox {
     }
 
     /**
+     * Switches to the next mode in the list, wrapping round.
+     *
+     * <p>The keyboard shortcut calls this rather than building a mode of its own: the factories
+     * live here, and they are what hand each new mode the step counter. A shortcut that
+     * constructed its own would quietly produce an uninstrumented mode whose operations never
+     * appeared on the complexity panel.
+     */
+    public void cycleMode() {
+        ModeId[] all = ModeId.values();
+        ModeId next = all[(player.mode().id().ordinal() + 1) % all.length];
+        player.setMode(factories.get(next).get());
+    }
+
+    /**
      * Builds one mode toggle.
      *
      * @param id the mode it selects
@@ -118,7 +139,8 @@ public class PlaybackBar extends VBox {
         button.setToggleGroup(modeGroup);
         button.getStyleClass().add("mode-button");
         button.setTooltip(new Tooltip(id.displayName() + "\nBacked by " + id.structureName()
-                + (id.supportsPrevious() ? "" : "\nFIFO - no going back.")));
+                + (id.supportsPrevious() ? "" : "\nFIFO - no going back.")
+                + "\n\nTab cycles the mode."));
         button.setOnAction(e -> {
             if (!button.isSelected()) {
                 // Clicking the active mode must not deselect it and leave nothing chosen.
@@ -165,10 +187,12 @@ public class PlaybackBar extends VBox {
         boolean canGoBack = player.canGoPrevious();
         previousButton.setDisable(!canGoBack);
         Tooltip.install(previousHolder, new Tooltip(mode.supportsPrevious()
-                ? "Step back through " + mode.structureName()
+                ? "Step back through " + mode.structureName() + "\nLeft arrow"
                 : "FIFO - no going back."));
 
         nextButton.setDisable(!player.canGoNext());
+        nextButton.setTooltip(new Tooltip("Step forward through " + mode.structureName()
+                + "\nRight arrow"));
 
         Song current = player.current();
         nowPlaying.setText(current == null

@@ -133,6 +133,25 @@ class PlaybackModeContractTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("modes")
+    @DisplayName("spells the navigated operations the way the player brackets them")
+    void usesCanonicalOperationNames(String name, Supplier<PlaybackMode> factory) {
+        PlaybackMode mode = factory.get();
+        mode.load(LIBRARY);
+
+        // The player measures under exactly these names and the complexity panel puts the
+        // measured step count on the row whose key matches. A mode that spelled one of them
+        // differently would not fail anywhere - the row would just silently never show a
+        // measurement, which is why the contract is asserted here rather than left to eyes.
+        for (String operation : List.of("next()", "previous()", "select(song)", "build")) {
+            assertTrue(mode.complexities().containsKey(operation),
+                    mode.id() + " must publish a complexity for " + operation
+                            + ", spelled exactly that way; it published "
+                            + mode.complexities().keySet());
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("modes")
     @DisplayName("refuses a song it does not hold, without moving")
     void selectRejectsStrangers(String name, Supplier<PlaybackMode> factory) {
         PlaybackMode mode = factory.get();

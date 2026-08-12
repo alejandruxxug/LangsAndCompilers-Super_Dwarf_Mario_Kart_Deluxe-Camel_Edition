@@ -199,6 +199,6 @@ class AlphabeticalModeTest {
         assertEquals(ModeId.ALPHABETICAL, mode.id());
         assertEquals("BinarySearchTree", mode.structureName());
         assertTrue(mode.supportsPrevious());
-        assertTrue(mode.complexities().get("next() successor").contains("log n"));
+        assertTrue(mode.complexities().get("next()").contains("log n"));
     }
 }

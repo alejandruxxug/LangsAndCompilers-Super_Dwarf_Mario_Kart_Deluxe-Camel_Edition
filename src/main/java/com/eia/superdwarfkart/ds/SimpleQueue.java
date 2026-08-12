@@ -143,6 +143,28 @@ public class SimpleQueue<T> implements Iterable<T> {
     }
 
     /**
+     * Reports whether an equal element is waiting, without consuming anything.
+     *
+     * <p>Time complexity: O(n), and it cannot be better. A queue has no ordering to exploit and
+     * no index, so looking something up means comparing against every element in turn. That is
+     * precisely the point the structure comparison makes: the same search that costs about nine
+     * comparisons in the tree costs a walk of half the queue here.
+     *
+     * @param value the element to look for; {@code null} matches a stored {@code null}
+     * @return {@code true} if found
+     */
+    public boolean contains(T value) {
+        for (Node<T> node = head; node != null; node = node.next) {
+            counter.comparison();
+            if (Objects.equals(node.value, value)) {
+                return true;
+            }
+            counter.pointerHop();
+        }
+        return false;
+    }
+
+    /**
      * Returns how many elements are queued.
      *
      * <p>Time complexity: O(1) - the count is maintained, never recomputed by walking.

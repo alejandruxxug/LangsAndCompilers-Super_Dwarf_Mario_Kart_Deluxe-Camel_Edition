@@ -195,7 +195,7 @@ class ArrivalOrderModeTest {
     void describesItself() {
         assertEquals(ModeId.ARRIVAL_ORDER, mode.id());
         assertEquals("SimpleQueue", mode.structureName());
-        assertEquals("O(1)", mode.complexities().get("next() dequeue"));
+        assertEquals("O(1)", mode.complexities().get("next()"));
         assertNotNull(mode.complexities().get("previous()"));
     }
 }

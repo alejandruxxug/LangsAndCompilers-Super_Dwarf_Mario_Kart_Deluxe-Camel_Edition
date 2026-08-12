@@ -204,10 +204,11 @@ public class AlphabeticalMode extends AbstractPlaybackMode {
     @Override
     public Map<String, String> complexities() {
         Map<String, String> costs = new LinkedHashMap<>();
+        costs.put("next()", "O(log n) avg, O(n) worst");
+        costs.put("previous()", "O(log n) avg, O(n) worst");
+        costs.put("peekNext()", "O(log n) avg, O(n) worst");
+        costs.put("select(song)", "O(log n) avg, O(n) worst");
         costs.put("insert", "O(log n) avg, O(n) worst");
-        costs.put("search / select", "O(log n) avg, O(n) worst");
-        costs.put("next() successor", "O(log n) avg, O(n) worst");
-        costs.put("previous() predecessor", "O(log n) avg, O(n) worst");
         costs.put("delete", "O(log n) avg, O(n) worst");
         costs.put("in-order traversal", "O(n)");
         costs.put("build", "O(n log n) avg, O(n^2) worst");

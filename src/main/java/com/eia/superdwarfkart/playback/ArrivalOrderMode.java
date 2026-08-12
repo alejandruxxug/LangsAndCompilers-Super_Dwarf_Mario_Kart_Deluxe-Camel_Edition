@@ -187,11 +187,11 @@ public class ArrivalOrderMode extends AbstractPlaybackMode {
     @Override
     public Map<String, String> complexities() {
         Map<String, String> costs = new LinkedHashMap<>();
-        costs.put("enqueue", "O(1)");
-        costs.put("next() dequeue", "O(1)");
-        costs.put("peekNext()", "O(1)");
+        costs.put("next()", "O(1)");
         costs.put("previous()", "not supported");
+        costs.put("peekNext()", "O(1)");
         costs.put("select(song)", "O(n)");
+        costs.put("enqueue", "O(1)");
         costs.put("build", "O(n)");
         return costs;
     }

@@ -101,6 +101,18 @@ public interface PlaybackMode {
      * <p>Keyed by operation name and ordered, so the panel can render it directly without
      * knowing anything about the concrete mode.
      *
+     * <p><strong>The four navigated operations are spelled identically in every mode</strong> -
+     * {@code "next()"}, {@code "previous()"}, {@code "select(song)"} and {@code "build"} - because
+     * the player brackets those calls under exactly those names and the panel puts the measured
+     * step count on the row whose key matches. Spelling one of them differently does not fail; it
+     * silently leaves that row without a measured value, which is worse. Structure-specific rows
+     * such as {@code "enqueue"} or {@code "in-order traversal"} are free-form and simply show no
+     * measurement.
+     *
+     * <p>What the operation costs is what distinguishes the modes, so the value alone carries the
+     * detail: {@code next()} is O(1) over a queue because it is a dequeue, and O(log n) over the
+     * tree because it is a successor walk. The structure's name is shown above the table.
+     *
      * @return operation name to theoretical complexity
      */
     Map<String, String> complexities();

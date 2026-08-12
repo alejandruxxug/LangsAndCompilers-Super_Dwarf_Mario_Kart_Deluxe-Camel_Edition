@@ -191,10 +191,10 @@ public class ShuffleMode extends AbstractPlaybackMode {
         costs.put("next()", "O(1)");
         costs.put("previous()", "O(1)");
         costs.put("peekNext()", "O(1)");
+        costs.put("select(song)", "O(n)");
         costs.put("insert", "O(1)");
         costs.put("remove(song)", "O(n)");
-        costs.put("select(song)", "O(n)");
-        costs.put("build (shuffle)", "O(n)");
+        costs.put("build", "O(n)");
         return costs;
     }
 

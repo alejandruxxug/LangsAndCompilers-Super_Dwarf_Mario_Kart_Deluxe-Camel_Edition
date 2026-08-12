@@ -67,6 +67,13 @@ live in `AppConfig` and are referenced everywhere instead of hardcoded strings:
    through roles **before M11 starts**; retrofitting theming across a finished UI costs
    several times what the feature does. If a milestone comes back with a new hex literal in
    it, fix it that day.
+
+   **Paid down in M4:** `mood/PaletteRole`, `mood/Palette` and `mood/GbaColor` exist now — the
+   16 roles, an immutable palette snapped to the 5-bit GBA grid, and `Palette.active()` as the
+   accessor. Every color the visualizer draws resolves through a role, so M4 added **zero** new
+   literals. M11 inherits the enum and the color pipeline and has to build the layers, the
+   customizer, the validator and the persistence, not retrofit the roles. The remaining debt is
+   the CSS: those ~60 literals are still the job to do before M11 starts.
 8. **Pixel art is never smoothed.** `gc.setImageSmoothing(false)` on every `GraphicsContext`,
    `setSmooth(false)` on every `ImageView`. JavaFX interpolates by default, which turns
    hand-drawn 8-bit sprites into mush at any scale other than 1:1. Scale by **integer**
@@ -89,7 +96,7 @@ block (a bare `-D` on the Maven command line does **not** reach the app):
 |---|---|
 | `-Dsdmk.smokeTest=true` | Launch, print what was verified, auto-close after ~2 s. Use this to check a launch without leaving a window on screen. |
 | `-Dsdmk.home=/tmp/demo` | Use a scratch profile instead of `~/.superdwarfkart`. Seed a `library.json` there to demo against fake data without touching the user's real library. |
-| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. |
+| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. Also writes `out-arrival.png`, `out-alphabetical.png` and `out-presentation.png`, cycling the modes so all three structure views and Presentation Mode are captured — three of the four only exist once a mode has been selected, so one shot of the opening state proves nothing about them. |
 
 ```bash
 # Full verification run against seeded data, leaving a screenshot behind
@@ -144,6 +151,33 @@ tooltips and dialogs are all rebuilt as hard-edged beveled blocks.
   `ellipsizeStart`, and put the full value in a tooltip.
 - **Verify visually.** Layout overflow in this font is invisible to unit tests — take a
   screenshot with `-Dsdmk.screenshot=` after any UI change.
+
+### Keyboard shortcuts
+
+| Key | Does |
+|---|---|
+| `←` / `→` | previous / next song |
+| media prev / next (`TRACK_PREV`, `TRACK_NEXT`) | previous / next song |
+| `Tab` | cycle the playback mode |
+| `F5` | Presentation Mode on/off |
+| `Esc` | leave Presentation Mode |
+| `→` / `Space` *(tree view focused)* | step through one edge of a traversal |
+
+They are wired across **both phases of event delivery**, and the split is load-bearing:
+
+- **Filter** (runs first, wins everywhere) for `F5`, `Esc` and `Tab`. `Tab` is excused when a text
+  field has focus, where it belongs to the field.
+- **Handler** (runs last, only if nothing else wanted the key) for the transport keys. The library
+  table uses the arrows for its selection, the search box for the caret, and the tree view for its
+  step-through — all three consume the event first, so the transport never takes a key out from
+  under a control that was using it. Put the arrows in a filter and all three break at once.
+
+**`Tab` no longer moves focus between controls.** That is the deliberate cost of binding it; the
+interface is mouse-driven and every control is reachable by clicking.
+
+**macOS usually swallows the media keys** before the JVM sees them — they are routed to the system
+media controls. They are wired because they cost nothing and work elsewhere, but the arrows are the
+path that can be relied on. Do not "fix" the media keys by grabbing a global hotkey.
 
 ### Frameless windows are a design decision
 
@@ -239,15 +273,19 @@ com.eia.superdwarfkart
 ├── game/         RunnerGame, Course, Lane, Entity, Obstacle, Coin,
 │                 Star, ScoreKeeper, SpeedClass
 ├── persistence/  Repository<T> (interface), LibraryRepository, ScoreRepository
-├── assets/       AssetRegistry, SpriteSheet, SpriteAnimation
-├── mood/         Mood, Palette, PaletteRole (enum), GbaColor, MoodLayer,
-│                 GradientLayer, ImageLayer, ProceduralLayer,
-│                 PixelTile, MoodRepository, PaletteImporter,
-│                 ImageQuantizer, MoodValidator              ← M11
+├── assets/       AssetRegistry, SpriteSheet, SpriteAnimation, RacerFrame
+├── mood/         Palette, PaletteRole (enum), GbaColor            ← built in M4
+│                 Mood, MoodLayer, GradientLayer, ImageLayer,
+│                 ProceduralLayer, PixelTile, MoodRepository,
+│                 PaletteImporter, ImageQuantizer, MoodValidator   ← M11
 └── ui/           MiniPlayerView, FullscreenView, LibraryView,
                   RacerSelectView, LevelMeterView, ComplexityPanel,
                   MoodCustomizerView, PixelEditorView, MoodOverlayRenderer
-    └── visualizer/  CircuitView, StartingGridView, BstView, OperationCounter
+    └── visualizer/  StructureView (base) -> RoadView (base) -> CircuitView,
+                     StraightView;  BstView extends StructureView directly,
+                     StructureVisualizer (swaps them),
+                     OperationCounter, Measurement, ComplexityScatter,
+                     StructureComparison, PresentationView
 ```
 
 **Three naming collisions to avoid:** never name the model class `Character`
@@ -408,24 +446,86 @@ All entities are placed **on beats**, never on a timer.
 
 Each is a `Canvas` sharing the game's sprite set. One view per mode, swapped by `AppState`.
 
-**`CircuitView` — the circular list as a race circuit.** A closed Mario-Kart loop, each song a
-numbered position marker around the ring, the racer's kart parked on the current node.
-`next()` drives the kart forward along the track, `previous()` backward, and **passing the last
-node it visibly continues around the lap to the first** — circularity is demonstrated, never
-explained. `prev`/`next` links are the track itself, with bidirectional arrows on the road.
-Hovering a node shows title/artist in a tooltip.
+**Two of the three are roads.** The circular list and the queue are both sequences, and a sequence
+reads best as a side-on road: songs on roadside markers in order, the racer driving it, the surface
+sliding underneath. `RoadView` holds all of that — road, scrolling stripes, signs, camera, burst,
+racer, mini-map — and the two subclasses contribute only **which moves are possible**, which is
+exactly what distinguishes the structures. The tree is not a road and does not extend it.
 
-**`StartingGridView` — the queue as a starting grid.** Karts in a column, front of the grid at
-the top. `enqueue()` slots a kart in at the rear with a settle animation; `dequeue()` makes the
-front kart accelerate away and exit frame — it does not come back. Head and tail pointers are
-literal labeled flags on the grid. The previous control is visibly disabled here, tooltip
-*"FIFO — no going back."*
+**On a road the racer never stops** (wheels turning, surface scrolling, gentle bob) because he is
+travelling through a running order the whole time; a song change is a *burst on top of* that.
+**In the tree he freezes when parked**, because stopping at a junction means something there. That
+split is deliberate: `StructureView.racerFrame()` freezes on a still frame and `RoadView` overrides
+it to always cycle. Don't call `RacerFrame.driving()` from a view directly — go through
+`racerFrame()`, or that view will keep spinning its wheels in a car park.
 
-**`BstView` — live tree with animated traversal.** In-order x-position, depth y-position;
-pan/zoom once it outgrows the canvas. Each node shows its title, the current node is
-highlighted. **Animate the path, not just the result:** on `next()` the successor walk lights up
-each traversed edge in sequence — descend right then run to the minimum, or climb through
-parents until arriving from a left child; `previous()` mirrors it. Includes a **slow-motion /
+The view clock (`clockSeconds()`) **survives the timer stopping** — it banks elapsed time on stop
+and resumes from it. Anything phase-based reads that clock, the scrolling road most of all, and
+restarting from zero snaps the road to a new phase every time the racer sets off.
+
+**The mini-map is not decoration.** A strip of `+ -> + -> (+)` above the road draws the *structure*
+next to the songs it is holding, with the racer's node ringed. Without it the view is a list of
+songs on posts and the shape is left implied. On the ring it closes with a return arc — the same
+shape the racer flies when he comes round — so the circularity is on screen even while he is
+driving a straight.
+
+The view clock (`clockSeconds()`) **survives the timer stopping** — it banks elapsed time on stop
+and resumes from it. Anything phase-based reads that clock, the scrolling road most of all, and
+restarting from zero snaps the road to a new phase every time the racer sets off.
+
+**`CircuitView` — the circular list as a road that can be driven both ways.** The same straight the
+queue uses (`RoadView`); the differences *are* the structure's:
+
+- **He can go back.** `previous()` reverses him down the road one marker in one move — mirrored
+  sprite, camera following him down — because the list is doubly linked and stepping back is a
+  single pointer hop. A singly linked ring would have to drive the whole lap to get there.
+- **The road has no end.** Driving off the last marker he takes an **up-turn, flies back over the
+  road and lands on the first**, and the return is a blur. Reversing off the first does the same
+  the other way. Circularity is demonstrated, never explained.
+
+**The loop back must stay a whip, not a journey.** Past the tail is the head and it costs *one
+pointer hop*. A camera that panned back down the road at an even pace would be drawing O(n) for an
+O(1) operation — the picture would claim the wrong complexity. `whipFraction` covers the whole
+road in a quarter of the move, and `RoadViewMotionTest` asserts that it does.
+
+**`StraightView` — the queue as a side-on race down a straight.** The road runs left to right
+with the waiting songs on roadside markers along it, and the racer drives it in **side view**
+(sprite frames 0/1).
+
+**The racer holds his mark and the road moves under him.** He rides up and down over the surface
+and the kerb stripes and centre line slide past, so he reads as driving even when the queue is
+untouched — a sprite pinned to one spot reads as a sticker on the glass however good the art is.
+What scrolls is the *surface only*; the song markers stay pinned, because those are queue
+positions and a queue position does not drift.
+
+On `dequeue()` he floors it, pulls away and **leaves the frame to the right**; the camera holds a
+beat, gives chase, and eases to a stop with him back on his mark as the next marker arrives at
+the front. It **catches up — it never cuts.** The camera **only ever moves forward**, and that one
+rule is what a FIFO looks like: played songs slide off the left and no shot brings them back,
+because no operation would. Head and tail are flags on the roadside. The previous control is
+visibly disabled here, tooltip *"FIFO — no going back."*
+
+Two things this view has already been got wrong on:
+- Marker positions are **absolute**, from a running count of songs that have left the queue. Laid
+  out relative to the racer instead, the whole road slides forward underneath him every time he
+  sets off and he never appears to get anywhere.
+- The lead he opens up is **screen-space**, not a change to his queue position — one dequeue is a
+  step, not a distance, and no honest slot spacing both clears a 400px panel *and* leaves room to
+  show what is coming up. `burstFraction` / `chaseFraction` are pure functions of progress and are
+  unit-tested (`StraightViewMotionTest`), because a still frame of a scrolling road is a static
+  road and no screenshot can check any of this.
+
+**`BstView` — the tree as a neighbourhood seen from above.** Nodes are buildings, the parent
+links are **streets** (kerb, asphalt, dashed centre line), and a traversal is **the racer driving
+across town**. In-order x-position, depth y-position; pan/zoom once it outgrows the canvas. Each
+node shows its title, the current node is highlighted. **Drive the path, not just the result:**
+on `next()` the kart takes each traversed street in sequence — descend right then run to the
+minimum, or climb through parents until arriving from a left child; `previous()` mirrors it. The
+sprite is chosen from the direction of travel: the **rear view (frame 2)** heading up or down the
+map, the **driving cycle (frames 0/1)** heading across, mirrored when going left. The kart parks
+*above* the building it is beside, never centred on it — centred, it covers the very title the
+node exists to show. It is drawn at 1:1 here even on the full stage: this is a map, and a vehicle
+on it should be smaller than the blocks it drives between. Includes a **slow-motion /
 step-through toggle** (walk one edge per keypress during the defense), a **step counter** for
 the path just walked, and **shape controls**: one button reinserts the whole library
 alphabetically, one reinserts it shuffled. The alphabetical insert **visibly degenerates the
@@ -438,6 +538,50 @@ as a live scatter accumulating across operations with the theoretical curve over
 500-song library a BST search lands near 9 steps while the circular list takes ~250, and the
 scatter traces log n in front of the room. A **"Compare Structures"** action runs the same
 search across all three at once and reports the three counts side by side.
+
+### As built (2026-08-12, M4)
+
+- **`StepCounter` gained `begin`/`end`, and `Player` brackets the structure calls itself.** The
+  scope has to close *before* the listeners run: redrawing the bar peeks at the next song, and in
+  a tree a peek is a whole successor walk that would otherwise be billed to the navigation that
+  triggered it and roughly double every number on screen. `PlayerInstrumentationTest` pins this.
+  Steps counted outside any scope are discarded when the next one opens, and a nested scope folds
+  into its parent rather than overwriting it.
+- **The three modes spell four operations identically** — `next()`, `previous()`, `select(song)`,
+  `build` — because the panel puts the measured count on the row whose key matches. Getting this
+  wrong throws nothing; the row just silently never shows a measurement, so
+  `PlaybackModeContractTest` asserts the names. The structural detail moved into the *value*
+  (`next()` is O(1) over a queue and O(log n) over the tree), with the structure named above the
+  table.
+- **A measurement is only shown against the structure that produced it.** One counter serves
+  every mode, so it still holds what `previous()` cost over the ring after a switch to the queue —
+  printing that beside "not supported" would read as the queue having walked backwards.
+- **`build` is excluded from the scatter** (`ComplexityScatter.BULK_OPERATIONS`). A build is n
+  operations, not one; leaving it in pins the y scale so high that the log n and n curves collapse
+  onto each other, which is the one thing the plot exists to separate. It still gets its row.
+- `BinarySearchTree` gained `successorPath` / `predecessorPath` / `searchPath` and a read-only
+  `NodeRef`. The paths are the **real** walks recorded rather than reconstructed — the same code
+  with a trace list threaded through it — so the animation cannot drift from the navigation.
+  A walk with no successor returns **the climb to the root**, not a single node: that climb is
+  work the structure genuinely did, and the view shows it happening.
+- **`StructureVisualizer` is the one class that names the concrete modes**, by pattern-matching
+  switch. Unavoidable and legitimate — a view of a circuit *is* a view of a ring — and an
+  unrecognised mode gets a message rather than an exception.
+- **The tree does not fit-to-canvas by default.** Thirty nodes laid out in order are ~2900 px
+  wide, and fitting that into the 400 px panel lands at minimum zoom where the tree is a grey
+  smudge. It comes up at 1:1 centred on the current song, and reframes when the canvas changes
+  size by more than 1.5× — which is exactly what entering Presentation Mode does. `FIT` remains
+  the deliberate whole-shape action.
+- **Layout: the visualizer and the complexity panel share one 400 px left column, stacked.** Side
+  by side they left the library table ~470 px, and at one em per glyph that truncates every song
+  title to three characters. Presentation Mode gives the visualizer the height back.
+- Presentation Mode is **F5** (Escape also leaves), wired as a scene event filter rather than an
+  accelerator so the tree keeps receiving space and the arrow keys for its step-through. The
+  visualizer node is *moved*, not duplicated, so pan, zoom and any walk in progress survive the
+  trip in both directions.
+- The BST control bar is a **`FlowPane`**: five controls do not fit across 400 px, and an `HBox`
+  answers that by truncating every label to `INS...`. It wraps in the panel and lays out in one
+  row on the full stage.
 
 ---
 
@@ -459,6 +603,19 @@ manifest is absent, **write a template out on first run** populated with what wa
 | `Star.png` | 288×32 | 9 frames of 32×32 |
 | `Coin.png` | 32×32 | single frame |
 | `Mario/Luigi/Peach/Yoshi/Bowser.png` | 256×64 | 4 frames of 64×64 each |
+
+**A racer sheet's four frames are not four steps of one animation** — see `assets/RacerFrame`:
+
+| Frame | Shows | Rule |
+|---|---|---|
+| 0, 1 | the driving cycle, side view | **the only two that may loop** |
+| 2 | the kart from behind | for driving away, or across a map seen from above |
+| 3 | static icon | menus and labels; never animated |
+
+Looping all four — which is what a generic `SpriteAnimation` over the sheet does — flickers the
+kart between a side view, a rear view and a menu icon several times a second. Ask
+`RacerFrame.driving(seconds)` for the cycle rather than counting frames by hand, and mirror the
+sprite (`drawSprite(..., flipped)`) to face left; the art is drawn facing right only.
 
 Still missing: explosion (2 frames), background, racer select portraits, obstacle/bump.
 These must resolve to magenta placeholders without breaking anything.
@@ -743,7 +900,7 @@ pane, the whole app is the preview.
 | M2 | Library CRUD, search, 0–100 rating, cover display, JSON persistence | ✅ done |
 | — | Asset layer (§8): `AssetRegistry`, `AssetKind`, `SpriteAnimation`, `assets.json` manifest, drop-in folder | ✅ done |
 | M3 | Three modes behind the interface, selector, previous disabled in queue mode, `ComplexityPanel` | ✅ done |
-| M4 | ⭐ **Structure visualizer** — circuit, starting grid, animated BST traversal, `OperationCounter`, live scatter, Presentation Mode | ⬜ |
+| M4 | ⭐ **Structure visualizer** — circuit, starting grid, animated BST traversal, `OperationCounter`, live scatter, Presentation Mode | ✅ done |
 | M5 | ⭐ `LocalFileAudioSource`, real playback, PCM tap, independent L/R meters | ⬜ |
 | M6 | `BeatmapAnalyzer` + cache + debug view (BPM, onsets on a timeline) | ⬜ |
 | M7 | ⭐ 3-lane runner: lookahead spawning, coins, bumps, star, cc classes, scoring, beat pulse | ⬜ |
