@@ -1,27 +1,38 @@
 package com.eia.superdwarfkart.app;
 
+import com.eia.superdwarfkart.model.Library;
+import com.eia.superdwarfkart.model.Song;
+import com.eia.superdwarfkart.persistence.LibraryRepository;
+import com.eia.superdwarfkart.persistence.PersistenceException;
+import com.eia.superdwarfkart.persistence.Repository;
 import com.eia.superdwarfkart.ui.Fonts;
+import com.eia.superdwarfkart.ui.LibraryView;
+import com.eia.superdwarfkart.ui.PixelDialog;
+import com.eia.superdwarfkart.ui.Theme;
 import javafx.animation.PauseTransition;
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Label;
-import javafx.scene.layout.StackPane;
-import javafx.scene.layout.VBox;
-import javafx.scene.text.Text;
-import javafx.scene.text.TextAlignment;
+import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 
+import java.util.List;
 import java.util.logging.Logger;
 
 /**
  * JavaFX bootstrap.
  *
- * <p>At milestone M0 this opens the styled shell and proves the build: the bundled 8-bit font
- * loads, the stylesheet applies, and the window carries the full application name. Later
- * milestones replace the placeholder body with the real title screen and views.
+ * <p>Builds the shared model - the library and its storage - and hands it to the views. The
+ * application must start and stay usable whatever the state of the stored data or the artwork
+ * on disk, so a failure to load the library reports itself and continues with an empty one
+ * rather than refusing to open.
  */
 public class App extends Application {
 
@@ -33,12 +44,32 @@ public class App extends Application {
      */
     private static final String SMOKE_TEST_PROPERTY = "sdmk.smokeTest";
 
+    /**
+     * When set to a file path, the smoke test writes a snapshot of the window there before
+     * closing. Used to check layout without a person watching the screen, and to capture
+     * screenshots for the project documentation.
+     */
+    private static final String SCREENSHOT_PROPERTY = "sdmk.screenshot";
+
+    private Library library;
+    private Repository<Song> libraryRepository;
+
     @Override
     public void start(Stage stage) {
         boolean pixelFont = Fonts.load();
 
-        Scene scene = new Scene(buildRoot(pixelFont), AppConfig.MAIN_WIDTH, AppConfig.MAIN_HEIGHT);
-        applyStylesheet(scene);
+        libraryRepository = new LibraryRepository();
+        library = loadLibrary(libraryRepository);
+
+        LibraryView libraryView = new LibraryView(library, libraryRepository);
+
+        BorderPane root = new BorderPane();
+        root.getStyleClass().add("root-pane");
+        root.setTop(buildHeader());
+        root.setCenter(libraryView);
+
+        Scene scene = new Scene(root, AppConfig.MAIN_WIDTH, AppConfig.MAIN_HEIGHT);
+        Theme.apply(scene);
 
         stage.setTitle(AppConfig.APP_NAME);
         stage.setScene(scene);
@@ -50,52 +81,50 @@ public class App extends Application {
     }
 
     /**
-     * Builds the M0 placeholder content: the application name in the 8-bit font over a short
-     * environment report.
+     * Builds the title bar strip.
      *
-     * @param pixelFont whether the bundled font loaded, which the report echoes back
-     * @return the scene root
+     * <p>This is the main window, so it carries the full application name. The mini player must
+     * use {@link AppConfig#APP_NAME_SHORT} instead: at 44 characters in the 8-bit font the full
+     * name is several times the width of that window.
+     *
+     * @return the header node
      */
-    private StackPane buildRoot(boolean pixelFont) {
-        // The full name is the joke and gets the screen real estate, but it is 44 characters
-        // wide, so it is split across lines rather than allowed to overflow.
-        Text line1 = new Text("Super_Dwarf_Mario_Kart");
-        Text line2 = new Text("_Deluxe-Camel_Edition");
-        line1.getStyleClass().add("title-text");
-        line2.getStyleClass().add("title-text");
-        line1.setTextAlignment(TextAlignment.CENTER);
-        line2.setTextAlignment(TextAlignment.CENTER);
+    private HBox buildHeader() {
+        Label name = new Label(AppConfig.APP_NAME);
+        name.getStyleClass().add("app-name");
 
-        Label subtitle = new Label("MILESTONE M0 - BUILD SKELETON");
-        subtitle.getStyleClass().add("subtitle");
+        Label version = new Label("v" + AppConfig.APP_VERSION);
+        version.getStyleClass().add("app-version");
 
-        Label report = new Label(String.join("\n",
-                "Java        " + System.getProperty("java.version"),
-                "JavaFX      " + System.getProperty("javafx.runtime.version", "unknown"),
-                "8-bit font  " + (pixelFont ? "loaded" : "MISSING (using fallback)"),
-                "App home    " + AppConfig.appHome()));
-        report.getStyleClass().add("report");
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        VBox box = new VBox(18, line1, line2, subtitle, report);
-        box.setAlignment(Pos.CENTER);
-
-        StackPane root = new StackPane(box);
-        root.getStyleClass().add("root-pane");
-        return root;
+        HBox header = new HBox(14, name, spacer, version);
+        header.setAlignment(Pos.CENTER_LEFT);
+        header.setPadding(new Insets(14, 16, 14, 16));
+        header.getStyleClass().add("app-header");
+        return header;
     }
 
     /**
-     * Applies the bundled stylesheet, logging a warning and continuing unstyled if it is absent.
+     * Loads the stored library, degrading to an empty one if the file cannot be read.
      *
-     * @param scene the scene to style
+     * @param repository where the library is stored
+     * @return the loaded library, never {@code null}
      */
-    private void applyStylesheet(Scene scene) {
-        var url = App.class.getResource(AppConfig.STYLESHEET_RESOURCE);
-        if (url == null) {
-            LOG.warning("Stylesheet not found at " + AppConfig.STYLESHEET_RESOURCE + " - running unstyled");
-            return;
+    private Library loadLibrary(Repository<Song> repository) {
+        try {
+            List<Song> stored = repository.loadAll();
+            LOG.info("Loaded " + stored.size() + " songs from " + repository.storageLocation());
+            return new Library(stored);
+        } catch (PersistenceException e) {
+            LOG.warning("Could not load the library: " + e.getMessage());
+            Platform.runLater(() -> PixelDialog.error(null, "COULD NOT LOAD LIBRARY",
+                    e.getMessage()
+                            + "\n\nThe application has started with an empty library. "
+                            + "The existing file has not been modified."));
+            return new Library();
         }
-        scene.getStylesheets().add(url.toExternalForm());
     }
 
     /**
@@ -106,22 +135,61 @@ public class App extends Application {
      * @param pixelFont whether the bundled font loaded
      */
     private void runSmokeTest(Stage stage, Scene scene, boolean pixelFont) {
+        boolean libraryViewPresent = scene.getRoot().lookup(".library-view") != null;
+        boolean tablePresent = scene.getRoot().lookup(".table-view") != null;
+
         System.out.println("[smoke] window shown      : " + stage.isShowing());
         System.out.println("[smoke] window title      : " + stage.getTitle());
         System.out.println("[smoke] title matches     : " + AppConfig.APP_NAME.equals(stage.getTitle()));
         System.out.println("[smoke] stylesheets       : " + scene.getStylesheets().size());
         System.out.println("[smoke] 8-bit font loaded : " + pixelFont);
         System.out.println("[smoke] javafx runtime    : " + System.getProperty("javafx.runtime.version", "unknown"));
+        System.out.println("[smoke] library view      : " + libraryViewPresent);
+        System.out.println("[smoke] library table     : " + tablePresent);
+        System.out.println("[smoke] songs loaded      : " + library.size());
+        System.out.println("[smoke] library file      : " + libraryRepository.storageLocation());
 
         boolean ok = stage.isShowing()
                 && AppConfig.APP_NAME.equals(stage.getTitle())
                 && !scene.getStylesheets().isEmpty()
-                && pixelFont;
+                && pixelFont
+                && libraryViewPresent
+                && tablePresent;
         System.out.println("[smoke] RESULT            : " + (ok ? "PASS" : "FAIL"));
 
         PauseTransition close = new PauseTransition(Duration.seconds(2));
-        close.setOnFinished(e -> Platform.exit());
+        close.setOnFinished(e -> {
+            writeScreenshotIfRequested(scene);
+            Platform.exit();
+        });
         close.play();
+    }
+
+    /**
+     * Writes a snapshot of the scene when {@value #SCREENSHOT_PROPERTY} names a destination.
+     *
+     * <p>Failures here are reported but never propagated: a screenshot is a diagnostic, and
+     * failing to take one must not change how the application behaves.
+     *
+     * @param scene the scene to capture
+     */
+    private void writeScreenshotIfRequested(Scene scene) {
+        String destination = System.getProperty(SCREENSHOT_PROPERTY);
+        if (destination == null || destination.isBlank()) {
+            return;
+        }
+        try {
+            var image = scene.snapshot(null);
+            var file = java.nio.file.Path.of(destination);
+            if (file.getParent() != null) {
+                java.nio.file.Files.createDirectories(file.getParent());
+            }
+            javax.imageio.ImageIO.write(
+                    javafx.embed.swing.SwingFXUtils.fromFXImage(image, null), "png", file.toFile());
+            System.out.println("[smoke] screenshot        : " + file);
+        } catch (Exception e) {
+            System.out.println("[smoke] screenshot failed : " + e);
+        }
     }
 
     /**

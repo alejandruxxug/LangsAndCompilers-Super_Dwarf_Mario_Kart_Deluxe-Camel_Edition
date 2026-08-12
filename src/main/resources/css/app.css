@@ -1,31 +1,738 @@
 /*
- * Base theme.
+ * 8-bit theme.
  *
- * Dark by default: the level meters, the circuit visualizer and the runner are all drawn on a
- * Canvas over this background, and a dark ground keeps the sprite palette readable.
+ * Every control is styled from scratch: no JavaFX default chrome, no rounded corners, no
+ * gradients on controls, no drop shadows. Buttons, fields, combo boxes, check boxes, sliders
+ * and scrollbars are all rebuilt here as hard-edged beveled blocks, and the whole interface
+ * runs in Press Start 2P.
+ *
+ * Press Start 2P is a fixed-width pixel font whose glyphs are about one em wide, so a string of
+ * n characters is roughly n * font-size pixels across. That is several times wider than a
+ * normal UI font, which is why sizes here are small (7px to 14px) and why controls carry
+ * explicit widths in the views. Sizes are whole pixels on purpose: fractional sizes make a
+ * pixel font blurry.
  */
+
+/* ------------------------------------------------------------------ */
+/* Palette                                                             */
+/* ------------------------------------------------------------------ */
+
+.root {
+    -sdmk-bg:            #12121c;
+    -sdmk-panel:         #1a1930;
+    -sdmk-panel-dark:    #0e0e18;
+    -sdmk-row:           #191830;
+    -sdmk-row-alt:       #1c1b35;
+
+    -sdmk-yellow:        #ffd23f;
+    -sdmk-cyan:          #6ee7ff;
+    -sdmk-magenta:       #ff00ff;
+    -sdmk-text:          #e6e8f0;
+    -sdmk-text-dim:      #9aa3b8;
+    -sdmk-text-faint:    #6b7280;
+
+    /* Bevel colours: light on the top-left, dark on the bottom-right. */
+    -sdmk-face:          #2a2750;
+    -sdmk-face-hover:    #3a3570;
+    -sdmk-bevel-light:   #6b62c4;
+    -sdmk-bevel-dark:    #0f0d24;
+    -sdmk-edge:          #443e7a;
+
+    -fx-font-family: "Press Start 2P";
+    -fx-font-size: 9px;
+    -fx-font-smoothing-type: gray;
+}
 
 .root-pane {
     -fx-background-color: linear-gradient(to bottom, #12121c 0%, #1d1b2e 60%, #241f38 100%);
 }
 
+/* Every label defaults to the pixel font in the body colour. */
+.label {
+    -fx-text-fill: -sdmk-text;
+    -fx-font-family: "Press Start 2P";
+}
+
+/* ------------------------------------------------------------------ */
+/* Title screen                                                        */
+/* ------------------------------------------------------------------ */
+
 .title-text {
     -fx-font-family: "Press Start 2P";
     -fx-font-size: 28px;
-    -fx-fill: #ffd23f;
+    -fx-fill: -sdmk-yellow;
     -fx-stroke: #1a1a2e;
     -fx-stroke-width: 1.5;
 }
 
 .subtitle {
-    -fx-font-family: "Press Start 2P";
     -fx-font-size: 11px;
-    -fx-text-fill: #6ee7ff;
+    -fx-text-fill: -sdmk-cyan;
 }
 
 .report {
+    -fx-font-size: 9px;
+    -fx-text-fill: -sdmk-text-dim;
+    -fx-line-spacing: 6px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Application header                                                  */
+/* ------------------------------------------------------------------ */
+
+.app-header {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-border-color: transparent transparent -sdmk-yellow transparent;
+    -fx-border-width: 0 0 3 0;
+}
+
+.app-name {
+    -fx-font-size: 13px;
+    -fx-text-fill: -sdmk-yellow;
+}
+
+.app-version {
+    -fx-font-size: 8px;
+    -fx-text-fill: -sdmk-text-faint;
+}
+
+/* ------------------------------------------------------------------ */
+/* Library view                                                        */
+/* ------------------------------------------------------------------ */
+
+.library-view {
+    -fx-background-color: transparent;
+}
+
+.section-heading {
+    -fx-font-size: 14px;
+    -fx-text-fill: -sdmk-cyan;
+}
+
+.filter-bar .label {
+    -fx-font-size: 8px;
+    -fx-text-fill: -sdmk-text-dim;
+}
+
+.status-bar {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-border-color: -sdmk-edge transparent transparent transparent;
+    -fx-border-width: 2 0 0 0;
+}
+
+.status-label {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-text-faint;
+}
+
+/* ------------------------------------------------------------------ */
+/* Buttons - beveled blocks that visibly depress when pressed          */
+/* ------------------------------------------------------------------ */
+
+.button {
     -fx-font-family: "Press Start 2P";
     -fx-font-size: 9px;
-    -fx-text-fill: #9aa3b8;
-    -fx-line-spacing: 6px;
+    -fx-background-color: -sdmk-face;
+    -fx-background-radius: 0;
+    -fx-background-insets: 0;
+    -fx-text-fill: -sdmk-text;
+    -fx-border-color: -sdmk-bevel-light -sdmk-bevel-dark -sdmk-bevel-dark -sdmk-bevel-light;
+    -fx-border-width: 2;
+    -fx-border-radius: 0;
+    -fx-padding: 8 14 8 14;
+    -fx-cursor: hand;
+    -fx-effect: null;
+}
+
+.button:hover {
+    -fx-background-color: -sdmk-face-hover;
+    -fx-text-fill: -sdmk-yellow;
+}
+
+.button:focused {
+    -fx-border-color: -sdmk-yellow;
+}
+
+/* Pressed inverts the bevel and nudges the block down-right, so it reads as a physical key. */
+.button:pressed,
+.button:armed {
+    -fx-background-color: #221f42;
+    -fx-border-color: -sdmk-bevel-dark -sdmk-bevel-light -sdmk-bevel-light -sdmk-bevel-dark;
+    -fx-translate-x: 1;
+    -fx-translate-y: 1;
+}
+
+.button:disabled {
+    -fx-opacity: 1;
+    -fx-background-color: #1c1a30;
+    -fx-text-fill: #4a4a63;
+    -fx-border-color: #2a2740;
+}
+
+/* ------------------------------------------------------------------ */
+/* Text fields - sunken blocks                                         */
+/* ------------------------------------------------------------------ */
+
+.text-field {
+    -fx-font-family: "Press Start 2P";
+    -fx-font-size: 9px;
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-radius: 0;
+    -fx-background-insets: 0;
+    -fx-text-fill: -sdmk-text;
+    -fx-prompt-text-fill: #4a4a63;
+    -fx-highlight-fill: -sdmk-yellow;
+    -fx-highlight-text-fill: -sdmk-panel-dark;
+    -fx-border-color: -sdmk-bevel-dark -sdmk-edge -sdmk-edge -sdmk-bevel-dark;
+    -fx-border-width: 2;
+    -fx-border-radius: 0;
+    -fx-padding: 8 8 8 8;
+}
+
+.text-field:focused {
+    -fx-border-color: -sdmk-yellow;
+}
+
+.text-field:disabled {
+    -fx-opacity: 1;
+    -fx-text-fill: #4a4a63;
+    -fx-background-color: #15142a;
+}
+
+/* ------------------------------------------------------------------ */
+/* Combo boxes - block body with a stepped pixel arrow                 */
+/* ------------------------------------------------------------------ */
+
+.combo-box-base {
+    -fx-font-family: "Press Start 2P";
+    -fx-font-size: 9px;
+    -fx-background-color: -sdmk-face;
+    -fx-background-radius: 0;
+    -fx-background-insets: 0;
+    -fx-border-color: -sdmk-bevel-light -sdmk-bevel-dark -sdmk-bevel-dark -sdmk-bevel-light;
+    -fx-border-width: 2;
+    -fx-border-radius: 0;
+    -fx-padding: 0;
+    -fx-cursor: hand;
+}
+
+.combo-box-base:hover {
+    -fx-background-color: -sdmk-face-hover;
+}
+
+.combo-box-base:focused {
+    -fx-border-color: -sdmk-yellow;
+}
+
+.combo-box > .list-cell {
+    -fx-background-color: transparent;
+    -fx-text-fill: -sdmk-text;
+    -fx-font-family: "Press Start 2P";
+    -fx-font-size: 9px;
+    -fx-padding: 8 6 8 8;
+}
+
+/* The default arrow is a smooth triangle; this replaces it with a stepped pixel pyramid. */
+.combo-box-base .arrow-button {
+    -fx-background-color: transparent;
+    -fx-background-radius: 0;
+    -fx-padding: 0 8 0 4;
+}
+
+.combo-box-base .arrow {
+    -fx-background-color: -sdmk-yellow;
+    -fx-shape: "M0,0 H6 V2 H5 V4 H4 V6 H2 V4 H1 V2 H0 Z";
+    -fx-min-width: 10;
+    -fx-min-height: 10;
+    -fx-max-width: 10;
+    -fx-max-height: 10;
+    -fx-padding: 0;
+}
+
+.combo-box-popup > .list-view {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-radius: 0;
+    -fx-border-color: -sdmk-yellow;
+    -fx-border-width: 2;
+    -fx-effect: null;
+}
+
+.combo-box-popup > .list-view > .virtual-flow > .clipped-container > .sheet > .list-cell {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-text-fill: -sdmk-text;
+    -fx-font-family: "Press Start 2P";
+    -fx-font-size: 9px;
+    -fx-padding: 8 10 8 10;
+}
+
+.combo-box-popup > .list-view > .virtual-flow > .clipped-container > .sheet > .list-cell:filled:hover,
+.combo-box-popup > .list-view > .virtual-flow > .clipped-container > .sheet > .list-cell:filled:selected {
+    -fx-background-color: -sdmk-face-hover;
+    -fx-text-fill: -sdmk-yellow;
+}
+
+/* ------------------------------------------------------------------ */
+/* Check boxes - a sunken square that fills with a solid block         */
+/* ------------------------------------------------------------------ */
+
+.check-box {
+    -fx-font-family: "Press Start 2P";
+    -fx-font-size: 8px;
+    -fx-text-fill: -sdmk-text-dim;
+    -fx-cursor: hand;
+}
+
+.check-box > .box {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-radius: 0;
+    -fx-background-insets: 0;
+    -fx-border-color: -sdmk-bevel-dark -sdmk-edge -sdmk-edge -sdmk-bevel-dark;
+    -fx-border-width: 2;
+    -fx-border-radius: 0;
+    -fx-padding: 3;
+    -fx-min-width: 16;
+    -fx-min-height: 16;
+}
+
+.check-box:hover > .box {
+    -fx-border-color: -sdmk-yellow;
+}
+
+.check-box:selected > .box > .mark {
+    /* A solid block rather than a tick: a filled square is the unambiguous 8-bit convention
+       and stays legible at this size, where a drawn tick turns to mush. */
+    -fx-background-color: -sdmk-yellow;
+    -fx-shape: "M0,0 H8 V8 H0 Z";
+    -fx-min-width: 8;
+    -fx-min-height: 8;
+    -fx-padding: 0;
+}
+
+.check-box:selected {
+    -fx-text-fill: -sdmk-yellow;
+}
+
+.check-box:disabled {
+    -fx-opacity: 1;
+    -fx-text-fill: #4a4a63;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sliders - chunky track, square thumb                                */
+/* ------------------------------------------------------------------ */
+
+/* Sunken track: near-black on the top-left, bright on the bottom-right, so the groove reads as
+   cut into the panel rather than painted on it. */
+.slider .track {
+    -fx-background-color: #05040e;
+    -fx-background-radius: 0;
+    -fx-border-color: #05040e #5b54a8 #5b54a8 #05040e;
+    -fx-border-width: 2;
+    -fx-padding: 5;
+}
+
+.slider .thumb {
+    -fx-background-color: -sdmk-yellow;
+    -fx-background-radius: 0;
+    -fx-background-insets: 0;
+    -fx-border-color: #fff6c2 #8a6f00 #8a6f00 #fff6c2;
+    -fx-border-width: 2;
+    -fx-padding: 9 8 9 8;
+    -fx-effect: null;
+}
+
+.slider .thumb:hover {
+    -fx-background-color: #fff0a0;
+}
+
+.slider:focused .thumb {
+    -fx-border-color: -sdmk-cyan;
+}
+
+.slider .axis {
+    -fx-tick-label-fill: -sdmk-text-faint;
+    -fx-tick-label-font-family: "Press Start 2P";
+    -fx-tick-label-font-size: 7px;
+    -fx-tick-mark-stroke: -sdmk-edge;
+    -fx-minor-tick-mark-stroke: transparent;
+}
+
+.slider:disabled {
+    -fx-opacity: 0.45;
+}
+
+/* ------------------------------------------------------------------ */
+/* Spinner                                                             */
+/* ------------------------------------------------------------------ */
+
+.spinner {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-radius: 0;
+    -fx-border-color: -sdmk-bevel-dark -sdmk-edge -sdmk-edge -sdmk-bevel-dark;
+    -fx-border-width: 2;
+    -fx-border-radius: 0;
+}
+
+.spinner .text-field {
+    -fx-border-width: 0;
+    -fx-background-color: transparent;
+}
+
+.spinner .increment-arrow-button,
+.spinner .decrement-arrow-button {
+    -fx-background-color: -sdmk-face;
+    -fx-background-radius: 0;
+    -fx-border-color: -sdmk-bevel-light -sdmk-bevel-dark -sdmk-bevel-dark -sdmk-bevel-light;
+    -fx-border-width: 2;
+    -fx-padding: 4 8 4 8;
+    -fx-cursor: hand;
+}
+
+.spinner .increment-arrow-button:hover,
+.spinner .decrement-arrow-button:hover {
+    -fx-background-color: -sdmk-face-hover;
+}
+
+.spinner .increment-arrow-button > .increment-arrow {
+    -fx-background-color: -sdmk-yellow;
+    -fx-shape: "M2,0 H4 V2 H5 V4 H6 V6 H0 V4 H1 V2 H2 Z";
+    -fx-min-width: 8;
+    -fx-min-height: 8;
+    -fx-padding: 0;
+}
+
+.spinner .decrement-arrow-button > .decrement-arrow {
+    -fx-background-color: -sdmk-yellow;
+    -fx-shape: "M0,0 H6 V2 H5 V4 H4 V6 H2 V4 H1 V2 H0 Z";
+    -fx-min-width: 8;
+    -fx-min-height: 8;
+    -fx-padding: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Table                                                               */
+/* ------------------------------------------------------------------ */
+
+.table-view {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+    -fx-table-cell-border-color: transparent;
+    -fx-font-family: "Press Start 2P";
+}
+
+.table-view .column-header-background {
+    -fx-background-color: -sdmk-panel-dark;
+}
+
+.table-view .column-header,
+.table-view .filler {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent -sdmk-edge -sdmk-yellow transparent;
+    -fx-border-width: 0 1 3 0;
+    -fx-size: 34;
+}
+
+.table-view .column-header .label {
+    -fx-text-fill: -sdmk-yellow;
+    -fx-font-size: 8px;
+    -fx-alignment: center-left;
+    -fx-padding: 0 4 0 6;
+}
+
+/* The default sort arrow is a smooth triangle; make it a pixel pyramid too. */
+.table-view .column-header .sort-order-dot,
+.table-view .column-header .arrow {
+    -fx-background-color: -sdmk-cyan;
+    -fx-shape: "M0,0 H6 V2 H5 V4 H4 V6 H2 V4 H1 V2 H0 Z";
+    -fx-min-width: 8;
+    -fx-min-height: 8;
+    -fx-padding: 0;
+}
+
+.table-row-cell {
+    -fx-background-color: -sdmk-row;
+    -fx-border-color: transparent transparent #12111f transparent;
+    -fx-border-width: 0 0 2 0;
+    -fx-padding: 0;
+    -fx-cell-size: 32;
+}
+
+.table-row-cell:odd {
+    -fx-background-color: -sdmk-row-alt;
+}
+
+.table-row-cell:selected {
+    -fx-background-color: #4a3a9e;
+    -fx-border-color: -sdmk-yellow transparent -sdmk-yellow transparent;
+    -fx-border-width: 2 0 2 0;
+}
+
+.table-view .table-cell {
+    -fx-text-fill: -sdmk-text;
+    -fx-font-size: 8px;
+    -fx-padding: 0 6 0 6;
+    -fx-alignment: center-left;
+    -fx-border-color: transparent -sdmk-edge transparent transparent;
+    -fx-border-width: 0 1 0 0;
+}
+
+.table-row-cell:selected .table-cell {
+    -fx-text-fill: #ffffff;
+}
+
+.table-view .placeholder .label {
+    -fx-text-fill: -sdmk-text-faint;
+    -fx-font-size: 9px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Details panel                                                       */
+/* ------------------------------------------------------------------ */
+
+/* The details column scrolls, so the panel styling sits on the scroll pane and the content
+   inside it stays transparent. */
+.details-pane {
+    -fx-background-color: -sdmk-panel;
+    -fx-border-color: transparent transparent transparent -sdmk-yellow;
+    -fx-border-width: 0 0 0 3;
+    -fx-padding: 0;
+}
+
+.details-pane > .viewport {
+    -fx-background-color: transparent;
+}
+
+.details-content {
+    -fx-background-color: transparent;
+}
+
+.detail-title {
+    -fx-font-size: 12px;
+    -fx-text-fill: -sdmk-yellow;
+    -fx-line-spacing: 4px;
+}
+
+.detail-artist {
+    -fx-font-size: 9px;
+    -fx-text-fill: -sdmk-cyan;
+    -fx-line-spacing: 3px;
+}
+
+.detail-meta {
+    -fx-font-size: 8px;
+    -fx-text-fill: -sdmk-text-dim;
+    -fx-line-spacing: 7px;
+}
+
+.detail-caption {
+    -fx-font-size: 8px;
+    -fx-text-fill: -sdmk-text-dim;
+}
+
+.rating-value {
+    -fx-font-size: 11px;
+    -fx-text-fill: -sdmk-yellow;
+    -fx-min-width: 40px;
+}
+
+.cover-holder {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-border-color: -sdmk-edge;
+    -fx-border-width: 3;
+}
+
+/*
+ * Missing artwork is always visible rather than silently blank: the magenta placeholder is the
+ * same convention the game canvas uses for a sprite it could not load.
+ */
+.cover-placeholder {
+    -fx-background-color: #2a0a2a;
+    -fx-border-color: -sdmk-magenta;
+    -fx-border-width: 3;
+}
+
+.cover-placeholder-label {
+    -fx-font-size: 10px;
+    -fx-text-fill: #ff7bff;
+}
+
+/* ------------------------------------------------------------------ */
+/* Separators, scrollbars, tooltips                                    */
+/* ------------------------------------------------------------------ */
+
+.separator .line {
+    -fx-border-color: -sdmk-edge;
+    -fx-border-width: 2 0 0 0;
+}
+
+.scroll-bar {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-radius: 0;
+    -fx-padding: 2;
+}
+
+.scroll-bar .track {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-radius: 0;
+    -fx-border-color: transparent;
+}
+
+.scroll-bar .thumb {
+    -fx-background-color: -sdmk-face;
+    -fx-background-radius: 0;
+    -fx-border-color: -sdmk-bevel-light -sdmk-bevel-dark -sdmk-bevel-dark -sdmk-bevel-light;
+    -fx-border-width: 2;
+}
+
+.scroll-bar .thumb:hover {
+    -fx-background-color: -sdmk-face-hover;
+}
+
+.scroll-bar .increment-button,
+.scroll-bar .decrement-button {
+    -fx-background-color: transparent;
+    -fx-padding: 4;
+}
+
+.scroll-bar .increment-arrow,
+.scroll-bar .decrement-arrow {
+    -fx-background-color: -sdmk-edge;
+    -fx-shape: "M0,0 H6 V6 H0 Z";
+    -fx-padding: 3;
+}
+
+.corner {
+    -fx-background-color: -sdmk-panel-dark;
+}
+
+.tooltip {
+    -fx-font-family: "Press Start 2P";
+    -fx-font-size: 8px;
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-radius: 0;
+    -fx-text-fill: -sdmk-yellow;
+    -fx-border-color: -sdmk-yellow;
+    -fx-border-width: 2;
+    -fx-padding: 8;
+    -fx-effect: null;
+}
+/* ------------------------------------------------------------------ */
+/* Rating meter - ten blocks that light up like an arcade health bar   */
+/* ------------------------------------------------------------------ */
+
+.rating-bar {
+    -fx-background-color: #05040e;
+    -fx-border-color: #05040e #5b54a8 #5b54a8 #05040e;
+    -fx-border-width: 2;
+    -fx-padding: 3;
+}
+
+.rating-bar > .segment {
+    -fx-background-color: #23213d;
+    -fx-background-radius: 0;
+}
+
+/* Filled blocks carry a lighter top edge so each one reads as a raised tile. */
+.rating-bar > .segment.filled {
+    -fx-border-width: 1 0 0 0;
+}
+
+/* The ramp runs red to yellow to green as the rating climbs, so the colour alone says whether
+   a song is barely liked or a favourite. */
+.rating-bar > .segment.filled.low {
+    -fx-background-color: #ff4d4d;
+    -fx-border-color: #ffb3b3 transparent transparent transparent;
+}
+
+.rating-bar > .segment.filled.mid {
+    -fx-background-color: -sdmk-yellow;
+    -fx-border-color: #fff6c2 transparent transparent transparent;
+}
+
+.rating-bar > .segment.filled.high {
+    -fx-background-color: #3ee85b;
+    -fx-border-color: #baffc4 transparent transparent transparent;
+}
+
+/* ------------------------------------------------------------------ */
+/* Frameless windows                                                   */
+/*                                                                     */
+/* Every window this application opens is undecorated, so the title    */
+/* bar, close button and border below are the entire chrome. See the   */
+/* PixelDialog class for the dragging and keyboard handling the system */
+/* title bar would otherwise have provided.                            */
+/* ------------------------------------------------------------------ */
+
+.pixel-window {
+    -fx-background-color: -sdmk-panel;
+    -fx-border-color: -sdmk-yellow;
+    -fx-border-width: 3;
+}
+
+.pixel-window-error {
+    -fx-border-color: #ff5c5c;
+}
+
+.pixel-titlebar {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-border-color: transparent transparent -sdmk-yellow transparent;
+    -fx-border-width: 0 0 2 0;
+    -fx-cursor: move;
+}
+
+.pixel-window-error .pixel-titlebar {
+    -fx-border-color: transparent transparent #ff5c5c transparent;
+}
+
+.pixel-window-title {
+    -fx-font-size: 10px;
+    -fx-text-fill: -sdmk-yellow;
+}
+
+.pixel-window-error .pixel-window-title {
+    -fx-text-fill: #ff5c5c;
+}
+
+/* The close button replaces the system one, so it has to be obvious. */
+.window-button {
+    -fx-font-size: 9px;
+    -fx-background-color: transparent;
+    -fx-text-fill: -sdmk-text-dim;
+    -fx-border-color: -sdmk-edge;
+    -fx-border-width: 2;
+    -fx-padding: 3 7 3 7;
+    -fx-cursor: hand;
+}
+
+.window-button:hover {
+    -fx-background-color: #c0392b;
+    -fx-text-fill: #ffffff;
+    -fx-border-color: #ff8a7a;
+}
+
+.window-button:pressed {
+    -fx-translate-x: 1;
+    -fx-translate-y: 1;
+}
+
+.pixel-window-content {
+    -fx-background-color: -sdmk-panel;
+}
+
+.pixel-window-buttons {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-border-color: -sdmk-edge transparent transparent transparent;
+    -fx-border-width: 2 0 0 0;
+}
+
+.pixel-message {
+    -fx-font-size: 9px;
+    -fx-text-fill: -sdmk-text;
+    -fx-line-spacing: 7px;
+}
+
+.song-form .label {
+    -fx-font-size: 8px;
+    -fx-text-fill: -sdmk-text-dim;
 }

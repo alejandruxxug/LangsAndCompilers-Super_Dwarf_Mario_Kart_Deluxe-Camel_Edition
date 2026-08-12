@@ -15,11 +15,15 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>25</maven.compiler.release>
 
-        <!-- Versions below were verified to resolve against Maven Central before use. -->
-        <!-- Overridden on the command line: ./mvnw javafx:run -Dsdmk.smokeTest=true
-             launches the app, prints what it verified, and closes itself. -->
+        <!-- Run-time switches, all empty by default and overridden on the command line:
+               -Dsdmk.smokeTest=true      launch, print what was verified, then close
+               -Dsdmk.home=/tmp/demo      use a scratch profile instead of ~/.superdwarfkart
+               -Dsdmk.screenshot=out.png  save a snapshot of the window during a smoke test -->
         <sdmk.smokeTest>false</sdmk.smokeTest>
+        <sdmk.home></sdmk.home>
+        <sdmk.screenshot></sdmk.screenshot>
 
+        <!-- Versions below were verified to resolve against Maven Central before use. -->
         <javafx.version>26.0.2</javafx.version>
         <mp3spi.version>1.9.5.4</mp3spi.version>
         <jackson.version>2.22.1</jackson.version>
@@ -104,6 +108,8 @@
                         <!-- javafx:run forks a JVM, so -D on the Maven command line does not
                              reach the application unless it is forwarded here. -->
                         <option>-Dsdmk.smokeTest=${sdmk.smokeTest}</option>
+                        <option>-Dsdmk.home=${sdmk.home}</option>
+                        <option>-Dsdmk.screenshot=${sdmk.screenshot}</option>
                     </options>
                 </configuration>
             </plugin>

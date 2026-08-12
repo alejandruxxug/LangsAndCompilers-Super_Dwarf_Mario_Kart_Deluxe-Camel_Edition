@@ -1,4 +1,4 @@
-# Super_Dwarf_Mario_Kart_Deluxe-Camel_Edition
+Al# Super_Dwarf_Mario_Kart_Deluxe-Camel_Edition
 
 Java 25 + JavaFX desktop music player for a Data Structures course at Universidad EIA.
 Graded on **hand-written data structures and OOP quality**; carries a Mario-Kart-styled
@@ -64,8 +64,21 @@ live in `AppConfig` and are referenced everywhere instead of hardcoded strings:
 ```bash
 ./mvnw clean compile          # Maven is NOT on PATH — always use the wrapper
 ./mvnw javafx:run             # launch the app
-./mvnw test                   # JUnit 5
-./mvnw javafx:run -Dsdmk.smokeTest=true   # launch, self-verify, auto-close (~2.5 s)
+./mvnw test                   # JUnit
+```
+
+Three run switches, all forwarded to the forked JVM by the `javafx-maven-plugin` `<options>`
+block (a bare `-D` on the Maven command line does **not** reach the app):
+
+| Switch | Effect |
+|---|---|
+| `-Dsdmk.smokeTest=true` | Launch, print what was verified, auto-close after ~2 s. Use this to check a launch without leaving a window on screen. |
+| `-Dsdmk.home=/tmp/demo` | Use a scratch profile instead of `~/.superdwarfkart`. Seed a `library.json` there to demo against fake data without touching the user's real library. |
+| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. |
+
+```bash
+# Full verification run against seeded data, leaving a screenshot behind
+./mvnw javafx:run -Dsdmk.smokeTest=true -Dsdmk.home=/tmp/sdmk-demo -Dsdmk.screenshot=/tmp/shot.png
 ```
 
 **Environment as measured on this machine:**
@@ -93,6 +106,83 @@ live in `AppConfig` and are referenced everywhere instead of hardcoded strings:
   Do not reach for FXGL; it expects to own the application lifecycle.
 
 ---
+
+## 3b. The interface is 8-bit everywhere — do not reintroduce JavaFX defaults
+
+**Every control is styled from scratch in `css/app.css`, and the whole interface runs in
+Press Start 2P.** No default JavaFX chrome, no rounded corners, no gradients on controls, no
+drop shadows. Buttons, text fields, combo boxes, check boxes, sliders, spinners, scrollbars,
+tooltips and dialogs are all rebuilt as hard-edged beveled blocks.
+
+- **No third-party UI libraries.** ControlsFX, FormsFX, ValidatorFX, BootstrapFX, TilesFX and
+  FXGL were all removed in M0 and must not come back — their widgets carry their own look.
+- Bevels are drawn with four-sided `-fx-border-color` (light top-left, dark bottom-right);
+  pressed states invert the bevel and translate by 1px so a button reads as a physical key.
+- Arrows and check marks are `-fx-shape` pixel paths, not the default smooth triangles. The
+  check mark is a **filled square**, which is the readable 8-bit convention at this size.
+- **Sizing rule:** Press Start 2P is fixed-width at roughly one em per glyph, so an n-character
+  string is about `n × font-size` pixels wide — several times wider than a proportional font.
+  Body text sits at **7–9px**, headings at 11–14px, and sizes are **whole pixels** (fractional
+  sizes make a pixel font blurry). Any new control needs an explicit width in characters, and
+  any new label needs checking against the space it has. `MAIN_WIDTH` is 1440 for this reason.
+- Long text must be shortened rather than wrapped: see `LibraryView.ellipsize` /
+  `ellipsizeStart`, and put the full value in a tooltip.
+- **Verify visually.** Layout overflow in this font is invisible to unit tests — take a
+  screenshot with `-Dsdmk.screenshot=` after any UI change.
+
+### Frameless windows are a design decision
+
+**Every window this application opens is undecorated.** No operating system title bar, no
+native buttons, no platform styling — so a window looks identical on macOS and Windows and
+neither breaks the theme. `ui/PixelDialog` is the shell: it draws the title bar, the close
+button and the border, and it supplies what the system chrome otherwise would — **dragging by
+the title bar, a close button, Escape to cancel and Enter to accept**. Anything that needs a
+window goes through it; `javafx.scene.control.Alert` and `Dialog` are not used anywhere.
+
+This matches the mini player the brief specifies (`StageStyle.TRANSPARENT`, no title bar,
+custom hide/quit/expand buttons, draggable by the top bar) — the mini player is the same idea
+applied to the companion window, so M8 should build on `PixelDialog`'s drag handling rather
+than reinvent it.
+
+The **native file chooser is the one exception** — it belongs to the operating system and
+cannot be styled.
+
+### Sprites in the interface
+
+`assets/SpriteSheet` loads a horizontal strip and addresses frames by viewport rectangle, so an
+animation costs one image and switching frames just moves a rectangle. A missing sheet returns a
+**magenta placeholder** and logs once — never an exception (ground rule 5).
+
+`ui/SpriteView` animates them, and **all animated sprites share one `AnimationTimer`** held
+statically. One timer ticking a counter is far cheaper than a timeline per sprite, which matters
+because sprites appear once per visible table row. Each view takes a phase offset so a column
+shimmers instead of beating in lockstep. A view that leaves the screen must call
+`stopAnimating()` — recycled table cells do this when they go empty.
+
+The rating is shown by `ui/RatingDisplay`: the ten-block meter (`RatingBar`) with the spinning
+star from `Star.png` beside it. The meter's colour ramp is **red (<40) → yellow (40–69) → green
+(≥70)**, so the colour alone says whether a song is barely liked or a favourite. The star turns
+only for a rated song.
+
+**Cover art is square and centre-cropped.** The frame spans the full width of the details column
+inside its padding, and its height is *bound* to that width, because album art is square. The
+image is cropped to its centre square (`LibraryView.centeredSquare`) rather than letterboxed.
+
+Two traps here, both hit once already:
+- The image must stop short of the frame's edge (`COVER_INSET`), or it paints straight over the
+  border and the frame looks like it vanished.
+- A full-width cover leaves little room beneath it, so the details column is a **`ScrollPane`** —
+  otherwise the metadata under the cover is silently clipped on a short window. The panel styling
+  lives on the scroll pane and the content inside it is transparent.
+
+### Do not do expensive work on continuous input
+
+A slider drag fires per pixel. The rating slider originally committed on every event, which meant
+a full table rebuild **and a JSON write to disk per pixel of travel** — it visibly lagged. The rule:
+while a control is being dragged, update only the cheap readout; commit on
+`valueChangingProperty` going false (plus an immediate commit when the value changes while *not*
+dragging, which covers track clicks and arrow keys). `RatingBar` additionally no-ops when the
+repaint would look identical, since rewriting style classes forces a CSS pass per block.
 
 ## 4. Package layout
 
@@ -242,7 +332,7 @@ These must resolve to magenta placeholders without breaking anything.
 |---|---|---|
 | M0 | Maven skeleton, `javafx:run` opens a styled window, font loads | ✅ done |
 | M1 | `model/` + three hand-written structures + JUnit tests | ✅ done |
-| M2 | Library CRUD, search, 0–100 rating, cover display, JSON persistence | ⬜ |
+| M2 | Library CRUD, search, 0–100 rating, cover display, JSON persistence | ✅ done |
 | M3 | Three modes behind the interface, selector, previous disabled in queue mode, `ComplexityPanel` | ⬜ |
 | M4 | ⭐ **Structure visualizer** — circuit, starting grid, animated BST traversal, `OperationCounter`, live scatter, Presentation Mode | ⬜ |
 | M5 | ⭐ `LocalFileAudioSource`, real playback, PCM tap, independent L/R meters | ⬜ |

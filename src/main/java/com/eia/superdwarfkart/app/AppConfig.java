@@ -98,8 +98,14 @@ public final class AppConfig {
     /** Mini player height, in pixels. */
     public static final double MINI_HEIGHT = 180;
 
-    /** Initial fullscreen-mode window width, in pixels. */
-    public static final double MAIN_WIDTH = 1280;
+    /**
+     * Initial fullscreen-mode window width, in pixels.
+     *
+     * <p>Wide on purpose: the whole interface runs in a fixed-width pixel font whose glyphs are
+     * about one em across, so the same table needs considerably more room than it would in a
+     * proportional font.
+     */
+    public static final double MAIN_WIDTH = 1440;
 
     /** Initial fullscreen-mode window height, in pixels. */
     public static final double MAIN_HEIGHT = 800;
@@ -109,11 +115,23 @@ public final class AppConfig {
     // ------------------------------------------------------------------
 
     /**
-     * Returns the per-user application directory, {@code ~/.superdwarfkart}.
+     * System property that relocates {@link #appHome()}, so the application can be run against
+     * a scratch profile instead of the real one. Used for manual testing and demonstrations;
+     * unset in normal use.
+     */
+    public static final String HOME_OVERRIDE_PROPERTY = "sdmk.home";
+
+    /**
+     * Returns the per-user application directory, {@code ~/.superdwarfkart}, or the directory
+     * named by {@value #HOME_OVERRIDE_PROPERTY} when that property is set.
      *
      * @return the configuration and cache root; not guaranteed to exist yet
      */
     public static Path appHome() {
+        String override = System.getProperty(HOME_OVERRIDE_PROPERTY);
+        if (override != null && !override.isBlank()) {
+            return Path.of(override);
+        }
         return Path.of(System.getProperty("user.home"), APP_DIR);
     }
 

@@ -39,8 +39,17 @@ closes itself:
 [smoke] window shown      : true
 [smoke] window title      : Super_Dwarf_Mario_Kart_Deluxe-Camel_Edition
 [smoke] 8-bit font loaded : true
+[smoke] library view      : true
+[smoke] songs loaded      : 5
 [smoke] RESULT            : PASS
 ```
+
+Two further switches help when demonstrating or debugging:
+
+| Switch | Effect |
+|---|---|
+| `-Dsdmk.home=/tmp/sdmk-demo` | Use a scratch profile instead of `~/.superdwarfkart`, so a demo library can be seeded without touching your real one |
+| `-Dsdmk.screenshot=shot.png` | During a smoke test, save a snapshot of the window |
 
 ## Project status
 
@@ -50,7 +59,7 @@ Built milestone by milestone; each is verified before the next begins.
 |---|---|---|
 | M0 | Maven skeleton, `javafx:run` opens a styled window, font loads | ✅ |
 | M1 | Domain model + the three hand-written structures + JUnit tests | ✅ |
-| M2 | Library CRUD, search, 0–100 rating, cover display, JSON persistence | ⬜ |
+| M2 | Library CRUD, search, 0–100 rating, cover display, JSON persistence | ✅ |
 | M3 | Three playback modes behind one interface, mode selector, complexity panel | ⬜ |
 | M4 | **Structure visualizer** — circuit, starting grid, animated BST traversal, live complexity scatter, Presentation Mode | ⬜ |
 | M5 | Real playback, PCM tap, independent left/right level meters | ⬜ |
@@ -180,9 +189,10 @@ Other per-user state lives alongside it in `~/.superdwarfkart/`: `library.json` 
 | Playback mode 1 — shuffle | `playback/ShuffleMode` over the circular list *(M3)* |
 | Playback mode 2 — arrival order | `playback/ArrivalOrderMode` over the queue *(M3)* |
 | Playback mode 3 — alphabetical | `playback/AlphabeticalMode` over the tree *(M3)* |
-| Library CRUD, search, filters | `ui/LibraryView`, `persistence/LibraryRepository` *(M2)* |
-| 0–100 rating | `model/Song#setRating` — throws outside the range |
-| Persistence | `persistence/`, JSON under `~/.superdwarfkart/` *(M2)* |
+| Library CRUD, search, filters | `model/Library`, `ui/LibraryView` |
+| 0–100 rating | `model/Song#setRating` — throws outside the range; slider in `ui/LibraryView` and `ui/SongDialog` |
+| Persistence | `persistence/LibraryRepository` — JSON under `~/.superdwarfkart/` |
+| Cover display with fallback | `ui/LibraryView#showCover` — labelled placeholder when absent |
 | Separation of logic and presentation | `ds/`, `model/`, `playback/`, `audio/`, `analysis/` import no JavaFX |
 | Bonus: favourites, play counts | `model/Song` |
 | Bonus: complexity instrumentation | `ds/StepCounter` → `ui/visualizer/OperationCounter` *(M4)* |
