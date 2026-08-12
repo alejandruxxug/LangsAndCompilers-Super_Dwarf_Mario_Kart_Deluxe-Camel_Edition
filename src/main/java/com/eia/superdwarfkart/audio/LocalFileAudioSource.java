@@ -9,7 +9,6 @@ import javax.sound.sampled.DataLine;
 import javax.sound.sampled.FloatControl;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
-import javax.sound.sampled.UnsupportedAudioFileException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,9 +24,9 @@ import java.util.logging.Logger;
  *
  * <p>MP3 and WAV both arrive here as an {@link AudioInputStream}; the service provider registered by
  * {@code mp3spi} decodes the former. Whatever the file was - mono, 22 kHz, compressed - what comes
- * out is {@link #PLAYBACK_FORMAT}, because everything downstream is written against that one format
- * and nothing else. See {@link #convertToPlaybackFormat} for why reaching it sometimes takes two
- * conversions rather than one.
+ * out is {@link PcmFormat#PLAYBACK_FORMAT}, because everything downstream is written against that
+ * one format and nothing else. See {@link PcmFormat} for why reaching it sometimes takes two
+ * conversions rather than one, and for why the beat analyser decodes through the same code.
  *
  * <h2>The thread arrangement</h2>
  *
@@ -70,19 +69,10 @@ public class LocalFileAudioSource implements AudioSource {
     /**
      * The one format everything downstream is written against.
      *
-     * <p>Signed 16-bit, 44.1 kHz, stereo, interleaved, little-endian. Every file ends up here
-     * whatever it started as, which is what lets the meters, the beat analyser and the game each
-     * assume a single shape of buffer and a single sample rate rather than carrying a format
-     * around and branching on it.
+     * <p>Held in {@link PcmFormat} rather than here, because the beat analyser opens the same files
+     * through the same conversion and the two have to agree on the sample rate exactly.
      */
-    private static final AudioFormat PLAYBACK_FORMAT = new AudioFormat(
-            AudioFormat.Encoding.PCM_SIGNED,
-            AppConfig.SAMPLE_RATE,
-            AppConfig.SAMPLE_SIZE_BITS,
-            AppConfig.CHANNELS,
-            AppConfig.BYTES_PER_FRAME,
-            AppConfig.SAMPLE_RATE,
-            false);
+    private static final AudioFormat PLAYBACK_FORMAT = PcmFormat.PLAYBACK_FORMAT;
 
     /** Guards nothing but the parked/running handshake with the playback thread. */
     private final Object pumpLock = new Object();
@@ -160,82 +150,9 @@ public class LocalFileAudioSource implements AudioSource {
      * @throws AudioException if no installed decoder can produce the playback format
      */
     private void openStream(Path audioFile) {
-        AudioInputStream encoded;
-        try {
-            encoded = AudioSystem.getAudioInputStream(audioFile.toFile());
-        } catch (UnsupportedAudioFileException e) {
-            throw new AudioException("Not an audio format this build can play: "
-                    + audioFile.getFileName(), e);
-        } catch (IOException e) {
-            throw new AudioException("Could not read " + audioFile.getFileName()
-                    + ": " + e.getMessage(), e);
-        }
-        this.stream = convertToPlaybackFormat(encoded, audioFile);
+        this.stream = PcmFormat.open(audioFile);
         // A fresh stream has bytes again, whether this was a load or a seek.
         this.exhausted = false;
-    }
-
-    /**
-     * Wraps a file's stream in however many conversions it takes to reach {@link #PLAYBACK_FORMAT}.
-     *
-     * <p><strong>Sometimes that is two, and one would silently not be enough.</strong> A decoder
-     * declares its output at the file's own sample rate and channel count - so a 22 kHz mono MP3
-     * can be asked for 16-bit PCM, but not for 44.1 kHz stereo 16-bit PCM, and asking for both at
-     * once simply fails. The plain PCM-to-PCM providers do resample and do mix channels, verified
-     * against the resolved jars rather than assumed, so the answer is to decode first and convert
-     * the result second.
-     *
-     * <p>Almost every file takes the one-step path: a 44.1 kHz stereo MP3 or WAV is already
-     * arranged the way the second stage would leave it.
-     *
-     * @param encoded   the file's own stream
-     * @param audioFile the file, for the error message
-     * @return a stream delivering {@link #PLAYBACK_FORMAT}
-     * @throws AudioException if no combination of installed providers can get there
-     */
-    private static AudioInputStream convertToPlaybackFormat(AudioInputStream encoded, Path audioFile) {
-        AudioFormat source = encoded.getFormat();
-        if (AudioSystem.isConversionSupported(PLAYBACK_FORMAT, source)) {
-            return AudioSystem.getAudioInputStream(PLAYBACK_FORMAT, encoded);
-        }
-
-        AudioFormat decoded = sixteenBitVersionOf(source);
-        if (!AudioSystem.isConversionSupported(decoded, source)) {
-            closeQuietly(encoded);
-            throw new AudioException("No decoder can turn " + source.getEncoding()
-                    + " at " + describe(source) + " into 16-bit PCM: " + audioFile.getFileName());
-        }
-
-        AudioInputStream pcm = AudioSystem.getAudioInputStream(decoded, encoded);
-        if (!AudioSystem.isConversionSupported(PLAYBACK_FORMAT, pcm.getFormat())) {
-            closeQuietly(pcm);
-            throw new AudioException("Cannot resample " + describe(pcm.getFormat()) + " to "
-                    + describe(PLAYBACK_FORMAT) + ": " + audioFile.getFileName());
-        }
-        return AudioSystem.getAudioInputStream(PLAYBACK_FORMAT, pcm);
-    }
-
-    /**
-     * Describes the same audio as signed 16-bit little-endian, keeping its rate and channel count.
-     *
-     * <p>This is the most a decoder will agree to produce in one step, and the input to the
-     * resampling stage.
-     *
-     * @param source the file's own format
-     * @return the format to decode into
-     */
-    private static AudioFormat sixteenBitVersionOf(AudioFormat source) {
-        float rate = source.getSampleRate() > 0 ? source.getSampleRate() : AppConfig.SAMPLE_RATE;
-        int channels = source.getChannels() > 0 ? source.getChannels() : AppConfig.CHANNELS;
-        int bytesPerFrame = channels * AppConfig.SAMPLE_SIZE_BITS / 8;
-        return new AudioFormat(
-                AudioFormat.Encoding.PCM_SIGNED,
-                rate,
-                AppConfig.SAMPLE_SIZE_BITS,
-                channels,
-                bytesPerFrame,
-                rate,
-                false);
     }
 
     /**
@@ -578,7 +495,7 @@ public class LocalFileAudioSource implements AudioSource {
             resnapClock();
         } catch (LineUnavailableException | IllegalArgumentException e) {
             throw new AudioException("No sound output available for "
-                    + describe(PLAYBACK_FORMAT) + ": " + e.getMessage(), e);
+                    + PcmFormat.describe(PLAYBACK_FORMAT) + ": " + e.getMessage(), e);
         }
     }
 
@@ -750,7 +667,7 @@ public class LocalFileAudioSource implements AudioSource {
     private void closeStream() {
         AudioInputStream open = stream;
         stream = null;
-        closeQuietly(open);
+        PcmFormat.closeQuietly(open);
     }
 
     private void closeLine() {
@@ -775,19 +692,4 @@ public class LocalFileAudioSource implements AudioSource {
         listeners.clear();
     }
 
-    private static void closeQuietly(AudioInputStream toClose) {
-        if (toClose == null) {
-            return;
-        }
-        try {
-            toClose.close();
-        } catch (IOException e) {
-            LOG.fine("Ignoring failure to close an audio stream: " + e);
-        }
-    }
-
-    private static String describe(AudioFormat format) {
-        return (int) format.getSampleRate() + " Hz, " + format.getSampleSizeInBits()
-                + "-bit, " + format.getChannels() + " ch";
-    }
 }

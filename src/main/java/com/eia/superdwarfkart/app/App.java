@@ -1,5 +1,7 @@
 package com.eia.superdwarfkart.app;
 
+import com.eia.superdwarfkart.analysis.Beatmap;
+import com.eia.superdwarfkart.analysis.BeatmapService;
 import com.eia.superdwarfkart.assets.AssetKind;
 import com.eia.superdwarfkart.assets.AssetRegistry;
 import com.eia.superdwarfkart.audio.AudioSource;
@@ -17,6 +19,7 @@ import com.eia.superdwarfkart.playback.ArrivalOrderMode;
 import com.eia.superdwarfkart.playback.PlaybackEngine;
 import com.eia.superdwarfkart.playback.Player;
 import com.eia.superdwarfkart.playback.ShuffleMode;
+import com.eia.superdwarfkart.ui.BeatmapTimeline;
 import com.eia.superdwarfkart.ui.ComplexityPanel;
 import com.eia.superdwarfkart.ui.Fonts;
 import com.eia.superdwarfkart.ui.LevelMeterView;
@@ -111,6 +114,8 @@ public class App extends Application {
     private Levels levels;
     private PlaybackEngine engine;
     private LevelMeterView meters;
+    private BeatmapService beatmaps;
+    private BeatmapTimeline beatmapTimeline;
 
     private BorderPane root;
     private PlaybackBar playbackBar;
@@ -151,11 +156,22 @@ public class App extends Application {
         // once per song rather than once per audio block.
         engine = new PlaybackEngine(player, audio, Platform::runLater);
 
+        // Analysis follows the running order rather than the play button: whatever becomes current
+        // gets a beatmap prepared for it on a background thread, so by the time the rhythm game
+        // wants a course it is already there. Reading the file for analysis is a separate decode
+        // and never touches the one being played.
+        beatmaps = new BeatmapService();
+        player.addListener((mode, current) -> beatmaps.request(fileOf(current)));
+        beatmaps.request(fileOf(player.current()));
+
         LibraryView libraryView = new LibraryView(library, libraryRepository);
         libraryView.setOnSongActivated(song -> player.select(song));
 
         playbackBar = new PlaybackBar(player, engine, counter);
         ComplexityPanel complexityPanel = new ComplexityPanel(player, counter);
+
+        beatmapTimeline = new BeatmapTimeline(beatmaps, engine);
+        beatmapTimeline.start();
 
         meters = new LevelMeterView(levels);
         meters.setMinWidth(METER_COLUMN_WIDTH);
@@ -176,7 +192,7 @@ public class App extends Application {
 
         root = new BorderPane();
         root.getStyleClass().add("root-pane");
-        root.setTop(new VBox(buildHeader(), playbackBar));
+        root.setTop(new VBox(buildHeader(), playbackBar, beatmapTimeline));
         root.setLeft(sideColumn);
         root.setCenter(libraryView);
         root.setRight(meters);
@@ -249,6 +265,14 @@ public class App extends Application {
                 }
             }
         });
+    }
+
+    /**
+     * @param song a song, or {@code null}
+     * @return the file it plays from, or {@code null}
+     */
+    private static java.nio.file.Path fileOf(Song song) {
+        return song == null ? null : song.getFilePath();
     }
 
     /**
@@ -383,6 +407,7 @@ public class App extends Application {
         System.out.println("[smoke] tab               : " + beforeTab + " -> " + player.mode().id());
 
         reportAudio();
+        reportBeatmap();
         System.out.println("[smoke] assets found      : " + assets.size());
         System.out.println("[smoke] asset manifest    : " + assets.manifestFile());
         // Decodes each sheet, which normal startup does not do. Worth it here: how a sheet gets
@@ -465,6 +490,58 @@ public class App extends Application {
                         : "no - mono, silent, or NOT deinterleaved"));
         // Deliberately left playing. The screenshot is taken a couple of seconds from here, and a
         // picture of two meters that have already fallen to silence says nothing about either.
+    }
+
+    /**
+     * Waits for the current song's beatmap and reports what was found.
+     *
+     * <p>A beat analysis is the other half of this project that no unit test and no screenshot can
+     * check against real music. A test can prove the detector finds clicks it was handed; only a
+     * real track proves the whole chain - decode, novelty, threshold, tempo histogram, phase - holds
+     * together on audio nobody synthesised.
+     *
+     * <p><strong>The deviation line is the one that matters.</strong> A tempo is always a plausible
+     * number; a grid the beats actually sit on is not. A few milliseconds means the detected beat is
+     * the one in the music, and anything approaching a quarter of the beat means the histogram
+     * picked a tempo the track does not have.
+     */
+    private void reportBeatmap() {
+        Song song = player.current();
+        if (song == null) {
+            System.out.println("[smoke] beatmap           : - no song -");
+            return;
+        }
+
+        // Blocking the interface thread is normally forbidden. During a smoke test nobody is
+        // waiting on it, and the alternative is reporting on an analysis that has not happened yet.
+        boolean finished = beatmaps.await(java.time.Duration.ofSeconds(30));
+        BeatmapService.Status status = beatmaps.status();
+        Beatmap beatmap = status.beatmap();
+
+        System.out.println("[smoke] beatmap state     : " + status.stage()
+                + (status.isReady() ? (status.fromCache() ? " (from cache)" : " (analysed now)") : "")
+                + (finished ? "" : " - TIMED OUT"));
+        if (status.failure() != null) {
+            System.out.println("[smoke] beatmap failure   : " + status.failure());
+            return;
+        }
+        System.out.printf("[smoke] beatmap tempo     : %.1f BPM (beat every %.3fs)%n",
+                beatmap.bpm(), beatmap.beatPeriod());
+        System.out.println("[smoke] beatmap onsets    : " + beatmap.onsetCount()
+                + " (" + beatmap.strongBeatCount() + " on the beat)");
+        System.out.printf("[smoke] beatmap length    : %.1fs%n", beatmap.durationSeconds());
+        double deviation = beatmap.gridDeviationSeconds();
+        System.out.printf("[smoke] grid deviation    : %s%n", deviation < 0
+                ? "- too few beats to judge -"
+                : String.format("%.1f ms  %s", deviation * 1000,
+                        deviation < beatmap.beatPeriod() / 10
+                                ? "- beats sit on the grid"
+                                : "- SCATTERED, tempo is probably wrong"));
+        System.out.println("[smoke] beatmap cache     : " + beatmaps.cache().directory());
+        if (!beatmap.sourceHash().isEmpty()) {
+            System.out.println("[smoke] beatmap file      : "
+                    + beatmaps.cache().fileFor(beatmap.sourceHash()).getFileName());
+        }
     }
 
     private static void sleepQuietly(long millis) {
@@ -616,6 +693,12 @@ public class App extends Application {
     public void stop() {
         if (meters != null) {
             meters.stop();
+        }
+        if (beatmapTimeline != null) {
+            beatmapTimeline.stop();
+        }
+        if (beatmaps != null) {
+            beatmaps.close();
         }
         if (playbackBar != null) {
             playbackBar.stopClock();

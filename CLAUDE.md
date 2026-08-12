@@ -104,6 +104,11 @@ and a picture of two meters that have already fallen to silence says nothing abo
 `channels differ` line is the check for the mistake that matters most — two channels reading
 identically because they were never deinterleaved.
 
+**It also analyses the current song and prints the beatmap**, waiting for it if the cache is cold.
+The line to read is `grid deviation`: a tempo is always a plausible number, but beats sitting a few
+milliseconds off the grid means the detected beat is the one in the music, and a figure approaching
+a quarter of the beat means the histogram picked a tempo the track does not have.
+
 ```bash
 # Full verification run against seeded data, leaving a screenshot behind
 ./mvnw javafx:run -Dsdmk.smokeTest=true -Dsdmk.home=/tmp/sdmk-demo -Dsdmk.screenshot=/tmp/shot.png
@@ -277,9 +282,9 @@ com.eia.superdwarfkart
 ├── playback/     PlaybackMode (interface), AbstractPlaybackMode,
 │                 ShuffleMode, ArrivalOrderMode, AlphabeticalMode, Player,
 │                 PlaybackEngine (running order <-> audio output)
-├── audio/        AudioSource (interface), LocalFileAudioSource,
+├── audio/        AudioSource (interface), LocalFileAudioSource, PcmFormat, MonoPcmReader,
 │                 PcmListener, Levels, LevelAnalyzer, AudioMetadata, AudioException
-├── analysis/     BeatmapAnalyzer, Beatmap, BeatmapCache, OnsetDetector
+├── analysis/     BeatmapAnalyzer, Beatmap, BeatmapCache, OnsetDetector, Fft, BeatmapService
 ├── game/         RunnerGame, Course, Lane, Entity, Obstacle, Coin,
 │                 Star, ScoreKeeper, SpeedClass
 ├── persistence/  Repository<T> (interface), LibraryRepository, ScoreRepository
@@ -288,7 +293,7 @@ com.eia.superdwarfkart
 │                 Mood, MoodLayer, GradientLayer, ImageLayer,
 │                 ProceduralLayer, PixelTile, MoodRepository,
 │                 PaletteImporter, ImageQuantizer, MoodValidator   ← M11
-└── ui/           MiniPlayerView, FullscreenView, LibraryView,
+└── ui/           MiniPlayerView, FullscreenView, LibraryView, BeatmapTimeline,
                   RacerSelectView, LevelMeterView, ComplexityPanel,
                   MoodCustomizerView, PixelEditorView, MoodOverlayRenderer
     └── visualizer/  StructureView (base) -> RoadView (base) -> CircuitView,
@@ -640,6 +645,78 @@ search across all three at once and reports the three counts side by side.
   answers that by truncating every label to `INS...`. It wraps in the panel and lays out in one
   row on the full stage.
 
+### As built (2026-08-12, M6)
+
+**Measured on the two real tracks in the library** — `Crimewave` (4:18, dense electronic) locks to
+**120.0 BPM with the beats sitting 12.1 ms off the grid**, 826 onsets of which 461 are on the beat;
+the 8-second percussion sample gives 119.8 BPM at 6.0 ms. Analysis of the 4-minute track takes
+about a second. Re-run those numbers with `-Dsdmk.smokeTest=true` — the smoke test prints them.
+
+- **Playback and analysis decode through one class, `audio/PcmFormat`.** The two-stage conversion
+  documented in §6 moved there out of `LocalFileAudioSource`. This is not tidying: the analyser
+  measures times in frames and the playback clock counts frames, so if the two ever resolved a file
+  to different sample rates every onset would be reported at the wrong instant and nothing would
+  look wrong anywhere. `MonoPcmReader` is the analyser's way in and sums to mono, which keeps every
+  `javax.sound` import inside `audio/`.
+- **`Fft` is hand-written** — the platform has none. Radix-2, iterative, in place, with the twiddles
+  and the bit-reversal computed once per instance; a 4-minute track is ~20 000 transforms.
+- **Onsets are detected *before* they sound, and the compensation is not optional.** An attack falls
+  inside exactly two Hann-tapered windows, and the flux peaks in the earlier one unless the attack
+  sits in its last fifth — so the reported window start precedes the attack by 312 to 823 samples.
+  `DETECTION_LEAD_SAMPLES` adds back the midpoint, leaving about ±6 ms. Drop it and every entity in
+  the game is a consistent 13 ms early: invisible in a screenshot, loose to play.
+  `OnsetDetectorTest` measures the residual rather than trusting the derivation.
+- **`DEFAULT_SENSITIVITY` is 3.0, measured against real audio, and 1.5 was wrong.** Tempo comes out
+  the same at every setting; how tightly the beats sit on the grid does not — 44.2 ms at 1.5,
+  20.6 ms at 3.0, 13.8 ms at 4.0. Below 3 the surplus is texture rather than attacks and it drags
+  the grid off the beat; above 4 the onset rate falls so far that 200cc (which spends the
+  *intermediate* onsets) would stop differing from 150cc. 3.0 also clears the flux ripple a
+  sustained tone produces on its own, measured at 2.78× its own local mean — which is what stops a
+  quiet ambient passage from generating a course full of entities corresponding to nothing audible.
+- **The tempo octave is the trap, and it has two separate causes.** The considered range spans more
+  than a factor of two, so 174 and 87 are both in it and neither folds onto the other.
+  1. *Every pair voting equally.* The gap to the next onset votes 174, but the gaps to the second
+     and the fourth both vote 87 — the half-tempo wins two to one. Votes are weighted `1/distance`:
+     adjacent onsets are direct evidence, a gap spanning three may be spanning a missed beat.
+  2. *Quantisation spread.* Onsets sit on hop boundaries, so the gap between adjacent beats
+     alternates between whole hops either side of the true period. In BPM that spread grows with the
+     **square** of the tempo — 1.6 BPM at 90 but nearly 6 at 175 — so a fast fundamental arrives
+     smeared across six bins while its half, being twice as long and half as sensitive, lands in
+     one. `SMOOTHING_BINS` is 3 for exactly this, and `refine` must use the same span: at the top of
+     the range the winning bin can hold no votes at all.
+- **The histogram cannot be precise enough on its own, because the error accumulates.** Its bins are
+  1 BPM wide and it lands within a few tenths — which is two thirds of a second of drift by the end
+  of a 4-minute track, most of a beat. So the histogram only establishes *which* tempo, and
+  `lockOnto` then fits the period to every onset at once by maximising how concentrated their beat
+  phases are. That fit took `Crimewave` from 55.4 ms of drift to 12.1 ms.
+- **The fit is believed only when it beats chance.** `n` unrelated angles still have a resultant of
+  about `1/sqrt(n)`, so the score means nothing until multiplied by `sqrt(n)`. The case this guards
+  is a track running at twice the tempo it folded onto: half its onsets sit at the start of the
+  folded beat and half exactly halfway, they cancel, and the fit locks onto noise. Measured, that
+  case scores 0.16 where every genuine fit scored 6.3 to 6.8 — so the bar sits at 2.0 and anything
+  under it keeps the histogram's answer.
+- **`strongBeats` are real onsets nearest the grid, never grid points.** A bar the track drops out
+  of produces no beats, so the game cannot spawn four entities onto silence. Tested.
+- **`Beatmap.gridDeviationSeconds()` is the confidence measure and is worth more than the tempo.**
+  A detected tempo is always a plausible number; a grid the beats actually sit on is not. A correct
+  grid reads a few milliseconds, a wrong one approaches a quarter of the beat. Measured as an
+  **angle**, so a beat on the bar line is a small deviation rather than a whole beat.
+- Cache at `~/.superdwarfkart/beatmaps/<sha256>.json`, keyed by **content** so moving or renaming a
+  file keeps its analysis, and invalidated by `ANALYZER_VERSION` so improving the detector cannot
+  leave the game on courses the old one built. A corrupt or stale entry is a **miss with a warning**,
+  never an exception.
+- **`BeatmapService` is polled, not a callback.** Same arrangement as the level meters: one
+  immutable `Status` in one volatile field, so a reader always sees a matched set and neither side
+  waits. A request returns immediately — blocking for the second an analysis takes would drop 90
+  frames at every song change. A superseded analysis is still **stored** before being discarded; the
+  work is done, and the user may come back to that song.
+- The debug view is `ui/BeatmapTimeline`, a strip under the playback bar. **The lamp is the part
+  that matters** — it flashes on each strong beat as the playhead reaches it, which is the only way
+  to tell that the detected beat is the beat being heard. Neither a unit test nor a screenshot can
+  establish that. It repaints only when the picture would differ (the playhead of a long track moves
+  one pixel about six times a second), because redrawing a thousand ticks at 60 fps to show nothing
+  new would cost most of a core.
+
 ---
 
 ## 8. Assets — assume nothing about the folder
@@ -959,7 +1036,7 @@ pane, the whole app is the preview.
 | M3 | Three modes behind the interface, selector, previous disabled in queue mode, `ComplexityPanel` | ✅ done |
 | M4 | ⭐ **Structure visualizer** — circuit, starting grid, animated BST traversal, `OperationCounter`, live scatter, Presentation Mode | ✅ done |
 | M5 | ⭐ `LocalFileAudioSource`, real playback, PCM tap, independent L/R meters | ✅ done |
-| M6 | `BeatmapAnalyzer` + cache + debug view (BPM, onsets on a timeline) | ⬜ |
+| M6 | `BeatmapAnalyzer` + cache + debug view (BPM, onsets on a timeline) | ✅ done |
 | M7 | ⭐ 3-lane runner: lookahead spawning, coins, bumps, star, cc classes, scoring, beat pulse | ⬜ |
 | M8 | ⭐ Mini companion mode: transparent stage, disk + racer, expand/hide/quit | ⬜ |
 | M9 | Sweep: favorites, history, statistics, keyboard shortcuts, **`DARK` + `LIGHT` moods and a switcher** — the dark-mode bonus ships as moods, not a boolean | ⬜ |
