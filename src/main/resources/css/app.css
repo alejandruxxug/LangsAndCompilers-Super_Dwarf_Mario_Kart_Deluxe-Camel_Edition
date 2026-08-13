@@ -15,41 +15,44 @@
 
 /* ------------------------------------------------------------------ */
 /* Palette                                                             */
+/*                                                                     */
+/* There are no colours in this file. Every one of them is named:      */
+/* -role-* is one of the sixteen palette roles, and -ui-* is a surface */
+/* derived from those roles (a face's lit edge, its hover, its         */
+/* disabled state - variants an interface of beveled blocks needs and  */
+/* that a sixteen-colour palette must not spend entries on). Both sets */
+/* are defined by a stylesheet generated from the active mood at       */
+/* runtime; see mood/PaletteCss, where the derivations live too.       */
+/*                                                                     */
+/* This is what makes switching mood restyle the controls rather than  */
+/* only the canvases. Do not put a hexadecimal literal back in here.   */
 /* ------------------------------------------------------------------ */
 
 .root {
-    -sdmk-bg:            #12121c;
-    -sdmk-panel:         #1a1930;
-    -sdmk-panel-dark:    #0e0e18;
-    -sdmk-row:           #191830;
-    -sdmk-row-alt:       #1c1b35;
-
-    -sdmk-yellow:        #ffd23f;
-    -sdmk-cyan:          #6ee7ff;
-    -sdmk-magenta:       #ff00ff;
-    -sdmk-text:          #e6e8f0;
-    -sdmk-text-dim:      #9aa3b8;
-    -sdmk-text-faint:    #6b7280;
-
-    /* Bevel colours: light on the top-left, dark on the bottom-right. */
-    -sdmk-face:          #2a2750;
-    -sdmk-face-hover:    #3a3570;
-    -sdmk-bevel-light:   #6b62c4;
-    -sdmk-bevel-dark:    #0f0d24;
-    -sdmk-edge:          #443e7a;
-
     -fx-font-family: "Press Start 2P";
     -fx-font-size: 9px;
     -fx-font-smoothing-type: gray;
 }
 
+/*
+ * Diagnostics, and the one deliberate exception to everything above. Magenta marks artwork that
+ * failed to load, exactly as the sprite canvas does. It is a fault indicator and not a theme
+ * colour: it has to look wrong in every mood, so no mood may change it.
+ */
+.root {
+    -diag-magenta:       #ff00ff;
+    -diag-magenta-dark:  #2a0a2a;
+    -diag-magenta-light: #ff7bff;
+}
+
 .root-pane {
-    -fx-background-color: linear-gradient(to bottom, #12121c 0%, #1d1b2e 60%, #241f38 100%);
+    -fx-background-color: linear-gradient(to bottom,
+        -role-background 0%, -role-background-alt 60%, -ui-inset 100%);
 }
 
 /* Every label defaults to the pixel font in the body colour. */
 .label {
-    -fx-text-fill: -sdmk-text;
+    -fx-text-fill: -role-text-primary;
     -fx-font-family: "Press Start 2P";
 }
 
@@ -60,19 +63,19 @@
 .title-text {
     -fx-font-family: "Press Start 2P";
     -fx-font-size: 28px;
-    -fx-fill: -sdmk-yellow;
-    -fx-stroke: #1a1a2e;
+    -fx-fill: -role-primary;
+    -fx-stroke: -role-shadow;
     -fx-stroke-width: 1.5;
 }
 
 .subtitle {
     -fx-font-size: 11px;
-    -fx-text-fill: -sdmk-cyan;
+    -fx-text-fill: -role-accent;
 }
 
 .report {
     -fx-font-size: 9px;
-    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-fill: -role-text-dim;
     -fx-line-spacing: 6px;
 }
 
@@ -81,19 +84,19 @@
 /* ------------------------------------------------------------------ */
 
 .app-header {
-    -fx-background-color: -sdmk-panel-dark;
-    -fx-border-color: transparent transparent -sdmk-yellow transparent;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: transparent transparent -role-primary transparent;
     -fx-border-width: 0 0 3 0;
 }
 
 .app-name {
     -fx-font-size: 13px;
-    -fx-text-fill: -sdmk-yellow;
+    -fx-text-fill: -role-primary;
 }
 
 .app-version {
     -fx-font-size: 8px;
-    -fx-text-fill: -sdmk-text-faint;
+    -fx-text-fill: -ui-text-faint;
 }
 
 /* ------------------------------------------------------------------ */
@@ -106,23 +109,23 @@
 
 .section-heading {
     -fx-font-size: 14px;
-    -fx-text-fill: -sdmk-cyan;
+    -fx-text-fill: -role-accent;
 }
 
 .filter-bar .label {
     -fx-font-size: 8px;
-    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-fill: -role-text-dim;
 }
 
 .status-bar {
-    -fx-background-color: -sdmk-panel-dark;
-    -fx-border-color: -sdmk-edge transparent transparent transparent;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: -role-outline transparent transparent transparent;
     -fx-border-width: 2 0 0 0;
 }
 
 .status-label {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-text-faint;
+    -fx-text-fill: -ui-text-faint;
 }
 
 /* ------------------------------------------------------------------ */
@@ -132,11 +135,11 @@
 .button {
     -fx-font-family: "Press Start 2P";
     -fx-font-size: 9px;
-    -fx-background-color: -sdmk-face;
+    -fx-background-color: -role-surface-raised;
     -fx-background-radius: 0;
     -fx-background-insets: 0;
-    -fx-text-fill: -sdmk-text;
-    -fx-border-color: -sdmk-bevel-light -sdmk-bevel-dark -sdmk-bevel-dark -sdmk-bevel-light;
+    -fx-text-fill: -role-text-primary;
+    -fx-border-color: -ui-bevel-light -ui-bevel-dark -ui-bevel-dark -ui-bevel-light;
     -fx-border-width: 2;
     -fx-border-radius: 0;
     -fx-padding: 8 14 8 14;
@@ -145,28 +148,28 @@
 }
 
 .button:hover {
-    -fx-background-color: -sdmk-face-hover;
-    -fx-text-fill: -sdmk-yellow;
+    -fx-background-color: -ui-face-hover;
+    -fx-text-fill: -role-primary;
 }
 
 .button:focused {
-    -fx-border-color: -sdmk-yellow;
+    -fx-border-color: -role-primary;
 }
 
 /* Pressed inverts the bevel and nudges the block down-right, so it reads as a physical key. */
 .button:pressed,
 .button:armed {
-    -fx-background-color: #221f42;
-    -fx-border-color: -sdmk-bevel-dark -sdmk-bevel-light -sdmk-bevel-light -sdmk-bevel-dark;
+    -fx-background-color: -ui-face-pressed;
+    -fx-border-color: -ui-bevel-dark -ui-bevel-light -ui-bevel-light -ui-bevel-dark;
     -fx-translate-x: 1;
     -fx-translate-y: 1;
 }
 
 .button:disabled {
     -fx-opacity: 1;
-    -fx-background-color: #1c1a30;
-    -fx-text-fill: #4a4a63;
-    -fx-border-color: #2a2740;
+    -fx-background-color: -ui-face-disabled;
+    -fx-text-fill: -ui-text-disabled;
+    -fx-border-color: -ui-inset;
 }
 
 /* ------------------------------------------------------------------ */
@@ -176,27 +179,27 @@
 .text-field {
     -fx-font-family: "Press Start 2P";
     -fx-font-size: 9px;
-    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-color: -ui-recessed;
     -fx-background-radius: 0;
     -fx-background-insets: 0;
-    -fx-text-fill: -sdmk-text;
-    -fx-prompt-text-fill: #4a4a63;
-    -fx-highlight-fill: -sdmk-yellow;
-    -fx-highlight-text-fill: -sdmk-panel-dark;
-    -fx-border-color: -sdmk-bevel-dark -sdmk-edge -sdmk-edge -sdmk-bevel-dark;
+    -fx-text-fill: -role-text-primary;
+    -fx-prompt-text-fill: -ui-text-disabled;
+    -fx-highlight-fill: -role-primary;
+    -fx-highlight-text-fill: -ui-recessed;
+    -fx-border-color: -ui-bevel-dark -role-outline -role-outline -ui-bevel-dark;
     -fx-border-width: 2;
     -fx-border-radius: 0;
     -fx-padding: 8 8 8 8;
 }
 
 .text-field:focused {
-    -fx-border-color: -sdmk-yellow;
+    -fx-border-color: -role-primary;
 }
 
 .text-field:disabled {
     -fx-opacity: 1;
-    -fx-text-fill: #4a4a63;
-    -fx-background-color: #15142a;
+    -fx-text-fill: -ui-text-disabled;
+    -fx-background-color: -ui-face-disabled;
 }
 
 /* ------------------------------------------------------------------ */
@@ -206,10 +209,10 @@
 .combo-box-base {
     -fx-font-family: "Press Start 2P";
     -fx-font-size: 9px;
-    -fx-background-color: -sdmk-face;
+    -fx-background-color: -role-surface-raised;
     -fx-background-radius: 0;
     -fx-background-insets: 0;
-    -fx-border-color: -sdmk-bevel-light -sdmk-bevel-dark -sdmk-bevel-dark -sdmk-bevel-light;
+    -fx-border-color: -ui-bevel-light -ui-bevel-dark -ui-bevel-dark -ui-bevel-light;
     -fx-border-width: 2;
     -fx-border-radius: 0;
     -fx-padding: 0;
@@ -217,16 +220,16 @@
 }
 
 .combo-box-base:hover {
-    -fx-background-color: -sdmk-face-hover;
+    -fx-background-color: -ui-face-hover;
 }
 
 .combo-box-base:focused {
-    -fx-border-color: -sdmk-yellow;
+    -fx-border-color: -role-primary;
 }
 
 .combo-box > .list-cell {
     -fx-background-color: transparent;
-    -fx-text-fill: -sdmk-text;
+    -fx-text-fill: -role-text-primary;
     -fx-font-family: "Press Start 2P";
     -fx-font-size: 9px;
     -fx-padding: 8 6 8 8;
@@ -240,7 +243,7 @@
 }
 
 .combo-box-base .arrow {
-    -fx-background-color: -sdmk-yellow;
+    -fx-background-color: -role-primary;
     -fx-shape: "M0,0 H6 V2 H5 V4 H4 V6 H2 V4 H1 V2 H0 Z";
     -fx-min-width: 10;
     -fx-min-height: 10;
@@ -250,16 +253,16 @@
 }
 
 .combo-box-popup > .list-view {
-    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-color: -ui-recessed;
     -fx-background-radius: 0;
-    -fx-border-color: -sdmk-yellow;
+    -fx-border-color: -role-primary;
     -fx-border-width: 2;
     -fx-effect: null;
 }
 
 .combo-box-popup > .list-view > .virtual-flow > .clipped-container > .sheet > .list-cell {
-    -fx-background-color: -sdmk-panel-dark;
-    -fx-text-fill: -sdmk-text;
+    -fx-background-color: -ui-recessed;
+    -fx-text-fill: -role-text-primary;
     -fx-font-family: "Press Start 2P";
     -fx-font-size: 9px;
     -fx-padding: 8 10 8 10;
@@ -267,8 +270,8 @@
 
 .combo-box-popup > .list-view > .virtual-flow > .clipped-container > .sheet > .list-cell:filled:hover,
 .combo-box-popup > .list-view > .virtual-flow > .clipped-container > .sheet > .list-cell:filled:selected {
-    -fx-background-color: -sdmk-face-hover;
-    -fx-text-fill: -sdmk-yellow;
+    -fx-background-color: -ui-face-hover;
+    -fx-text-fill: -role-primary;
 }
 
 /* ------------------------------------------------------------------ */
@@ -278,15 +281,15 @@
 .check-box {
     -fx-font-family: "Press Start 2P";
     -fx-font-size: 8px;
-    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-fill: -role-text-dim;
     -fx-cursor: hand;
 }
 
 .check-box > .box {
-    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-color: -ui-recessed;
     -fx-background-radius: 0;
     -fx-background-insets: 0;
-    -fx-border-color: -sdmk-bevel-dark -sdmk-edge -sdmk-edge -sdmk-bevel-dark;
+    -fx-border-color: -ui-bevel-dark -role-outline -role-outline -ui-bevel-dark;
     -fx-border-width: 2;
     -fx-border-radius: 0;
     -fx-padding: 3;
@@ -295,13 +298,13 @@
 }
 
 .check-box:hover > .box {
-    -fx-border-color: -sdmk-yellow;
+    -fx-border-color: -role-primary;
 }
 
 .check-box:selected > .box > .mark {
     /* A solid block rather than a tick: a filled square is the unambiguous 8-bit convention
        and stays legible at this size, where a drawn tick turns to mush. */
-    -fx-background-color: -sdmk-yellow;
+    -fx-background-color: -role-primary;
     -fx-shape: "M0,0 H8 V8 H0 Z";
     -fx-min-width: 8;
     -fx-min-height: 8;
@@ -309,12 +312,12 @@
 }
 
 .check-box:selected {
-    -fx-text-fill: -sdmk-yellow;
+    -fx-text-fill: -role-primary;
 }
 
 .check-box:disabled {
     -fx-opacity: 1;
-    -fx-text-fill: #4a4a63;
+    -fx-text-fill: -ui-text-disabled;
 }
 
 /* ------------------------------------------------------------------ */
@@ -324,36 +327,36 @@
 /* Sunken track: near-black on the top-left, bright on the bottom-right, so the groove reads as
    cut into the panel rather than painted on it. */
 .slider .track {
-    -fx-background-color: #05040e;
+    -fx-background-color: -role-shadow;
     -fx-background-radius: 0;
-    -fx-border-color: #05040e #5b54a8 #5b54a8 #05040e;
+    -fx-border-color: -role-shadow -ui-groove-light -ui-groove-light -role-shadow;
     -fx-border-width: 2;
     -fx-padding: 5;
 }
 
 .slider .thumb {
-    -fx-background-color: -sdmk-yellow;
+    -fx-background-color: -role-primary;
     -fx-background-radius: 0;
     -fx-background-insets: 0;
-    -fx-border-color: #fff6c2 #8a6f00 #8a6f00 #fff6c2;
+    -fx-border-color: -ui-primary-light -role-primary-dim -role-primary-dim -ui-primary-light;
     -fx-border-width: 2;
     -fx-padding: 9 8 9 8;
     -fx-effect: null;
 }
 
 .slider .thumb:hover {
-    -fx-background-color: #fff0a0;
+    -fx-background-color: -ui-primary-light;
 }
 
 .slider:focused .thumb {
-    -fx-border-color: -sdmk-cyan;
+    -fx-border-color: -role-accent;
 }
 
 .slider .axis {
-    -fx-tick-label-fill: -sdmk-text-faint;
+    -fx-tick-label-fill: -ui-text-faint;
     -fx-tick-label-font-family: "Press Start 2P";
     -fx-tick-label-font-size: 7px;
-    -fx-tick-mark-stroke: -sdmk-edge;
+    -fx-tick-mark-stroke: -role-outline;
     -fx-minor-tick-mark-stroke: transparent;
 }
 
@@ -366,9 +369,9 @@
 /* ------------------------------------------------------------------ */
 
 .spinner {
-    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-color: -ui-recessed;
     -fx-background-radius: 0;
-    -fx-border-color: -sdmk-bevel-dark -sdmk-edge -sdmk-edge -sdmk-bevel-dark;
+    -fx-border-color: -ui-bevel-dark -role-outline -role-outline -ui-bevel-dark;
     -fx-border-width: 2;
     -fx-border-radius: 0;
 }
@@ -380,9 +383,9 @@
 
 .spinner .increment-arrow-button,
 .spinner .decrement-arrow-button {
-    -fx-background-color: -sdmk-face;
+    -fx-background-color: -role-surface-raised;
     -fx-background-radius: 0;
-    -fx-border-color: -sdmk-bevel-light -sdmk-bevel-dark -sdmk-bevel-dark -sdmk-bevel-light;
+    -fx-border-color: -ui-bevel-light -ui-bevel-dark -ui-bevel-dark -ui-bevel-light;
     -fx-border-width: 2;
     -fx-padding: 4 8 4 8;
     -fx-cursor: hand;
@@ -390,11 +393,11 @@
 
 .spinner .increment-arrow-button:hover,
 .spinner .decrement-arrow-button:hover {
-    -fx-background-color: -sdmk-face-hover;
+    -fx-background-color: -ui-face-hover;
 }
 
 .spinner .increment-arrow-button > .increment-arrow {
-    -fx-background-color: -sdmk-yellow;
+    -fx-background-color: -role-primary;
     -fx-shape: "M2,0 H4 V2 H5 V4 H6 V6 H0 V4 H1 V2 H2 Z";
     -fx-min-width: 8;
     -fx-min-height: 8;
@@ -402,7 +405,7 @@
 }
 
 .spinner .decrement-arrow-button > .decrement-arrow {
-    -fx-background-color: -sdmk-yellow;
+    -fx-background-color: -role-primary;
     -fx-shape: "M0,0 H6 V2 H5 V4 H4 V6 H2 V4 H1 V2 H0 Z";
     -fx-min-width: 8;
     -fx-min-height: 8;
@@ -422,19 +425,19 @@
 }
 
 .table-view .column-header-background {
-    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-color: -ui-recessed;
 }
 
 .table-view .column-header,
 .table-view .filler {
     -fx-background-color: transparent;
-    -fx-border-color: transparent -sdmk-edge -sdmk-yellow transparent;
+    -fx-border-color: transparent -role-outline -role-primary transparent;
     -fx-border-width: 0 1 3 0;
     -fx-size: 34;
 }
 
 .table-view .column-header .label {
-    -fx-text-fill: -sdmk-yellow;
+    -fx-text-fill: -role-primary;
     -fx-font-size: 8px;
     -fx-alignment: center-left;
     -fx-padding: 0 4 0 6;
@@ -443,7 +446,7 @@
 /* The default sort arrow is a smooth triangle; make it a pixel pyramid too. */
 .table-view .column-header .sort-order-dot,
 .table-view .column-header .arrow {
-    -fx-background-color: -sdmk-cyan;
+    -fx-background-color: -role-accent;
     -fx-shape: "M0,0 H6 V2 H5 V4 H4 V6 H2 V4 H1 V2 H0 Z";
     -fx-min-width: 8;
     -fx-min-height: 8;
@@ -451,38 +454,38 @@
 }
 
 .table-row-cell {
-    -fx-background-color: -sdmk-row;
-    -fx-border-color: transparent transparent #12111f transparent;
+    -fx-background-color: -role-surface;
+    -fx-border-color: transparent transparent -ui-recessed transparent;
     -fx-border-width: 0 0 2 0;
     -fx-padding: 0;
     -fx-cell-size: 32;
 }
 
 .table-row-cell:odd {
-    -fx-background-color: -sdmk-row-alt;
+    -fx-background-color: -role-background-alt;
 }
 
 .table-row-cell:selected {
-    -fx-background-color: #4a3a9e;
-    -fx-border-color: -sdmk-yellow transparent -sdmk-yellow transparent;
+    -fx-background-color: -ui-selected;
+    -fx-border-color: -role-primary transparent -role-primary transparent;
     -fx-border-width: 2 0 2 0;
 }
 
 .table-view .table-cell {
-    -fx-text-fill: -sdmk-text;
+    -fx-text-fill: -role-text-primary;
     -fx-font-size: 8px;
     -fx-padding: 0 6 0 6;
     -fx-alignment: center-left;
-    -fx-border-color: transparent -sdmk-edge transparent transparent;
+    -fx-border-color: transparent -role-outline transparent transparent;
     -fx-border-width: 0 1 0 0;
 }
 
 .table-row-cell:selected .table-cell {
-    -fx-text-fill: #ffffff;
+    -fx-text-fill: -role-text-primary;
 }
 
 .table-view .placeholder .label {
-    -fx-text-fill: -sdmk-text-faint;
+    -fx-text-fill: -ui-text-faint;
     -fx-font-size: 9px;
 }
 
@@ -493,8 +496,8 @@
 /* The details column scrolls, so the panel styling sits on the scroll pane and the content
    inside it stays transparent. */
 .details-pane {
-    -fx-background-color: -sdmk-panel;
-    -fx-border-color: transparent transparent transparent -sdmk-yellow;
+    -fx-background-color: -role-surface;
+    -fx-border-color: transparent transparent transparent -role-primary;
     -fx-border-width: 0 0 0 3;
     -fx-padding: 0;
 }
@@ -512,36 +515,36 @@
 
 .detail-title {
     -fx-font-size: 12px;
-    -fx-text-fill: -sdmk-yellow;
+    -fx-text-fill: -role-primary;
     -fx-line-spacing: 4px;
 }
 
 .detail-artist {
     -fx-font-size: 9px;
-    -fx-text-fill: -sdmk-cyan;
+    -fx-text-fill: -role-accent;
     -fx-line-spacing: 3px;
 }
 
 .detail-meta {
     -fx-font-size: 8px;
-    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-fill: -role-text-dim;
     -fx-line-spacing: 7px;
 }
 
 .detail-caption {
     -fx-font-size: 8px;
-    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-fill: -role-text-dim;
 }
 
 .rating-value {
     -fx-font-size: 11px;
-    -fx-text-fill: -sdmk-yellow;
+    -fx-text-fill: -role-primary;
     -fx-min-width: 40px;
 }
 
 .cover-holder {
-    -fx-background-color: -sdmk-panel-dark;
-    -fx-border-color: -sdmk-edge;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: -role-outline;
     -fx-border-width: 3;
 }
 
@@ -550,14 +553,14 @@
  * same convention the game canvas uses for a sprite it could not load.
  */
 .cover-placeholder {
-    -fx-background-color: #2a0a2a;
-    -fx-border-color: -sdmk-magenta;
+    -fx-background-color: -diag-magenta-dark;
+    -fx-border-color: -diag-magenta;
     -fx-border-width: 3;
 }
 
 .cover-placeholder-label {
     -fx-font-size: 10px;
-    -fx-text-fill: #ff7bff;
+    -fx-text-fill: -diag-magenta-light;
 }
 
 /* ------------------------------------------------------------------ */
@@ -565,31 +568,31 @@
 /* ------------------------------------------------------------------ */
 
 .separator .line {
-    -fx-border-color: -sdmk-edge;
+    -fx-border-color: -role-outline;
     -fx-border-width: 2 0 0 0;
 }
 
 .scroll-bar {
-    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-color: -ui-recessed;
     -fx-background-radius: 0;
     -fx-padding: 2;
 }
 
 .scroll-bar .track {
-    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-color: -ui-recessed;
     -fx-background-radius: 0;
     -fx-border-color: transparent;
 }
 
 .scroll-bar .thumb {
-    -fx-background-color: -sdmk-face;
+    -fx-background-color: -role-surface-raised;
     -fx-background-radius: 0;
-    -fx-border-color: -sdmk-bevel-light -sdmk-bevel-dark -sdmk-bevel-dark -sdmk-bevel-light;
+    -fx-border-color: -ui-bevel-light -ui-bevel-dark -ui-bevel-dark -ui-bevel-light;
     -fx-border-width: 2;
 }
 
 .scroll-bar .thumb:hover {
-    -fx-background-color: -sdmk-face-hover;
+    -fx-background-color: -ui-face-hover;
 }
 
 .scroll-bar .increment-button,
@@ -600,22 +603,22 @@
 
 .scroll-bar .increment-arrow,
 .scroll-bar .decrement-arrow {
-    -fx-background-color: -sdmk-edge;
+    -fx-background-color: -role-outline;
     -fx-shape: "M0,0 H6 V6 H0 Z";
     -fx-padding: 3;
 }
 
 .corner {
-    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-color: -ui-recessed;
 }
 
 .tooltip {
     -fx-font-family: "Press Start 2P";
     -fx-font-size: 8px;
-    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-color: -ui-recessed;
     -fx-background-radius: 0;
-    -fx-text-fill: -sdmk-yellow;
-    -fx-border-color: -sdmk-yellow;
+    -fx-text-fill: -role-primary;
+    -fx-border-color: -role-primary;
     -fx-border-width: 2;
     -fx-padding: 8;
     -fx-effect: null;
@@ -625,14 +628,14 @@
 /* ------------------------------------------------------------------ */
 
 .rating-bar {
-    -fx-background-color: #05040e;
-    -fx-border-color: #05040e #5b54a8 #5b54a8 #05040e;
+    -fx-background-color: -role-shadow;
+    -fx-border-color: -role-shadow -ui-groove-light -ui-groove-light -role-shadow;
     -fx-border-width: 2;
     -fx-padding: 3;
 }
 
 .rating-bar > .segment {
-    -fx-background-color: #23213d;
+    -fx-background-color: -ui-inset;
     -fx-background-radius: 0;
 }
 
@@ -644,18 +647,18 @@
 /* The ramp runs red to yellow to green as the rating climbs, so the colour alone says whether
    a song is barely liked or a favourite. */
 .rating-bar > .segment.filled.low {
-    -fx-background-color: #ff4d4d;
-    -fx-border-color: #ffb3b3 transparent transparent transparent;
+    -fx-background-color: -role-negative;
+    -fx-border-color: -ui-negative-light transparent transparent transparent;
 }
 
 .rating-bar > .segment.filled.mid {
-    -fx-background-color: -sdmk-yellow;
-    -fx-border-color: #fff6c2 transparent transparent transparent;
+    -fx-background-color: -role-primary;
+    -fx-border-color: -ui-primary-light transparent transparent transparent;
 }
 
 .rating-bar > .segment.filled.high {
-    -fx-background-color: #3ee85b;
-    -fx-border-color: #baffc4 transparent transparent transparent;
+    -fx-background-color: -role-positive;
+    -fx-border-color: -ui-positive-light transparent transparent transparent;
 }
 
 /* ------------------------------------------------------------------ */
@@ -668,33 +671,33 @@
 /* ------------------------------------------------------------------ */
 
 .pixel-window {
-    -fx-background-color: -sdmk-panel;
-    -fx-border-color: -sdmk-yellow;
+    -fx-background-color: -role-surface;
+    -fx-border-color: -role-primary;
     -fx-border-width: 3;
 }
 
 .pixel-window-error {
-    -fx-border-color: #ff5c5c;
+    -fx-border-color: -role-negative;
 }
 
 .pixel-titlebar {
-    -fx-background-color: -sdmk-panel-dark;
-    -fx-border-color: transparent transparent -sdmk-yellow transparent;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: transparent transparent -role-primary transparent;
     -fx-border-width: 0 0 2 0;
     -fx-cursor: move;
 }
 
 .pixel-window-error .pixel-titlebar {
-    -fx-border-color: transparent transparent #ff5c5c transparent;
+    -fx-border-color: transparent transparent -role-negative transparent;
 }
 
 .pixel-window-title {
     -fx-font-size: 10px;
-    -fx-text-fill: -sdmk-yellow;
+    -fx-text-fill: -role-primary;
 }
 
 .pixel-window-error .pixel-window-title {
-    -fx-text-fill: #ff5c5c;
+    -fx-text-fill: -role-negative;
 }
 
 /*
@@ -705,23 +708,23 @@
 .window-button {
     -fx-font-size: 9px;
     -fx-background-color: transparent;
-    -fx-text-fill: -sdmk-text-dim;
-    -fx-border-color: -sdmk-edge;
+    -fx-text-fill: -role-text-dim;
+    -fx-border-color: -role-outline;
     -fx-border-width: 2;
     -fx-padding: 3 7 3 7;
     -fx-cursor: hand;
 }
 
 .window-button:hover {
-    -fx-background-color: -sdmk-face-hover;
-    -fx-text-fill: -sdmk-yellow;
-    -fx-border-color: -sdmk-yellow;
+    -fx-background-color: -ui-face-hover;
+    -fx-text-fill: -role-primary;
+    -fx-border-color: -role-primary;
 }
 
 .close-button:hover {
-    -fx-background-color: #c0392b;
-    -fx-text-fill: #ffffff;
-    -fx-border-color: #ff8a7a;
+    -fx-background-color: -ui-negative-dark;
+    -fx-text-fill: -role-text-primary;
+    -fx-border-color: -ui-negative-light;
 }
 
 .window-button:pressed {
@@ -730,24 +733,24 @@
 }
 
 .pixel-window-content {
-    -fx-background-color: -sdmk-panel;
+    -fx-background-color: -role-surface;
 }
 
 .pixel-window-buttons {
-    -fx-background-color: -sdmk-panel-dark;
-    -fx-border-color: -sdmk-edge transparent transparent transparent;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: -role-outline transparent transparent transparent;
     -fx-border-width: 2 0 0 0;
 }
 
 .pixel-message {
     -fx-font-size: 9px;
-    -fx-text-fill: -sdmk-text;
+    -fx-text-fill: -role-text-primary;
     -fx-line-spacing: 7px;
 }
 
 .song-form .label {
     -fx-font-size: 8px;
-    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-fill: -role-text-dim;
 }
 
 /* ------------------------------------------------------------------ */
@@ -755,41 +758,41 @@
 /* ------------------------------------------------------------------ */
 
 .playback-bar {
-    -fx-background-color: -sdmk-panel-dark;
-    -fx-border-color: -sdmk-edge transparent -sdmk-edge transparent;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: -role-outline transparent -role-outline transparent;
     -fx-border-width: 2 0 2 0;
 }
 
 .bar-caption {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-text-faint;
+    -fx-text-fill: -ui-text-faint;
 }
 
 .now-playing {
     -fx-font-size: 9px;
-    -fx-text-fill: -sdmk-yellow;
+    -fx-text-fill: -role-primary;
 }
 
 .up-next {
     -fx-font-size: 8px;
-    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-fill: -role-text-dim;
 }
 
 /* The play control carries the yellow, because it is the one control the eye goes to first. */
 .play-button {
-    -fx-text-fill: -sdmk-yellow;
+    -fx-text-fill: -role-primary;
 }
 
 /* Fixed-width digits in a fixed-width font, so the clock does not jitter as the seconds turn. */
 .time-readout {
     -fx-font-size: 8px;
-    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-fill: -role-text-dim;
     -fx-min-width: 48px;
 }
 
 .playback-status {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-cyan;
+    -fx-text-fill: -role-accent;
     -fx-min-width: 130px;
 }
 
@@ -811,8 +814,8 @@
  * role, so the mood system recolours the bars without touching this file.
  */
 .level-meters {
-    -fx-background-color: -sdmk-panel;
-    -fx-border-color: transparent transparent transparent -sdmk-edge;
+    -fx-background-color: -role-surface;
+    -fx-border-color: transparent transparent transparent -role-outline;
     -fx-border-width: 0 0 0 2;
 }
 
@@ -824,11 +827,11 @@
 .toggle-button {
     -fx-font-family: "Press Start 2P";
     -fx-font-size: 8px;
-    -fx-background-color: -sdmk-face;
+    -fx-background-color: -role-surface-raised;
     -fx-background-radius: 0;
     -fx-background-insets: 0;
-    -fx-text-fill: -sdmk-text-dim;
-    -fx-border-color: -sdmk-bevel-light -sdmk-bevel-dark -sdmk-bevel-dark -sdmk-bevel-light;
+    -fx-text-fill: -role-text-dim;
+    -fx-border-color: -ui-bevel-light -ui-bevel-dark -ui-bevel-dark -ui-bevel-light;
     -fx-border-width: 2;
     -fx-border-radius: 0;
     -fx-padding: 8 12 8 12;
@@ -837,22 +840,22 @@
 }
 
 .toggle-button:hover {
-    -fx-background-color: -sdmk-face-hover;
-    -fx-text-fill: -sdmk-text;
+    -fx-background-color: -ui-face-hover;
+    -fx-text-fill: -role-text-primary;
 }
 
 .toggle-button:focused {
-    -fx-border-color: -sdmk-yellow;
+    -fx-border-color: -role-primary;
 }
 
 .toggle-button:selected {
-    -fx-background-color: -sdmk-bevel-dark;
-    -fx-text-fill: -sdmk-yellow;
-    -fx-border-color: -sdmk-bevel-dark -sdmk-bevel-light -sdmk-bevel-light -sdmk-bevel-dark;
+    -fx-background-color: -ui-bevel-dark;
+    -fx-text-fill: -role-primary;
+    -fx-border-color: -ui-bevel-dark -ui-bevel-light -ui-bevel-light -ui-bevel-dark;
 }
 
 .toggle-button:selected:hover {
-    -fx-text-fill: -sdmk-yellow;
+    -fx-text-fill: -role-primary;
 }
 
 /* ------------------------------------------------------------------ */
@@ -861,39 +864,39 @@
 
 /* The panel sits under the visualizer in the left column, so its divider is on its top edge. */
 .complexity-panel {
-    -fx-background-color: -sdmk-panel;
-    -fx-border-color: -sdmk-edge transparent transparent transparent;
+    -fx-background-color: -role-surface;
+    -fx-border-color: -role-outline transparent transparent transparent;
     -fx-border-width: 2 0 0 0;
 }
 
 .panel-heading {
     -fx-font-size: 9px;
-    -fx-text-fill: -sdmk-cyan;
+    -fx-text-fill: -role-accent;
 }
 
 .panel-caption {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-text-faint;
+    -fx-text-fill: -ui-text-faint;
 }
 
 .complexity-structure {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-text;
+    -fx-text-fill: -role-text-primary;
 }
 
 .complexity-size {
     -fx-font-size: 8px;
-    -fx-text-fill: -sdmk-yellow;
+    -fx-text-fill: -role-primary;
 }
 
 .complexity-operation {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-text;
+    -fx-text-fill: -role-text-primary;
 }
 
 .complexity-cost {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-fill: -role-text-dim;
     -fx-padding: 0 0 0 10;
 }
 
@@ -901,13 +904,13 @@
    coloured like a live value rather than like body text. */
 .complexity-measured {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-cyan;
+    -fx-text-fill: -role-accent;
     -fx-padding: 0 0 0 10;
 }
 
 .complexity-unmeasured {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-text-faint;
+    -fx-text-fill: -ui-text-faint;
     -fx-padding: 0 0 0 10;
 }
 
@@ -923,8 +926,8 @@
 }
 
 .complexity-scatter {
-    -fx-background-color: -sdmk-panel-dark;
-    -fx-border-color: -sdmk-bevel-dark -sdmk-edge -sdmk-edge -sdmk-bevel-dark;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: -ui-bevel-dark -role-outline -role-outline -ui-bevel-dark;
     -fx-border-width: 2;
 }
 
@@ -933,8 +936,8 @@
 /* ------------------------------------------------------------------ */
 
 .structure-visualizer {
-    -fx-background-color: -sdmk-panel-dark;
-    -fx-border-color: transparent -sdmk-edge transparent transparent;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: transparent -role-outline transparent transparent;
     -fx-border-width: 0 2 0 0;
 }
 
@@ -943,8 +946,8 @@
 }
 
 .visualizer-controls {
-    -fx-background-color: -sdmk-panel;
-    -fx-border-color: -sdmk-edge transparent transparent transparent;
+    -fx-background-color: -role-surface;
+    -fx-border-color: -role-outline transparent transparent transparent;
     -fx-border-width: 2 0 0 0;
 }
 
@@ -956,12 +959,12 @@
 
 .visualizer-readout {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-cyan;
+    -fx-text-fill: -role-accent;
 }
 
 .visualizer-placeholder {
     -fx-font-size: 8px;
-    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-fill: -role-text-dim;
     -fx-text-alignment: center;
 }
 
@@ -970,33 +973,33 @@
 /* ------------------------------------------------------------------ */
 
 .presentation-view {
-    -fx-background-color: -sdmk-bg;
+    -fx-background-color: -role-background;
 }
 
 .presentation-header {
-    -fx-background-color: -sdmk-panel-dark;
-    -fx-border-color: transparent transparent -sdmk-yellow transparent;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: transparent transparent -role-primary transparent;
     -fx-border-width: 0 0 3 0;
 }
 
 .presentation-title {
     -fx-font-size: 11px;
-    -fx-text-fill: -sdmk-yellow;
+    -fx-text-fill: -role-primary;
 }
 
 .presentation-app-name {
     -fx-font-size: 8px;
-    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-fill: -role-text-dim;
 }
 
 .presentation-hint {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-text-faint;
+    -fx-text-fill: -ui-text-faint;
 }
 
 .presentation-plot-column {
-    -fx-background-color: -sdmk-panel;
-    -fx-border-color: transparent transparent transparent -sdmk-edge;
+    -fx-background-color: -role-surface;
+    -fx-border-color: transparent transparent transparent -role-outline;
     -fx-border-width: 0 0 0 2;
 }
 
@@ -1009,19 +1012,19 @@
  * display are drawn on a Canvas, through the palette, by role - see RunnerView.
  */
 .runner-view {
-    -fx-background-color: -sdmk-panel-dark;
-    -fx-border-color: transparent transparent transparent -sdmk-edge;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: transparent transparent transparent -role-outline;
     -fx-border-width: 0 0 0 2;
 }
 
 /* A focus ring on the road itself: while it has focus the arrows steer instead of skipping. */
 .runner-view:focused {
-    -fx-border-color: transparent transparent transparent -sdmk-cyan;
+    -fx-border-color: transparent transparent transparent -role-accent;
 }
 
 .runner-controls {
-    -fx-background-color: -sdmk-panel;
-    -fx-border-color: transparent transparent -sdmk-edge transparent;
+    -fx-background-color: -role-surface;
+    -fx-border-color: transparent transparent -role-outline transparent;
     -fx-border-width: 0 0 2 0;
 }
 
@@ -1038,33 +1041,33 @@
 .class-button {
     -fx-font-size: 11px;
     -fx-padding: 8 12 8 12;
-    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-fill: -role-text-dim;
 }
 
 .class-button:selected {
-    -fx-text-fill: -sdmk-yellow;
-    -fx-background-color: -sdmk-face-hover;
+    -fx-text-fill: -role-primary;
+    -fx-background-color: -ui-face-hover;
 }
 
 .runner-summary {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-text-faint;
+    -fx-text-fill: -ui-text-faint;
 }
 
 /* The view toggle in the header, which swaps the library for the road. */
 .view-toggle {
     -fx-font-size: 8px;
-    -fx-text-fill: -sdmk-cyan;
+    -fx-text-fill: -role-accent;
 }
 
 /* The race column: a best rank, or a marker for a course that is built and never driven. */
 .race-rank {
-    -fx-text-fill: -sdmk-yellow;
+    -fx-text-fill: -role-primary;
     -fx-alignment: center;
 }
 
 .race-ready {
-    -fx-text-fill: -sdmk-cyan;
+    -fx-text-fill: -role-accent;
     -fx-alignment: center;
 }
 
@@ -1099,7 +1102,7 @@
  * indication anywhere of why.
  */
 .mini-compact {
-    -fx-background-color: -sdmk-panel;
+    -fx-background-color: -role-surface;
 }
 
 /*
@@ -1117,39 +1120,39 @@
  * their own - a transparent button over a transparent stage is a border round a hole.
  */
 .mini-actions .window-button {
-    -fx-background-color: -sdmk-panel-dark;
+    -fx-background-color: -ui-recessed;
 }
 
 .mini-title {
     -fx-font-size: 8px;
-    -fx-text-fill: -sdmk-text;
+    -fx-text-fill: -role-text-primary;
 }
 
 .mini-artist {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-text-dim;
+    -fx-text-fill: -role-text-dim;
 }
 
 .mini-time {
     -fx-font-size: 7px;
-    -fx-text-fill: -sdmk-text-faint;
+    -fx-text-fill: -ui-text-faint;
 }
 
 /* A sunken track with a solid fill, drawn as two blocks rather than a gradient bar. */
 .mini-progress-track {
-    -fx-background-color: -sdmk-panel-dark;
-    -fx-border-color: -sdmk-bevel-dark -sdmk-edge -sdmk-edge -sdmk-bevel-dark;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: -ui-bevel-dark -role-outline -role-outline -ui-bevel-dark;
     -fx-border-width: 1;
 }
 
 .mini-progress-fill {
-    -fx-background-color: -sdmk-yellow;
+    -fx-background-color: -role-primary;
 }
 
 /* The cover frame, matching the one in the library details column. */
 .mini-cover {
-    -fx-background-color: -sdmk-panel-dark;
-    -fx-border-color: -sdmk-edge;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: -role-outline;
     -fx-border-width: 3;
 }
 
@@ -1166,4 +1169,130 @@
 .mini-transport .button {
     -fx-font-size: 9px;
     -fx-padding: 6 0 6 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Side rail                                                           */
+/*                                                                     */
+/* Chooses what the middle of the window shows. Its width is set by    */
+/* the longest caption, not by taste: at roughly one em per glyph,     */
+/* FAVORITES at 8px is 72 pixels of text before any padding.           */
+/* ------------------------------------------------------------------ */
+
+.side-rail {
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: transparent -role-outline transparent transparent;
+    -fx-border-width: 0 2 0 0;
+    -fx-padding: 14 8 14 8;
+    -fx-spacing: 6;
+}
+
+.rail-heading {
+    -fx-font-size: 7px;
+    -fx-text-fill: -ui-text-faint;
+    -fx-padding: 0 0 6 2;
+}
+
+.rail-button {
+    -fx-font-size: 8px;
+    -fx-padding: 6 4 6 4;
+    -fx-alignment: center;
+}
+
+/* The selected destination reads as a key held down, like the mode selector. */
+.rail-button:selected {
+    -fx-background-color: -ui-bevel-dark;
+    -fx-text-fill: -role-primary;
+    -fx-border-color: -ui-bevel-dark -ui-bevel-light -ui-bevel-light -ui-bevel-dark;
+}
+
+/* ------------------------------------------------------------------ */
+/* Destinations: moods, racers, history, settings                      */
+/* ------------------------------------------------------------------ */
+
+.mood-view,
+.racer-view,
+.history-view,
+.settings-view,
+.mood-view > .viewport,
+.racer-view > .viewport,
+.history-view > .viewport,
+.settings-view > .viewport {
+    -fx-background-color: transparent;
+}
+
+.mood-content,
+.racer-content,
+.history-content,
+.settings-content {
+    -fx-background-color: transparent;
+}
+
+.mood-card,
+.racer-card,
+.history-section,
+.settings-section {
+    -fx-background-color: -role-surface;
+    -fx-border-color: -role-outline;
+    -fx-border-width: 2;
+}
+
+/* The active mood is marked by its frame rather than by a colour of its own, so the marker
+   follows whichever mood is marking itself. */
+.mood-card-active {
+    -fx-border-color: -role-primary;
+    -fx-border-width: 3;
+}
+
+.mood-name {
+    -fx-font-size: 11px;
+    -fx-text-fill: -role-primary;
+}
+
+.mood-apply {
+    -fx-font-size: 8px;
+    -fx-padding: 6 10 6 10;
+}
+
+.racer-name {
+    -fx-font-size: 8px;
+    -fx-padding: 6 8 6 8;
+}
+
+.racer-name:selected {
+    -fx-background-color: -ui-bevel-dark;
+    -fx-text-fill: -role-primary;
+    -fx-border-color: -ui-bevel-dark -ui-bevel-light -ui-bevel-light -ui-bevel-dark;
+}
+
+.history-time {
+    -fx-font-size: 7px;
+    -fx-text-fill: -ui-text-faint;
+}
+
+/* A history row is a button because it plays the song, but it must read as a line of a list
+   rather than as a control: no bevel, and the face only appears under the pointer. */
+.history-entry {
+    -fx-font-size: 8px;
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-border-width: 0;
+    -fx-padding: 4 6 4 6;
+    -fx-alignment: center-left;
+    -fx-text-fill: -role-text-primary;
+}
+
+.history-entry:hover {
+    -fx-background-color: -ui-face-hover;
+    -fx-text-fill: -role-primary;
+}
+
+.settings-caption {
+    -fx-font-size: 8px;
+    -fx-text-fill: -role-text-dim;
+}
+
+.settings-value {
+    -fx-font-size: 8px;
+    -fx-text-fill: -role-text-primary;
 }

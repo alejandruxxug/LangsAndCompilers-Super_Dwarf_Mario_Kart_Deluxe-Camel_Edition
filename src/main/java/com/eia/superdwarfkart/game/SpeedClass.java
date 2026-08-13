@@ -1,5 +1,8 @@
 package com.eia.superdwarfkart.game;
 
+import java.util.Arrays;
+import java.util.Optional;
+
 /**
  * How fast the course comes at the player, and how much of the music it spends.
  *
@@ -94,6 +97,23 @@ public enum SpeedClass {
     /** @return the class a run starts on when the user has expressed no preference */
     public static SpeedClass defaultClass() {
         return CC50;
+    }
+
+    /**
+     * Resolves a stored class name.
+     *
+     * <p>{@link #valueOf} would throw on a name this build does not know, which a profile written
+     * by a later version could easily contain and which is no reason to refuse to open. An unknown
+     * name is simply absent, and the caller keeps its default.
+     *
+     * @param name the constant name to resolve; {@code null} yields an empty result
+     * @return the class with that name, if there is one
+     */
+    public static Optional<SpeedClass> byName(String name) {
+        if (name == null) {
+            return Optional.empty();
+        }
+        return Arrays.stream(values()).filter(speed -> speed.name().equals(name)).findFirst();
     }
 
     @Override

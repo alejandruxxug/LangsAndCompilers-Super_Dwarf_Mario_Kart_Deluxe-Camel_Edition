@@ -17,12 +17,16 @@ import com.eia.superdwarfkart.game.RunnerGame;
 import com.eia.superdwarfkart.game.SpeedClass;
 import com.eia.superdwarfkart.model.Library;
 import com.eia.superdwarfkart.model.ModeId;
+import com.eia.superdwarfkart.model.PlayHistory;
 import com.eia.superdwarfkart.model.Racer;
 import com.eia.superdwarfkart.model.Song;
 import com.eia.superdwarfkart.persistence.LibraryRepository;
 import com.eia.superdwarfkart.persistence.PersistenceException;
 import com.eia.superdwarfkart.persistence.Repository;
+import com.eia.superdwarfkart.mood.Mood;
+import com.eia.superdwarfkart.mood.Moods;
 import com.eia.superdwarfkart.persistence.ScoreRepository;
+import com.eia.superdwarfkart.persistence.SettingsRepository;
 import com.eia.superdwarfkart.playback.AlphabeticalMode;
 import com.eia.superdwarfkart.playback.ArrivalOrderMode;
 import com.eia.superdwarfkart.playback.PlaybackEngine;
@@ -32,13 +36,19 @@ import com.eia.superdwarfkart.playback.Player;
 import com.eia.superdwarfkart.playback.ShuffleMode;
 import com.eia.superdwarfkart.ui.BeatmapTimeline;
 import com.eia.superdwarfkart.ui.ComplexityPanel;
+import com.eia.superdwarfkart.ui.Destination;
 import com.eia.superdwarfkart.ui.Fonts;
+import com.eia.superdwarfkart.ui.HistoryView;
 import com.eia.superdwarfkart.ui.LevelMeterView;
 import com.eia.superdwarfkart.ui.LibraryView;
 import com.eia.superdwarfkart.ui.MiniPlayerView;
+import com.eia.superdwarfkart.ui.MoodSelectView;
 import com.eia.superdwarfkart.ui.PixelDialog;
 import com.eia.superdwarfkart.ui.PlaybackBar;
+import com.eia.superdwarfkart.ui.RacerSelectView;
 import com.eia.superdwarfkart.ui.RunnerView;
+import com.eia.superdwarfkart.ui.SettingsView;
+import com.eia.superdwarfkart.ui.SideRail;
 import com.eia.superdwarfkart.ui.Theme;
 import com.eia.superdwarfkart.ui.visualizer.OperationCounter;
 import com.eia.superdwarfkart.ui.visualizer.PresentationView;
@@ -48,6 +58,7 @@ import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
@@ -168,9 +179,16 @@ public class App extends Application {
     private BeatmapTimeline beatmapTimeline;
 
     private ScoreRepository scores;
+    private SettingsRepository settings;
     private BeatmapIndex courseIndex;
     private RunnerView runner;
     private LibraryView libraryView;
+    private SideRail sideRail;
+    private HistoryView historyView;
+    private RacerSelectView racerSelect;
+    private MoodSelectView moodSelect;
+    private SettingsView settingsView;
+    private PlayHistory history;
     private Button viewToggle;
     private boolean racing;
 
@@ -219,6 +237,11 @@ public class App extends Application {
         player.addListener(state);
         state.playbackChanged(player.mode(), player.current());
 
+        // Read and applied before a single view is built, so the first frame the user sees is
+        // already in their mood rather than flashing the default one and correcting itself.
+        settings = new SettingsRepository();
+        restoreSettings();
+
         // The tap is composed in here rather than owned by the audio source, so the same meters
         // work unchanged over any implementation of AudioSource.
         levels = new Levels();
@@ -227,6 +250,11 @@ public class App extends Application {
         // End of track arrives on the playback thread; runLater is the hop back, and it happens
         // once per song rather than once per audio block.
         engine = new PlaybackEngine(player, audio, Platform::runLater);
+
+        // Recorded from the engine rather than from a song change, so a song scrolled past in the
+        // library does not appear in the history as though it had been listened to.
+        history = new PlayHistory();
+        engine.setOnPlayCounted(history::record);
 
         // Analysis follows the running order rather than the play button: whatever becomes current
         // gets a beatmap prepared for it on a background thread, so by the time the rhythm game
@@ -294,10 +322,26 @@ public class App extends Application {
         sideColumn.setMaxWidth(SIDE_COLUMN_WIDTH);
         VBox.setVgrow(visualizer, Priority.ALWAYS);
 
+        historyView = new HistoryView(library, history);
+        historyView.setOnSongActivated(song -> player.select(song));
+        racerSelect = new RacerSelectView(state, assets);
+        moodSelect = new MoodSelectView(state);
+        settingsView = new SettingsView();
+
+        sideRail = new SideRail();
+        sideRail.destinationProperty().addListener((observable, was, now) -> {
+            // Both halves of this page are derived from a library that is edited by hand, so they
+            // are recomputed on arrival rather than kept live by a listener per song.
+            if (now == Destination.HISTORY) {
+                historyView.refresh();
+            }
+            showDestination(now);
+        });
+
         root = new BorderPane();
         root.getStyleClass().add("root-pane");
         root.setTop(new VBox(buildHeader(), playbackBar, beatmapTimeline));
-        root.setLeft(sideColumn);
+        root.setLeft(new HBox(sideRail, sideColumn));
         root.setCenter(libraryView);
         root.setRight(meters);
 
@@ -316,6 +360,64 @@ public class App extends Application {
         // After the window is on screen, so the dialog has something to centre on and the user can
         // see what they are being asked about.
         Platform.runLater(() -> offerToStart(stage));
+    }
+
+    /**
+     * Applies the choices stored from the last session, and arranges for changes to be written
+     * back.
+     *
+     * <p>An unrecognised stored value is not an error - a mood may have been deleted, or the
+     * profile may have been written by a later build. Every one of these falls back to the default
+     * rather than refusing to start (ground rule 5).
+     */
+    private void restoreSettings() {
+        Moods.byId(settings.moodId()).ifPresent(state::setMood);
+        Racer.byName(settings.racerId()).ifPresent(state::setRacer);
+        SpeedClass.byName(settings.speedClass()).ifPresent(state::setSpeedClass);
+
+        applyMood(state.getMood());
+        state.moodProperty().addListener((observable, was, now) -> {
+            applyMood(now);
+            settings.setMoodId(now.id());
+        });
+        state.racerProperty().addListener(
+                (observable, was, now) -> settings.setRacerId(now.name()));
+        state.speedClassProperty().addListener(
+                (observable, was, now) -> settings.setSpeedClass(now.name()));
+    }
+
+    /**
+     * Installs a mood: restyles every control and repaints every canvas.
+     *
+     * <p>The controls restyle themselves, because the palette reaches them as a stylesheet. The
+     * canvases do not: they read the active palette when they next paint, and the ones that only
+     * paint when their picture changes would otherwise sit in the previous mood indefinitely. The
+     * beatmap strip is exactly that - it repaints about six times a second while a long track plays
+     * and not at all while one is paused - so the repaints below are not belt and braces.
+     *
+     * <p>Safe to call before the views exist: this runs once during startup, before the scene is
+     * built, so that the first frame is already in the right colours.
+     *
+     * @param mood the mood to install; must not be {@code null}
+     */
+    private void applyMood(Mood mood) {
+        Theme.setPalette(mood.palette());
+
+        if (meters != null) {
+            meters.redraw();
+        }
+        if (beatmapTimeline != null) {
+            beatmapTimeline.redraw();
+        }
+        if (runner != null) {
+            runner.redraw();
+        }
+        if (visualizer != null && visualizer.view() != null) {
+            visualizer.view().redraw();
+        }
+        if (miniPlayer != null) {
+            miniPlayer.refresh();
+        }
     }
 
     /**
@@ -514,7 +616,9 @@ public class App extends Application {
             root.setCenter(runner);
             runner.requestFocus();
         } else {
-            root.setCenter(libraryView);
+            // Back to whichever destination the rail is on, not unconditionally to the library:
+            // leaving a race the user started from the mood screen should return them there.
+            showDestination(sideRail.getDestination());
             // A run that ended while the road was on screen may have changed the board.
             libraryView.refreshBadges();
         }
@@ -522,6 +626,40 @@ public class App extends Application {
         // it. Coming back to the road withdraws it.
         libraryPinned = !racing;
         updateViewToggle();
+    }
+
+    /**
+     * Puts a destination in the middle of the window.
+     *
+     * <p>The views are built once and kept, rather than rebuilt per visit: the library holds the
+     * user's search, sort and selection, and throwing that away every time they glanced at the
+     * settings would be its own bug. They are cheap to keep and none of them runs a timer.
+     *
+     * <p>Choosing a destination leaves the race, because the two occupy the same space and a rail
+     * button that appeared to do nothing while the road was up would read as broken.
+     *
+     * @param target where to go; must not be {@code null}
+     */
+    private void showDestination(Destination target) {
+        // Favourites are the library with its filter on - see LibraryView.setFavoritesOnly.
+        if (target == Destination.LIBRARY || target == Destination.FAVORITES) {
+            libraryView.setFavoritesOnly(target == Destination.FAVORITES);
+        }
+
+        Node view = switch (target) {
+            case LIBRARY, FAVORITES -> libraryView;
+            case HISTORY -> historyView;
+            case RACERS -> racerSelect;
+            case MOODS -> moodSelect;
+            case SETTINGS -> settingsView;
+        };
+
+        if (racing) {
+            racing = false;
+            libraryPinned = true;
+            updateViewToggle();
+        }
+        root.setCenter(view);
     }
 
     /**
@@ -1400,6 +1538,28 @@ public class App extends Application {
         togglePresentation(scene);
         layoutAndCapture(scene, destination, "presentation");
         togglePresentation(scene);
+
+        // Each rail destination in turn. All four are new views that only exist once their button
+        // has been pressed, so the base shot says nothing whatsoever about any of them.
+        for (Destination target : new Destination[] {
+                Destination.HISTORY, Destination.RACERS, Destination.SETTINGS}) {
+            sideRail.select(target);
+            layoutAndCapture(scene, destination, target.name().toLowerCase());
+        }
+
+        // The light mood, photographed on the mood screen itself so the picture carries both the
+        // switcher and what it did. This is the shot that matters most in this milestone: the
+        // palette reaches the controls through a generated stylesheet, and a light palette is
+        // exactly where a bevel drawn the wrong way round or a caption that stopped contrasting
+        // with its ground becomes visible. Neither shows up in any assertion.
+        sideRail.select(Destination.MOODS);
+        layoutAndCapture(scene, destination, "moods");
+        state.setMood(Moods.LIGHT);
+        layoutAndCapture(scene, destination, "moods-light");
+        sideRail.select(Destination.LIBRARY);
+        layoutAndCapture(scene, destination, "library-light");
+        state.setMood(Moods.DARK);
+        sideRail.select(Destination.LIBRARY);
 
         // The runner last, because it is the one view that only exists behind a key press: a shot
         // of the opening state proves nothing at all about it.

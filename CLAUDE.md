@@ -65,12 +65,17 @@ live in `AppConfig` and are referenced everywhere instead of hardcoded strings:
    from M0 onward. A literal `Color.web("#1a1a2e")` or `-fx-background-color: #222;` anywhere
    in `ui/`, `game/`, or `ui/visualizer/` is a bug. This costs nothing while building and is
    the entire reason M11 is a feature instead of a 400-site find-and-replace.
-   **Debt, measured 2026-08-12:** `css/app.css` carries ~60 hex literals and
-   `assets/SpriteSheet` two (the magenta placeholder, which stays literal by design — it is a
-   diagnostic, not a theme color). Everything else predates this rule and must be routed
-   through roles **before M11 starts**; retrofitting theming across a finished UI costs
-   several times what the feature does. If a milestone comes back with a new hex literal in
-   it, fix it that day.
+   **Debt paid in M9.** `css/app.css` carried 60 hex literals; it now carries **three**, all of
+   them the magenta fault marker, all in one block the test allows by name. Everything else
+   resolves through `-role-*` (one of the sixteen) or `-ui-*` (a surface derived from them), both
+   supplied at runtime by `mood/PaletteCss`. `PaletteCssTest` fails the build on a literal
+   anywhere else in that file **and** on a token the palette does not define — the second of those
+   being the failure that throws nothing and simply draws the control in the wrong colour.
+   `assets/SpriteSheet` keeps its two, which stay literal by design.
+
+   **This was on M9's critical path, not M11's.** A mood switcher shipped over a stylesheet full of
+   literals restyles the canvases and none of the controls, which does not read as a partly built
+   feature — it reads as a broken one.
 
    **Still true after M7:** the runner is a full-screen canvas of road, sky, kerbs, sprites and a
    head-up display and it added **zero** hex literals — every one of them resolves through a role,
@@ -1646,6 +1651,99 @@ pane, the whole app is the preview.
 
 ---
 
+### As built (2026-08-13, M9)
+
+**The palette reaches the controls, and that is most of this milestone.** `app.css` went from 60
+hexadecimal literals to three. It now names `-role-*` (the sixteen) and `-ui-*` (surfaces derived
+from them) and defines neither; `mood/PaletteCss` renders the active palette as a stylesheet and
+`ui/Theme` installs it. Switching mood restyles every button, table, dialog, tooltip and scrollbar
+along with the canvases, which is the whole point — the canvases already followed the palette and
+would have been the only things that did.
+
+- **It is a stylesheet, not an inline style on the root, and that is not a detail.** An inline style
+  is the shorter way to install looked-up colours and it silently misses every popup: a tooltip and
+  a combo box's drop-down are **their own scenes with their own roots**, so a definition on the main
+  root never reaches them and every colour in them fails to resolve. A stylesheet is carried to
+  popup scenes exactly as `app.css` already is. It is a `data:text/css;base64` URL, so a different
+  palette is a different URL by construction and there is no file to invalidate.
+- **`Theme` remembers every stylesheet list it has styled, weakly.** It was already the one funnel
+  every window went through; it is now also how a mood switch reaches a dialog that is open at the
+  time. Weakly, because a dialog is styled, shown, closed and dropped, and holding them strongly
+  would keep every dialog of the session alive to restyle windows nobody can see.
+- **The derived surfaces are computed in Java rather than with the CSS `derive()` function, so that
+  they can be tested.** A bevel needs a face, a lit edge and a shadowed edge; a palette holds
+  sixteen colours and must not spend three on that. The check that earns the whole arrangement is
+  `bevelKeepsItsDirection`: the lit edge must be **brighter than its face and the shadowed edge
+  darker, in every mood**. Lightening by mixing towards white passes in a dark mood and produces a
+  bevel with no lit edge at all in a light one, where the face is already near white — every button
+  in the application goes flat and nothing anywhere says so.
+- **Three derived surfaces had to be re-derived once the light mood existed**, and each failure was
+  invisible in the dark one. `-ui-recessed` took a short step towards `SHADOW` instead of most of
+  the way, because "recessed" on paper means a shade below it and not mid-grey. `-ui-face-pressed`
+  had to go much further towards the shadow, because in a dark mood hover *lightens* the face and
+  the two separate on their own, while in a light mood hover darkens it too and pressed landed
+  within two levels of hover. And `-ui-selected` is derived from `OUTLINE` rather than by lightening
+  the face, which marks a row in a dark mood and washes it out in a light one.
+- **`BACKGROUND_ALT` and `SURFACE` were the same colour**, and the retrofit is what exposed it. They
+  differ by less than one 5-bit level, so they snap together — the alternating table rows were not
+  alternating. It survived because the stylesheet held its own *unsnapped* literals, which did
+  differ; routing the table through the palette inherited the collision immediately.
+  `rolesAreDistinct` is the check.
+- **A light palette breaks on text, and it broke twice.** `PRIMARY` carries the application name,
+  the table headings, the now-playing line and every focus ring; `ACCENT` carries the section
+  headings and the playback status. Both are *read*, not looked at. The bright amber and blue that
+  are perfect on near-black measured **2.0:1 and 3.3:1** against the light mood's own header band.
+  Both were darkened until they cleared 4.5:1 on all three grounds they are drawn on, and
+  `accentsAreReadableAsText` now checks it for every mood. **The recessed band is where an accent
+  runs out of contrast first** — it is the darkest ground in a light mood and the lightest in a dark
+  one — so checking against the background alone would have passed both of these.
+- **`SURFACE_RAISED` in the light mood is a warm grey, not white**, and that is the one value in it
+  chosen for a mechanism rather than for looks. A white face has no headroom above it, so the lit
+  edge lands on the face's own colour. `lightFaceHasHeadroom` says so out loud.
+- **The four protected roles are checked by test rather than by the validator, which is M11's.** The
+  thresholds are the ones the validator will enforce — WCAG 4.5:1 for text, CIE76 ΔE ≥ 25 for
+  `POSITIVE`/`NEGATIVE` and `HIGHLIGHT`/`OUTLINE` — plus a brightness separation, because hue alone
+  fails for a colourblind viewer and for a projector with bad gamma, and this project is
+  demonstrated through both.
+
+**The side rail formalises the middle of the window.** Library, Favorites, History, Racers, Moods,
+Settings. The road is not a destination but an alternative to whichever one is selected, so `F6`
+still swaps it in and **leaving a race returns to where the user was** rather than always to the
+library.
+
+- **Nothing on the rail is focus-traversable.** A focused toggle answers the space bar, and the rail
+  sits earlier in the scene than the header whose two buttons were fixed for exactly this — the
+  first space of the session would have changed destination instead of starting the music.
+- **Favorites is the library with its filter on, not a second table.** A second view would need its
+  own search, sorting, rating control and rank badges, and every one of them could drift. The user
+  watches the checkbox move, which is honest: the rail did something they could have done.
+- **Racer Select needed no artwork whatsoever**, exactly as §8 predicted. Frame 3 of each racer's own
+  sheet is the static menu icon, all five have had one since the art arrived, and it is drawn at 3×
+  with smoothing off. The speed class sits on the same screen because it is the same decision — it
+  changes which course a song generates and therefore which stored score applies.
+- **`model/PlayHistory` is backed by the hand-written `SimpleQueue`**, which is the pleasing part: a
+  bounded history *is* a FIFO read backwards, the oldest entry being the one that has to go. The
+  structure the project is graded on turns out to have a second job, which is a far better answer at
+  the defence than one with a single use. Bounded at 60 — unbounded is a memory leak with a nice
+  name on an application meant to run through an album.
+- **`model/LibraryStatistics` is derived on read and never stored**, the same decision as the
+  runner's rank and for the same reason: a stored copy is a second source of truth whose way of
+  disagreeing is to be quietly stale after an edit.
+- **The history records from the engine, not from a song change.** The moment a play is counted is
+  the moment the history wants; a song scrolled past in the library was never listened to, and a
+  resumed one did not play twice. `PlaybackEngine.setOnPlayCounted` is the hook, a callback rather
+  than a history of its own, because what anybody does with "a song began" is not the engine's
+  business.
+- **`persistence/SettingsRepository` keeps the mood, the racer and the speed class**, written through
+  a temporary file and an atomic move. Every unknown value falls back rather than throwing: a mood
+  id from a later build, a racer this one has never heard of. `Racer.byName` and `SpeedClass.byName`
+  exist for that — `valueOf` throws, and a profile from a newer version is no reason to refuse to
+  open.
+- **The smoke test photographs the new views and both moods.** All four rail destinations only exist
+  once their button has been pressed, so the base shot proves nothing about any of them; the light
+  mood is photographed on the mood screen *and* over the library, because a palette that fails does
+  so on the controls rather than on the canvases. Screenshots in `docs/screenshots/`.
+
 ## 9. Milestone tracker
 
 | # | Milestone | Status |
@@ -1660,7 +1758,7 @@ pane, the whole app is the preview.
 | M6 | `BeatmapAnalyzer` + cache + debug view (BPM, onsets on a timeline) | ✅ done |
 | M7 | ⭐ 3-lane runner: lookahead spawning, coins, bumps, star, cc classes, scoring, beat pulse | ✅ done |
 | M8 | ⭐ Mini companion mode: transparent stage, disk + racer, expand/hide/quit | ✅ done |
-| M9 | Sweep: favorites, history, statistics, keyboard shortcuts, **`DARK` + `LIGHT` moods and a switcher** — the dark-mode bonus ships as moods, not a boolean | ⬜ |
+| M9 | Sweep: side rail, favorites, history, statistics, keyboard reference, **`DARK` + `LIGHT` moods and a switcher** — the dark-mode bonus ships as moods, not a boolean | ✅ done |
 | M11 | ⭐ **Mood system** — 16-color GBA palettes, gradient/image/procedural overlay layers, live customizer, 16×16 / 32×32 pixel editor, `.gpl` + `.hex` import, `MoodValidator`, presets | ⬜ |
 | M10 | *Optional:* `go-librespot` child process. Strictly additive — nothing in M0–M9 or M11 may import it | ⬜ |
 

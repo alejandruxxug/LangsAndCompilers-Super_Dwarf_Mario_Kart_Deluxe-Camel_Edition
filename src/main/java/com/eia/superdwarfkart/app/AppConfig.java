@@ -167,6 +167,11 @@ public final class AppConfig {
         return appHome().resolve("scores.json");
     }
 
+    /** @return the JSON file holding the chosen mood, racer and speed class */
+    public static Path settingsFile() {
+        return appHome().resolve("settings.json");
+    }
+
     /**
      * Returns the user's own artwork folder.
      *

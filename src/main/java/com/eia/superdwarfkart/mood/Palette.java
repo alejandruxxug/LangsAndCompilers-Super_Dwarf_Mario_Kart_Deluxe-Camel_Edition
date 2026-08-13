@@ -90,6 +90,42 @@ public final class Palette {
         return GbaColor.snap(color(from).interpolate(color(to), Math.clamp(t, 0d, 1d)));
     }
 
+    /**
+     * Returns a role's colour with its brightness scaled, keeping hue and saturation.
+     *
+     * <p>A bevel's light and dark edges are not two more palette entries. They are the face colour
+     * seen under more and less light, so they are expressed as a factor rather than picked - the
+     * same reasoning as {@link #mix}, which stores a distance between roles rather than a colour.
+     *
+     * <p>Scaling brightness rather than mixing towards white or black is what keeps this working in
+     * every mood. Mixing towards white flattens a light mood's bevel away entirely, because the
+     * face is already near white; scaling is relative to whatever the face happens to be.
+     *
+     * @param role   the role to transform
+     * @param factor brightness multiplier - below 1 darkens, above 1 lightens, clamped at both ends
+     * @return the transformed colour, snapped back onto the GBA grid
+     */
+    public Color shaded(PaletteRole role, double factor) {
+        return GbaColor.snap(color(role).deriveColor(0, 1, Math.max(0d, factor), 1));
+    }
+
+    /**
+     * Returns a role's colour moved towards white.
+     *
+     * <p>{@link #shaded} cannot lift a colour that is already at full brightness, and the yellow
+     * this interface uses for {@link PaletteRole#PRIMARY} is exactly that: scaling its brightness
+     * up does nothing at all and the highlight silently disappears. A highlight on a colour that
+     * bright has to come out of its saturation instead.
+     *
+     * @param role   the role to transform
+     * @param amount 0 leaves the colour alone, 1 takes it to white
+     * @return the transformed colour, snapped back onto the GBA grid
+     */
+    public Color tinted(PaletteRole role, double amount) {
+        double t = Math.clamp(amount, 0d, 1d);
+        return GbaColor.snap(color(role).deriveColor(0, 1 - t, 1 + t, 1));
+    }
+
     /** @return the palette's human-readable name */
     public String name() {
         return name;
@@ -129,7 +165,11 @@ public final class Palette {
     public static Palette defaultPalette() {
         Map<PaletteRole, Color> colors = new EnumMap<>(PaletteRole.class);
         colors.put(PaletteRole.BACKGROUND, GbaColor.web("#12121c"));
-        colors.put(PaletteRole.BACKGROUND_ALT, GbaColor.web("#1c1b35"));
+        // A clear step above SURFACE rather than the #1c1b35 this started as. The two differ by
+        // less than one 5-bit level, so they snapped to the same colour and the alternating table
+        // rows they are the two halves of were not alternating at all - invisible while the
+        // stylesheet still held its own unsnapped literals, and inherited the moment it stopped.
+        colors.put(PaletteRole.BACKGROUND_ALT, GbaColor.web("#211f3e"));
         colors.put(PaletteRole.SURFACE, GbaColor.web("#1a1930"));
         colors.put(PaletteRole.SURFACE_RAISED, GbaColor.web("#2a2750"));
         colors.put(PaletteRole.OUTLINE, GbaColor.web("#443e7a"));

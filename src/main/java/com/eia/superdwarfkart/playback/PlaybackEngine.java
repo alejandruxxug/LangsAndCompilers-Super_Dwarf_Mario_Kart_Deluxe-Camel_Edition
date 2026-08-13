@@ -55,6 +55,14 @@ public class PlaybackEngine implements PlaybackListener, AutoCloseable {
     private BiConsumer<Song, String> onFailure = (song, message) -> { };
 
     /**
+     * Told when a play is counted, so a history can record it.
+     *
+     * <p>A callback rather than a history of its own: this class starts and stops audio, and what
+     * anybody wants to do with the fact that a song began is not its business.
+     */
+    private Consumer<Song> onPlayCounted = song -> { };
+
+    /**
      * Wires a player to an audio source, running callbacks on the calling thread.
      *
      * @param player the running order to follow; must not be {@code null}
@@ -237,6 +245,9 @@ public class PlaybackEngine implements PlaybackListener, AutoCloseable {
             // Announced so the table and the statistics follow; the player deliberately ignores an
             // edit, so this cannot disturb the running order.
             player.library().update(song);
+            // The same instant the count goes up is the one the history wants: a song that was
+            // loaded and never started did not play, and one that was resumed did not play twice.
+            onPlayCounted.accept(song);
         }
     }
 
@@ -316,6 +327,19 @@ public class PlaybackEngine implements PlaybackListener, AutoCloseable {
      */
     public void setOnFailure(BiConsumer<Song, String> handler) {
         this.onFailure = Objects.requireNonNull(handler, "handler must not be null");
+    }
+
+    /**
+     * Sets what to do when a play is counted.
+     *
+     * <p>Fires exactly once per song actually started - not when one is loaded, and not when a
+     * paused one is resumed - which is the same moment the song's play count goes up. Called on the
+     * thread that started the audio.
+     *
+     * @param handler receives the song that started; must not be {@code null}
+     */
+    public void setOnPlayCounted(Consumer<Song> handler) {
+        this.onPlayCounted = Objects.requireNonNull(handler, "handler must not be null");
     }
 
     /** Stops playback and releases the audio output. */

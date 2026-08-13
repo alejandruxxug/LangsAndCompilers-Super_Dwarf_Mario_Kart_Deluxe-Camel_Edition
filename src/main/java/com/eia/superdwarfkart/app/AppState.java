@@ -4,6 +4,8 @@ import com.eia.superdwarfkart.game.SpeedClass;
 import com.eia.superdwarfkart.model.ModeId;
 import com.eia.superdwarfkart.model.Racer;
 import com.eia.superdwarfkart.model.Song;
+import com.eia.superdwarfkart.mood.Mood;
+import com.eia.superdwarfkart.mood.Moods;
 import com.eia.superdwarfkart.playback.PlaybackListener;
 import com.eia.superdwarfkart.playback.PlaybackMode;
 import javafx.beans.property.ObjectProperty;
@@ -33,6 +35,8 @@ public class AppState implements PlaybackListener {
             new SimpleObjectProperty<>(this, "racer", Racer.defaultRacer());
     private final ObjectProperty<SpeedClass> speedClass =
             new SimpleObjectProperty<>(this, "speedClass", SpeedClass.defaultClass());
+    private final ObjectProperty<Mood> mood =
+            new SimpleObjectProperty<>(this, "mood", Moods.defaultMood());
 
     /** @return the song currently playing, or {@code null} */
     public ReadOnlyObjectProperty<Song> currentSongProperty() {
@@ -98,6 +102,34 @@ public class AppState implements PlaybackListener {
      */
     public void setSpeedClass(SpeedClass selected) {
         speedClass.set(selected == null ? SpeedClass.defaultClass() : selected);
+    }
+
+    /**
+     * The look the whole application draws with.
+     *
+     * <p>Shared for the same reason the racer is, and more so: a mood is not a property of a
+     * window. Both windows are bound here, so switching mood restyles the companion strip and the
+     * fullscreen stage in the same instant rather than leaving whichever one is hidden to catch up
+     * when it is next shown.
+     *
+     * @return the active mood
+     */
+    public ObjectProperty<Mood> moodProperty() {
+        return mood;
+    }
+
+    /** @return the active mood */
+    public Mood getMood() {
+        return mood.get();
+    }
+
+    /**
+     * Sets the active mood.
+     *
+     * @param selected the mood to use; {@code null} restores the default
+     */
+    public void setMood(Mood selected) {
+        mood.set(selected == null ? Moods.defaultMood() : selected);
     }
 
     /**

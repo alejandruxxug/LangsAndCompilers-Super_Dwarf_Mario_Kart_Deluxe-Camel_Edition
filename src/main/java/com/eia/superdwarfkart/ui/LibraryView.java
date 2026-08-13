@@ -455,6 +455,27 @@ public class LibraryView extends BorderPane {
         table.refresh();
     }
 
+    /**
+     * Shows only the songs marked as favourites, or all of them.
+     *
+     * <p>The side rail's Favorites destination is this view with the filter turned on, rather than
+     * a second table beside it. Favourites are a <em>filter over the library</em>, not a separate
+     * collection: a second view would need its own search, its own sorting, its own rating control
+     * and its own rank badges, and every one of them would be a copy that could drift. The user
+     * still sees the checkbox move, which is the honest thing - the rail did something they could
+     * have done themselves.
+     *
+     * @param only whether to restrict the table to favourites
+     */
+    public void setFavoritesOnly(boolean only) {
+        favoritesOnly.setSelected(only);
+    }
+
+    /** @return whether the table is currently restricted to favourites */
+    public boolean isFavoritesOnly() {
+        return favoritesOnly.isSelected();
+    }
+
     private static TableColumn<Song, String> column(String title, double width,
                                                     java.util.function.Function<Song, String> value) {
         TableColumn<Song, String> col = new TableColumn<>(title);

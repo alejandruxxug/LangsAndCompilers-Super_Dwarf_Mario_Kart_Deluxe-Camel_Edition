@@ -1,5 +1,8 @@
 package com.eia.superdwarfkart.model;
 
+import java.util.Arrays;
+import java.util.Optional;
+
 /**
  * A selectable racer.
  *
@@ -39,6 +42,23 @@ public enum Racer {
     /** @return the racer selected when the application has no stored preference */
     public static Racer defaultRacer() {
         return MARIO;
+    }
+
+    /**
+     * Resolves a stored racer name.
+     *
+     * <p>{@link #valueOf} would throw on a name this build does not know, which is a plausible
+     * thing to find in a profile written by a later version - and no reason at all to refuse to
+     * open. An unknown name is simply absent, and the caller keeps its default.
+     *
+     * @param name the constant name to resolve; {@code null} yields an empty result
+     * @return the racer with that name, if there is one
+     */
+    public static Optional<Racer> byName(String name) {
+        if (name == null) {
+            return Optional.empty();
+        }
+        return Arrays.stream(values()).filter(racer -> racer.name().equals(name)).findFirst();
     }
 
     @Override
