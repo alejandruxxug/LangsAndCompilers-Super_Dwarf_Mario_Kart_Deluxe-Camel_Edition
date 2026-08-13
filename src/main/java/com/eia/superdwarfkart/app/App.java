@@ -17,6 +17,7 @@ import com.eia.superdwarfkart.game.RunnerGame;
 import com.eia.superdwarfkart.game.SpeedClass;
 import com.eia.superdwarfkart.model.Library;
 import com.eia.superdwarfkart.model.ModeId;
+import com.eia.superdwarfkart.model.Racer;
 import com.eia.superdwarfkart.model.Song;
 import com.eia.superdwarfkart.persistence.LibraryRepository;
 import com.eia.superdwarfkart.persistence.PersistenceException;
@@ -34,6 +35,7 @@ import com.eia.superdwarfkart.ui.ComplexityPanel;
 import com.eia.superdwarfkart.ui.Fonts;
 import com.eia.superdwarfkart.ui.LevelMeterView;
 import com.eia.superdwarfkart.ui.LibraryView;
+import com.eia.superdwarfkart.ui.MiniPlayerView;
 import com.eia.superdwarfkart.ui.PixelDialog;
 import com.eia.superdwarfkart.ui.PlaybackBar;
 import com.eia.superdwarfkart.ui.RunnerView;
@@ -57,7 +59,9 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
+import javafx.scene.paint.Color;
 import javafx.stage.Stage;
+import javafx.stage.StageStyle;
 import javafx.util.Duration;
 
 import java.util.List;
@@ -127,6 +131,22 @@ public class App extends Application {
     private static final KeyCode RACE_KEY = KeyCode.F6;
 
     /**
+     * Function key that swaps the whole window for the companion strip, and back.
+     *
+     * <p>The same key in both directions, in both windows: it is one toggle, and a mode you leave
+     * with a different key from the one that put you in it is a mode people get stuck in.
+     */
+    private static final KeyCode MINI_KEY = KeyCode.F7;
+
+    /**
+     * Function key that puts the companion window's artwork away, leaving the song and the transport.
+     *
+     * <p>Only meaningful while that window is on screen, so it is wired to its scene rather than to
+     * the main one's.
+     */
+    private static final KeyCode COMPACT_KEY = KeyCode.F8;
+
+    /**
      * Where into the track the runner is drawn for its screenshot, in seconds.
      *
      * <p>Far enough in that a track which opens quietly has got going.
@@ -164,8 +184,20 @@ public class App extends Application {
     private PresentationView presentation;
     private boolean presenting;
 
+    private Stage mainStage;
+    private Stage miniStage;
+    private MiniPlayerView miniPlayer;
+    private Button miniToggle;
+
+    /** Whether the companion window has been given a position yet; it keeps its own afterwards. */
+    private boolean miniPlaced;
+
+    /** Whether the runner's frame loop was running when the main window was put away. */
+    private boolean runnerWasRunning;
+
     @Override
     public void start(Stage stage) {
+        this.mainStage = stage;
         boolean pixelFont = Fonts.load();
 
         // Scanned here rather than on first sprite lookup, so that the summary and any warning
@@ -344,6 +376,9 @@ public class App extends Application {
             } else if (event.getCode() == RACE_KEY) {
                 toggleRace();
                 event.consume();
+            } else if (event.getCode() == MINI_KEY) {
+                collapseToCompanion();
+                event.consume();
             } else if (event.getCode() == KeyCode.ESCAPE && presenting) {
                 togglePresentation(scene);
                 event.consume();
@@ -440,7 +475,21 @@ public class App extends Application {
         viewToggle.setOnAction(event -> toggleRace());
         updateViewToggle();
 
-        HBox header = new HBox(14, name, spacer, viewToggle, version);
+        miniToggle = new Button("F7 MINI");
+        miniToggle.getStyleClass().add("view-toggle");
+        miniToggle.setTooltip(new Tooltip(
+                "Put this window away and keep the music on a companion strip\nF7"));
+        miniToggle.setOnAction(event -> collapseToCompanion());
+
+        // Neither of these takes keyboard focus. They are shortcuts to the two function keys
+        // printed on them, so focus buys them nothing - and whichever of them held it would be the
+        // node that answered the first space bar of the session, which is the same fault that left
+        // the runner's jump dead: a control quietly eating the key play/pause is meant to get.
+        // Being first in the header, that would be the one collapsing the whole window.
+        miniToggle.setFocusTraversable(false);
+        viewToggle.setFocusTraversable(false);
+
+        HBox header = new HBox(14, name, spacer, miniToggle, viewToggle, version);
         header.setAlignment(Pos.CENTER_LEFT);
         header.setPadding(new Insets(14, 16, 14, 16));
         header.getStyleClass().add("app-header");
@@ -494,6 +543,190 @@ public class App extends Application {
         if (viewToggle != null) {
             viewToggle.setText(racing ? "F6 LIBRARY" : "F6 RACE");
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Companion mode
+    // ------------------------------------------------------------------
+
+    /**
+     * Puts the main window away and leaves the companion strip in its place.
+     *
+     * <p>The music does not stop, pause or restart: the engine has no idea either window exists.
+     * That is the whole point of the mode, and it is what makes the two windows worth calling one
+     * application rather than two - they are both looking at the same {@link AppState} and the same
+     * {@link PlaybackEngine}.
+     *
+     * <p><strong>The companion is shown before the main window is hidden, and the order is not
+     * cosmetic.</strong> JavaFX exits when the last window is hidden, so hiding this one first with
+     * nothing else on screen would close the application instead of collapsing it.
+     */
+    private void collapseToCompanion() {
+        if (miniStage == null) {
+            buildCompanion();
+        }
+        if (miniStage.isShowing()) {
+            return;
+        }
+        if (!miniPlaced) {
+            placeCompanion();
+            miniPlaced = true;
+        }
+        miniStage.show();
+        miniPlayer.start();
+        suspendMainViews();
+        mainStage.hide();
+    }
+
+    /**
+     * Brings the main window back and puts the companion strip away.
+     *
+     * <p>The same ordering rule as above, in reverse.
+     */
+    private void expandFromCompanion() {
+        if (miniStage == null || !miniStage.isShowing()) {
+            return;
+        }
+        mainStage.show();
+        mainStage.toFront();
+        resumeMainViews();
+        miniPlayer.stop();
+        miniStage.hide();
+    }
+
+    /**
+     * Builds the companion window, once, on the first time it is asked for.
+     *
+     * <p>Transparent and undecorated, like every other window here, and <strong>deliberately not
+     * owned by the main window</strong>: an owned window is hidden along with its owner, which is
+     * precisely the moment this one has to stay on screen.
+     *
+     * <p>It is kept on top because that is what a companion is for - it exists to be visible while
+     * the user is doing something else, and one that disappears behind a browser is a window they
+     * have to go and find.
+     */
+    private void buildCompanion() {
+        miniStage = new Stage(StageStyle.TRANSPARENT);
+        // Never AppConfig.APP_NAME: at 44 characters it is wider than this whole window.
+        miniStage.setTitle(AppConfig.APP_NAME_SHORT);
+        miniStage.setResizable(false);
+        miniStage.setAlwaysOnTop(true);
+
+        miniPlayer = new MiniPlayerView(state, player, engine, assets, beatmaps, miniStage);
+        miniPlayer.setOnExpand(this::expandFromCompanion);
+        miniPlayer.setOnQuit(Platform::exit);
+
+        Scene scene = new Scene(miniPlayer);
+        // The stage is transparent, so the window's visible edge is the border the strip draws.
+        scene.setFill(Color.TRANSPARENT);
+        Theme.apply(scene);
+        installCompanionShortcuts(scene);
+
+        miniStage.setScene(scene);
+        // Sized to its content, so the card and the record can never be clipped by a fixed number
+        // that stopped matching. The pass has to come first: before CSS is applied the labels are
+        // measured in the wrong font, and the window would be built around those measurements.
+        miniPlayer.applyCss();
+        miniPlayer.layout();
+        miniStage.sizeToScene();
+    }
+
+    /**
+     * Wires the companion window's keys.
+     *
+     * <p>Split across the two phases exactly as the main window's are, and for the same reason. The
+     * expand key runs in a filter so it works wherever the pointer left the focus; the transport
+     * keys run as a handler, so anything that wanted them first still gets them.
+     *
+     * @param scene the companion scene
+     */
+    private void installCompanionShortcuts(Scene scene) {
+        scene.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
+            if (event.getCode() == MINI_KEY || event.getCode() == KeyCode.ESCAPE) {
+                expandFromCompanion();
+                event.consume();
+            } else if (event.getCode() == COMPACT_KEY) {
+                miniPlayer.setCompact(!miniPlayer.isCompact());
+                event.consume();
+            }
+        });
+        scene.addEventHandler(KeyEvent.KEY_PRESSED, event -> {
+            switch (event.getCode()) {
+                case LEFT, TRACK_PREV -> {
+                    player.previous();
+                    event.consume();
+                }
+                case RIGHT, TRACK_NEXT -> {
+                    player.next();
+                    event.consume();
+                }
+                case SPACE, PLAY, PAUSE -> {
+                    engine.toggle();
+                    miniPlayer.refresh();
+                    event.consume();
+                }
+                default -> {
+                    // Not a transport key; leave it alone.
+                }
+            }
+        });
+    }
+
+    /**
+     * Puts the companion strip over the middle of the window it is replacing, the first time only.
+     *
+     * <p>Where the user was already looking, rather than a corner they have to hunt for. Afterwards
+     * the window keeps whatever position they dragged it to - a hidden stage remembers its own - so
+     * this runs once and never moves it again.
+     */
+    private void placeCompanion() {
+        if (mainStage == null || !mainStage.isShowing()) {
+            miniStage.centerOnScreen();
+            return;
+        }
+        // The window's own measured size, not the nominal constants: it is sized to its content.
+        miniStage.setX(mainStage.getX() + (mainStage.getWidth() - miniStage.getWidth()) / 2);
+        miniStage.setY(mainStage.getY() + (mainStage.getHeight() - miniStage.getHeight()) / 2);
+    }
+
+    /**
+     * Stops everything the main window was drawing.
+     *
+     * <p>An {@code AnimationTimer} does not stop because the window it draws into was hidden - it is
+     * driven by the toolkit's pulse, and the companion strip keeps that running. Left alone, four
+     * canvases would carry on recording draw commands for a window nobody can see, on the one
+     * arrangement where the application is expected to sit in the background for a whole album.
+     *
+     * <p>Stopping the runner also <em>files</em> whatever the run had achieved, which is the same
+     * thing closing the window does and is the right answer to the same question: collapsing to the
+     * companion is leaving the race, because there is no longer a road to look at.
+     */
+    private void suspendMainViews() {
+        meters.stop();
+        beatmapTimeline.stop();
+        playbackBar.stopClock();
+        if (visualizer.view() != null) {
+            visualizer.view().stop();
+        }
+        runnerWasRunning = runner.isRunning();
+        if (runnerWasRunning) {
+            runner.stop();
+        }
+    }
+
+    /** Picks all of it back up, and brings the bar in step with whatever happened while it was away. */
+    private void resumeMainViews() {
+        meters.start();
+        beatmapTimeline.start();
+        playbackBar.startClock();
+        playbackBar.refresh();
+        if (visualizer.view() != null) {
+            visualizer.view().start();
+        }
+        if (runnerWasRunning) {
+            runner.start();
+        }
+        libraryView.refreshBadges();
     }
 
     /**
@@ -573,6 +806,7 @@ public class App extends Application {
         reportBeatmap();
         reportCourse();
         reportRunner(scene);
+        boolean companionOk = reportCompanion();
         System.out.println("[smoke] assets found      : " + assets.size());
         System.out.println("[smoke] asset manifest    : " + assets.manifestFile());
         // Decodes each sheet, which normal startup does not do. Worth it here: how a sheet gets
@@ -598,7 +832,8 @@ public class App extends Application {
                 && visualizer.view() != null
                 && visualizer.view().modeId() == player.mode().id()
                 && arrowWorks
-                && tabWorks;
+                && tabWorks
+                && companionOk;
         System.out.println("[smoke] RESULT            : " + (ok ? "PASS" : "FAIL"));
 
         PauseTransition close = new PauseTransition(Duration.seconds(2));
@@ -837,6 +1072,196 @@ public class App extends Application {
         return chosen < 0 ? fallback : chosen - course.travelTimeSeconds() * 0.25;
     }
 
+    /**
+     * Opens the companion window, checks what no picture of it could, and collapses it again.
+     *
+     * <p>Four things here are invisible to both a unit test and a screenshot.
+     *
+     * <ul>
+     *   <li><strong>The name.</strong> {@link AppConfig#APP_NAME} is 44 characters, and in a font
+     *       whose glyphs are one em wide that is most of a 420 pixel window. Leaking it into this
+     *       strip is the documented trap, and it is invisible until the window is on screen - so
+     *       every label in it is read back and checked, rather than trusted.</li>
+     *   <li><strong>Overflow.</strong> The whole layout is built from widths that have to add up to
+     *       the window, and nothing throws when they do not: the text simply runs out of the side.
+     *       The measured size is printed against the two constants, and every label is checked
+     *       against the window's edge.</li>
+     *   <li><strong>The record turning.</strong> A picture of a spinning disk is a static disk. Two
+     *       moments are asked for and compared, which is also the check that it <em>stops</em>: the
+     *       frame is a function of the playback position, so a position that stops advancing is a
+     *       record that stops.</li>
+     *   <li><strong>The shared state.</strong> Changing the racer has to change the sprite riding
+     *       the disk immediately. That is one binding, and a binding that was never made looks
+     *       exactly like one that was.</li>
+     * </ul>
+     *
+     * @return whether everything checked here held
+     */
+    private boolean reportCompanion() {
+        collapseToCompanion();
+        Scene scene = miniStage.getScene();
+        scene.getRoot().applyCss();
+        scene.getRoot().layout();
+
+        System.out.println("[smoke] companion shown   : " + miniStage.isShowing()
+                + ", main window hidden: " + !mainStage.isShowing());
+        System.out.printf("[smoke] companion size    : %.0f x %.0f  (nominal %.0f x %.0f)  %s%n",
+                miniStage.getWidth(), miniStage.getHeight(),
+                AppConfig.MINI_WIDTH, AppConfig.MINI_HEIGHT,
+                miniStage.getWidth() <= AppConfig.MINI_WIDTH + 1
+                        && miniStage.getHeight() <= AppConfig.MINI_HEIGHT + 1
+                        ? "- fits" : "- OVERFLOWS ITS CONSTANTS");
+
+        String longName = null;
+        String widest = "";
+        double overrun = 0;
+        for (javafx.scene.Node node : scene.getRoot().lookupAll(".label")) {
+            if (!(node instanceof Label label)) {
+                continue;
+            }
+            String text = label.getText();
+            if (text != null && text.contains(AppConfig.APP_NAME)) {
+                longName = text;
+            }
+            double right = label.localToScene(label.getBoundsInLocal()).getMaxX();
+            if (right - scene.getWidth() > overrun) {
+                overrun = right - scene.getWidth();
+                widest = text;
+            }
+        }
+        boolean nameOk = longName == null;
+        System.out.println("[smoke] companion name    : "
+                + (nameOk ? "short name only - APP_NAME kept out" : "APP_NAME LEAKED: " + longName));
+        System.out.println("[smoke] companion labels  : " + (overrun <= 0
+                ? "all inside the window"
+                : String.format("\"%s\" RUNS %.0f px PAST THE EDGE", widest, overrun)));
+
+        // Two moments of the record, and then the same moment twice.
+        int first = miniPlayer.previewAt(0);
+        int later = miniPlayer.previewAt(0.5);
+        int again = miniPlayer.previewAt(0.5);
+        boolean spins = first != later && later == again;
+        System.out.println("[smoke] companion disk    : frame " + first + " -> " + later
+                + (spins ? ", and still at " + again + " when the position does not move"
+                        : "  DOES NOT FOLLOW THE POSITION"));
+
+        // The sprite riding the disk comes from the shared state, not from a copy of it.
+        Racer wasRacer = state.getRacer();
+        var beforeSheet = miniPlayer.racerSheet();
+        Racer other = wasRacer == Racer.MARIO ? Racer.YOSHI : Racer.MARIO;
+        state.setRacer(other);
+        boolean racerBound = miniPlayer.racerSheet() != beforeSheet;
+        System.out.println("[smoke] companion racer   : " + wasRacer + " -> " + other
+                + (racerBound ? "  sprite followed the shared state" : "  SPRITE DID NOT FOLLOW"));
+        state.setRacer(wasRacer);
+
+        // The song sits on the cartridge's label, whose size comes from the artwork rather than from
+        // this code. Contents too tall for it are not clipped - they carry on down over the grey
+        // body, still inside the window, so every other check here passes while it looks broken.
+        var panel = miniPlayer.labelBounds();
+        double overflow = miniPlayer.labelOverflow();
+        boolean labelOk = overflow <= 0 && miniPlayer.labelShortfall() <= 0
+                && Math.abs(miniPlayer.inletMisalignment()) <= 2;
+        System.out.printf("[smoke] companion label   : %.0f x %.0f measured off the artwork%s%n",
+                panel.getWidth(), panel.getHeight(),
+                overflow > 0
+                        ? String.format("  - CONTENT OVERFLOWS IT BY %.0f px", overflow)
+                        : miniPlayer.labelShortfall() > 0
+                                ? String.format("  - NARROWER THAN THE CAPTIONS ASSUME BY %.0f px",
+                                        miniPlayer.labelShortfall())
+                                : "  - the song fits on it");
+
+        double titleSize = MiniPlayerView.titleSize();
+        double advance = com.eia.superdwarfkart.ui.Fonts.advance(titleSize);
+        System.out.printf("[smoke] companion glyph   : %.2f px per character at %.0fpx "
+                        + "(one em would be %.0f), scrolling title shows %d of a nominal %d%n",
+                advance, titleSize, titleSize,
+                miniPlayer.measuredMarqueeLimit(), MiniPlayerView.nominalMarqueeLimit());
+
+        double inlet = miniPlayer.inletMisalignment();
+        System.out.printf("[smoke] companion inlet   : %s%n", Math.abs(inlet) <= 2
+                ? "the cartridge's foot lines up with the record"
+                : String.format("OUT BY %.0f px - the artwork's step is not %s",
+                        inlet, "what the width was derived from"));
+
+        // The record overlaps the card's foot and the kart stands higher still, so whether the
+        // transport can actually be clicked is a real question - and the failure is mute. The
+        // buttons draw, they highlight on hover, and they do nothing.
+        var blocker = miniPlayer.blockingTheTransport();
+        boolean clickable = blocker == null;
+        System.out.println("[smoke] companion clicks  : " + (clickable
+                ? "transport is reachable by mouse"
+                : "BLOCKED BY " + blocker.getClass().getSimpleName()
+                        + " - the keys will draw and do nothing"));
+
+        // Space is the key this window is most likely to get wrong, and it is unconditional: a
+        // focused button swallows it before the transport ever sees it, which is exactly how the
+        // road's jump was found dead. Nothing here is focus-traversable for that reason.
+        boolean wasPlaying = engine.isPlaying();
+        fireKey(scene, KeyCode.SPACE);
+        boolean spaceReaches = engine.isPlaying() != wasPlaying;
+        System.out.println("[smoke] companion space   : " + (spaceReaches
+                ? (wasPlaying ? "playing -> paused" : "paused -> playing")
+                : "DID NOTHING - a control took it first"));
+        if (engine.isPlaying() != wasPlaying) {
+            // Left as it was found: the base screenshot is taken while audio is still flowing, and
+            // a picture of two meters that have fallen silent says nothing about either.
+            engine.toggle();
+        }
+
+        // The arrow only has somewhere to go if the running order does. By this point the smoke
+        // test has stepped a two-song queue to its end, and a disabled next control doing nothing
+        // is the queue behaving correctly rather than the key failing to arrive.
+        boolean canAdvance = player.canGoNext();
+        Song beforeKey = player.current();
+        fireKey(scene, KeyCode.RIGHT);
+        boolean arrowReaches = !canAdvance || player.current() != beforeKey;
+        System.out.println("[smoke] companion arrow   : " + (!canAdvance
+                ? "nothing to advance to - " + player.mode().structureName() + " is exhausted"
+                : arrowReaches ? "advances the song" : "DID NOTHING"));
+        boolean keysReach = spaceReaches && arrowReaches;
+
+        // Collapsing hides most of the window's contents, and the failure mode is a strip still the
+        // size of the whole cartridge with a hole where the artwork was - the toolkit does not shrink
+        // a window because its contents no longer fill it.
+        double fullWidth = miniStage.getWidth();
+        double fullHeight = miniStage.getHeight();
+        miniPlayer.setCompact(true);
+        miniStage.sizeToScene();
+        boolean shrank = miniStage.getWidth() < fullWidth && miniStage.getHeight() < fullHeight * 0.6;
+        boolean transportSurvived = miniPlayer.blockingTheTransport() == null;
+        System.out.printf("[smoke] companion compact : %.0f x %.0f -> %.0f x %.0f%s%s%n",
+                fullWidth, fullHeight, miniStage.getWidth(), miniStage.getHeight(),
+                shrank ? "" : "  - DID NOT SHRINK",
+                transportSurvived ? "" : "  - TRANSPORT UNREACHABLE");
+        miniPlayer.setCompact(false);
+        miniStage.sizeToScene();
+        boolean sizeRestored = Math.abs(miniStage.getWidth() - fullWidth) < 1
+                && Math.abs(miniStage.getHeight() - fullHeight) < 1;
+        boolean compactOk = shrank && transportSurvived && sizeRestored;
+        if (!sizeRestored) {
+            System.out.println("[smoke] companion compact : DID NOT COME BACK TO ITS FULL SIZE");
+        }
+
+        // Hide is the one control here whose behaviour belongs to the platform rather than to this
+        // application, and an undecorated transparent window is exactly the case where a window
+        // manager may decline to minimise. Reported rather than asserted for that reason - a dead
+        // button on one platform is worth knowing about and is not a reason to fail a build.
+        miniStage.setIconified(true);
+        boolean minimises = miniStage.isIconified();
+        miniStage.setIconified(false);
+        System.out.println("[smoke] companion hide    : "
+                + (minimises ? "minimises to the dock" : "REFUSED BY THE WINDOW MANAGER"));
+
+        expandFromCompanion();
+        boolean restored = mainStage.isShowing() && !miniStage.isShowing();
+        System.out.println("[smoke] companion expand  : "
+                + (restored ? "main window back, strip away" : "DID NOT SWAP BACK"));
+
+        return nameOk && overrun <= 0 && labelOk && spins && racerBound && clickable
+                && compactOk && keysReach && restored;
+    }
+
     /** How far ahead the scripted driver treats a bump as a reason to be elsewhere, in seconds. */
     private static final double DANGER_HORIZON_SECONDS = 0.2;
 
@@ -990,6 +1415,32 @@ public class App extends Application {
         writeScreenshot(scene, derivedPath(destination, "race"));
         state.setSpeedClass(SpeedClass.defaultClass());
         toggleRace();
+
+        // The companion window last, and from its own scene: it is a separate window, so the shot
+        // of the main one contains nothing of it. Drawn part way round the record rather than at
+        // frame zero, so the picture shows the disk mid-turn with the kart on it.
+        collapseToCompanion();
+        // Part way into the track, because a progress line at zero is a picture of an empty line
+        // and says nothing about whether it fills.
+        engine.seek(engine.duration().dividedBy(3));
+        miniPlayer.refresh();
+        Scene companion = miniStage.getScene();
+        companion.getRoot().applyCss();
+        companion.getRoot().layout();
+        miniPlayer.previewAt(0.5);
+        writeScreenshot(companion, derivedPath(destination, "mini"));
+
+        // And the compact strip, which is a different view of the same window rather than a smaller
+        // one - there is nothing of it in the shot above.
+        miniPlayer.setCompact(true);
+        miniStage.sizeToScene();
+        companion.getRoot().applyCss();
+        companion.getRoot().layout();
+        writeScreenshot(companion, derivedPath(destination, "mini-compact"));
+        miniPlayer.setCompact(false);
+        miniStage.sizeToScene();
+
+        expandFromCompanion();
     }
 
     /**
@@ -1108,6 +1559,9 @@ public class App extends Application {
         // closing the window is still a run, and the board only takes it if it beat what was there.
         if (runner != null) {
             runner.stop();
+        }
+        if (miniPlayer != null) {
+            miniPlayer.stop();
         }
         if (beatmapTimeline != null) {
             beatmapTimeline.stop();

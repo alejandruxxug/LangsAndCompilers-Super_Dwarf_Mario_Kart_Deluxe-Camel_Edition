@@ -301,7 +301,17 @@ public class PlaybackBar extends VBox {
     // The clock
     // ------------------------------------------------------------------
 
-    private void startClock() {
+    /**
+     * Starts the position readout.
+     *
+     * <p>Public and idempotent because the bar is stopped whenever the whole window goes away -
+     * collapsing to the companion strip hides it - and has to be picked up again when it comes
+     * back.
+     */
+    public final void startClock() {
+        if (clock != null) {
+            return;
+        }
         clock = new AnimationTimer() {
             @Override
             public void handle(long now) {

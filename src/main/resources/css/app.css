@@ -697,7 +697,11 @@
     -fx-text-fill: #ff5c5c;
 }
 
-/* The close button replaces the system one, so it has to be obvious. */
+/*
+ * Title bar buttons replace the system ones, so they have to be obvious. The red hover belongs to
+ * the closing button alone: the companion window puts hide and expand up here beside it, and those
+ * two are not destructive.
+ */
 .window-button {
     -fx-font-size: 9px;
     -fx-background-color: transparent;
@@ -709,6 +713,12 @@
 }
 
 .window-button:hover {
+    -fx-background-color: -sdmk-face-hover;
+    -fx-text-fill: -sdmk-yellow;
+    -fx-border-color: -sdmk-yellow;
+}
+
+.close-button:hover {
     -fx-background-color: #c0392b;
     -fx-text-fill: #ffffff;
     -fx-border-color: #ff8a7a;
@@ -1056,4 +1066,104 @@
 .race-ready {
     -fx-text-fill: -sdmk-cyan;
     -fx-alignment: center;
+}
+
+/* ------------------------------------------------------------------ */
+/* Companion window                                                    */
+/*                                                                     */
+/* A card standing on the spinning record, and nothing else. The root  */
+/* paints NOTHING: everything outside the card, the record and the     */
+/* three window buttons has to be see-through, and a fill of any kind  */
+/* here puts a rectangle back on the desktop. The card reuses          */
+/* .pixel-window so the frameless look does not fork into two.         */
+/* ------------------------------------------------------------------ */
+
+/*
+ * No background, and not "transparent" either - the two are different things here. A Region with a
+ * transparent fill is still picked, so the invisible corners of this window would swallow every
+ * click meant for whatever is behind it. No background at all means no picking, and the window
+ * catches the mouse only where it has something drawn.
+ */
+.mini-player {
+    -fx-background-color: null;
+}
+
+.mini-card {
+    -fx-cursor: move;
+}
+
+/*
+ * The compact strip wears .pixel-window for its frame and nothing else. Its padding is deliberately
+ * NOT set here: an author stylesheet outranks a value set in code, so a padding here would silently
+ * replace the one the layout measured its title against - and the title would be cut off with no
+ * indication anywhere of why.
+ */
+.mini-compact {
+    -fx-background-color: -sdmk-panel;
+}
+
+/*
+ * The drag surface over the part of the record hanging below the card. A fill is what makes a
+ * region pickable, so this one is transparent rather than absent - the opposite of .mini-player,
+ * which must not be picked at all.
+ */
+.mini-grip {
+    -fx-background-color: transparent;
+    -fx-cursor: move;
+}
+
+/*
+ * The window buttons float on the transparent ground, so unlike the dialogs' they need a fill of
+ * their own - a transparent button over a transparent stage is a border round a hole.
+ */
+.mini-actions .window-button {
+    -fx-background-color: -sdmk-panel-dark;
+}
+
+.mini-title {
+    -fx-font-size: 8px;
+    -fx-text-fill: -sdmk-text;
+}
+
+.mini-artist {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-text-dim;
+}
+
+.mini-time {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-text-faint;
+}
+
+/* A sunken track with a solid fill, drawn as two blocks rather than a gradient bar. */
+.mini-progress-track {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-border-color: -sdmk-bevel-dark -sdmk-edge -sdmk-edge -sdmk-bevel-dark;
+    -fx-border-width: 1;
+}
+
+.mini-progress-fill {
+    -fx-background-color: -sdmk-yellow;
+}
+
+/* The cover frame, matching the one in the library details column. */
+.mini-cover {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-border-color: -sdmk-edge;
+    -fx-border-width: 3;
+}
+
+/*
+ * The sleeve's stand-in. Worn alongside .cover-placeholder-label, which carries the colour: this
+ * only makes it small enough to fit.
+ */
+.mini-cover-label {
+    -fx-font-size: 8px;
+    -fx-line-spacing: 4px;
+}
+
+/* Three transport keys sharing 124 pixels, so they are far tighter than the main bar's. */
+.mini-transport .button {
+    -fx-font-size: 9px;
+    -fx-padding: 6 0 6 0;
 }

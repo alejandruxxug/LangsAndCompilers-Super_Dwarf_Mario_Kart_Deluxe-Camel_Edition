@@ -46,10 +46,6 @@ public class PixelDialog {
 
     private boolean accepted;
 
-    /** Offset between the pointer and the window origin while dragging. */
-    private double dragOffsetX;
-    private double dragOffsetY;
-
     /**
      * Creates a modal frameless dialog.
      *
@@ -109,15 +105,36 @@ public class PixelDialog {
         bar.getStyleClass().add("pixel-titlebar");
 
         // Without system chrome the window cannot be moved unless this is provided.
-        bar.setOnMousePressed(event -> {
-            dragOffsetX = event.getScreenX() - stage.getX();
-            dragOffsetY = event.getScreenY() - stage.getY();
-        });
-        bar.setOnMouseDragged(event -> {
-            stage.setX(event.getScreenX() - dragOffsetX);
-            stage.setY(event.getScreenY() - dragOffsetY);
-        });
+        dragBy(bar, stage);
         return bar;
+    }
+
+    /**
+     * Makes a node drag the window it belongs to, the way a system title bar would.
+     *
+     * <p>Every window this application opens is undecorated, so every one of them has to supply
+     * this. It lives here, and is called from here, so that there is one implementation rather than
+     * one per window - the companion strip drags itself through this method too.
+     *
+     * <p>The offset between the pointer and the window origin is taken on press and held for the
+     * duration of the drag. Without it the window jumps so that its corner lands under the pointer
+     * the moment the mouse moves.
+     *
+     * @param handle the node to drag by, usually a title bar; must not be {@code null}
+     * @param stage  the window it moves; must not be {@code null}
+     */
+    public static void dragBy(Node handle, Stage stage) {
+        java.util.Objects.requireNonNull(handle, "handle must not be null");
+        java.util.Objects.requireNonNull(stage, "stage must not be null");
+        double[] offset = new double[2];
+        handle.setOnMousePressed(event -> {
+            offset[0] = event.getScreenX() - stage.getX();
+            offset[1] = event.getScreenY() - stage.getY();
+        });
+        handle.setOnMouseDragged(event -> {
+            stage.setX(event.getScreenX() - offset[0]);
+            stage.setY(event.getScreenY() - offset[1]);
+        });
     }
 
     private HBox buildButtonBar() {

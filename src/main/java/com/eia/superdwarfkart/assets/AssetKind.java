@@ -30,6 +30,15 @@ public enum AssetKind {
     DISK("disk", "disc"),
 
     /**
+     * The cartridge the companion window is built on: the song information sits on its label.
+     *
+     * <p>Ahead of {@link #RACER} so that {@code cart} is tried before that kind's generic
+     * qualifiers, as every specific kind is - though the two do not actually collide, since
+     * {@code cartridge} contains neither {@code kart} nor {@code char}.
+     */
+    CARTRIDGE("cartridge", "cart"),
+
+    /**
      * Backdrop and furniture for the racer-select screen.
      *
      * <p><strong>Not the portraits.</strong> A racer's portrait is frame 3 of their own sheet -

@@ -87,6 +87,56 @@ public final class Fonts {
     private static final java.util.concurrent.ConcurrentHashMap<Double, Font> BY_SIZE =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * Returns how wide one character actually is at a size, in pixels.
+     *
+     * <p>The whole interface is laid out on the rule that this font advances about one em per glyph,
+     * and for deciding how many characters to <em>shorten</em> a caption to that is close enough -
+     * being a glyph out costs three dots nobody counts. It is not close enough for text that has to
+     * fit outright, like the companion window's scrolling title: there the difference between the
+     * nominal em and the real advance is the difference between a title that scrolls and one the
+     * label truncates a second time, and the second truncation looks exactly like a bug.
+     *
+     * <p>Measured once per size and remembered. Needs a toolkit, so callers must already be on the
+     * interface thread - which anything laying out text is.
+     *
+     * @param size point size
+     * @return the advance width of one character, falling back to the size itself if it cannot be
+     *         measured
+     */
+    public static double advance(double size) {
+        Double cached = ADVANCE_BY_SIZE.get(size);
+        if (cached != null) {
+            return cached;
+        }
+        double measured = size;
+        try {
+            // The difference between two lengths, not one length divided by its count. Layout
+            // bounds are the *ink*, so a single measurement is short by the first glyph's left
+            // bearing and the last one's right - which underestimates the advance, hands out a
+            // budget a character or two too generous, and truncates the very text this exists to
+            // fit. Subtracting one from the other cancels both ends.
+            javafx.scene.text.Text shorter = new javafx.scene.text.Text("M".repeat(10));
+            javafx.scene.text.Text longer = new javafx.scene.text.Text("M".repeat(20));
+            shorter.setFont(pixel(size));
+            longer.setFont(pixel(size));
+            double difference = longer.getLayoutBounds().getWidth()
+                    - shorter.getLayoutBounds().getWidth();
+            if (difference > 0) {
+                measured = difference / 10;
+            }
+        } catch (Exception e) {
+            LOG.warning("Could not measure the pixel font at " + size + "px: " + e
+                    + " - falling back to one em per glyph");
+        }
+        ADVANCE_BY_SIZE.put(size, measured);
+        return measured;
+    }
+
+    /** Measured advance widths, by size. See {@link #advance(double)}. */
+    private static final java.util.concurrent.ConcurrentHashMap<Double, Double> ADVANCE_BY_SIZE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     /** @return whether the bundled 8-bit font is in use rather than the fallback */
     public static boolean isPixelFontAvailable() {
         return load();

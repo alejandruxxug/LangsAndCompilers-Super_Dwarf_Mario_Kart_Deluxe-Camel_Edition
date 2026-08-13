@@ -236,6 +236,21 @@ public abstract class StructureView extends BorderPane {
     }
 
     /**
+     * Picks the frame timer back up for a view returning to the screen.
+     *
+     * <p>The counterpart of {@link #stop()}. Only a view that asked for an idle repaint needs one -
+     * a view that had settled has nothing to draw until something moves, and starting a timer for
+     * it would undo the whole point of settling. The view clock banks its elapsed time on stop and
+     * resumes from it, so a road picked back up here carries on scrolling from the phase it left
+     * rather than snapping back to the start.
+     */
+    public void start() {
+        if (idleFps > 0) {
+            ensureTimerRunning();
+        }
+    }
+
+    /**
      * Releases the frame timer, for a view being taken off screen.
      *
      * <p>A swapped-out view whose timer kept running would repaint a canvas nobody can see, once

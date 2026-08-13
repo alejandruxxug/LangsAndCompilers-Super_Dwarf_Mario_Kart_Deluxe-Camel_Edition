@@ -96,11 +96,24 @@ public final class AppConfig {
     // Windows
     // ------------------------------------------------------------------
 
-    /** Mini player width, in pixels. {@link #APP_NAME} does not fit here; use {@link #APP_NAME_SHORT}. */
-    public static final double MINI_WIDTH = 420;
+    /**
+     * Mini player width, in pixels: the width of the cartridge, which is the wider of the two things
+     * in that window and therefore what sets its size.
+     *
+     * <p>{@link #APP_NAME} comes nowhere near fitting here - it is three times this wide - which is
+     * why that window draws no application name at all.
+     */
+    public static final double MINI_WIDTH = 280;
 
-    /** Mini player height, in pixels. */
-    public static final double MINI_HEIGHT = 180;
+    /**
+     * Mini player height, in pixels.
+     *
+     * <p>The companion window is sized to its own content, and these two are the ceiling that
+     * content is checked against rather than the size it is forced to. The smoke test prints the
+     * measured size against both: overflow in a fixed-width pixel font is invisible to a unit test
+     * and unmistakable in a picture.
+     */
+    public static final double MINI_HEIGHT = 440;
 
     /**
      * Initial fullscreen-mode window width, in pixels.

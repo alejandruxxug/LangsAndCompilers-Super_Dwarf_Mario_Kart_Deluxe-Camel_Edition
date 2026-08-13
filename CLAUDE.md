@@ -23,9 +23,13 @@ live in `AppConfig` and are referenced everywhere instead of hardcoded strings:
 
 - **Package root:** `com.eia.superdwarfkart`
 - **Maven:** `groupId` `com.eia`, `artifactId` `super-dwarf-mario-kart-deluxe-camel-edition`
-- **`APP_NAME` must never reach the mini player.** At 44 characters in Press Start 2P it is
-  several times the width of that window. This overflow is invisible until the window is
-  actually rendered — watch for it.
+- **`APP_NAME` must never reach the mini player.** Measured, now that the window exists: it is
+  **43 characters**, which at 9px is 387px against a **card 124px wide** — three times over, and
+  wider than the 224px window itself. **So the companion window draws no application name at all**;
+  the record and the kart are the identity, and there is no room for anything else. This overflow is
+  invisible until the window is actually rendered, so it is checked two ways rather than watched for:
+  `MiniPlayerLayoutTest.fullNameWouldOverflow` holds the arithmetic, and the smoke test reads every
+  label back out of the live companion window and fails if the full name is in any of them.
 - Fullscreen mode opens on a Mario-Kart-style **title screen** showing `APP_NAME` in the
   8-bit font. The name is the joke; it deserves the screen real estate.
 
@@ -116,7 +120,7 @@ block (a bare `-D` on the Maven command line does **not** reach the app):
 | `-Dsdmk.home=/tmp/demo` | Use a scratch profile instead of `~/.superdwarfkart`. Seed a `library.json` there to demo against fake data without touching the user's real library. |
 | `-Dsdmk.diag=true` | Measure the runner's frame loop: achieved fps and frame-interval percentiles, the tick split, and the playback clock's own granularity. Prints a line every two seconds and draws a readout over the road. **`F3` toggles it live** (off → printed + overlay → printed only), which is the more useful of the two — a stutter somebody is watching can be measured while it happens. |
 | `-Djavafx.pulseLogger=true` | The toolkit's own per-phase frame log. Reach for this only when `sdmk.diag` says the frame interval is long but the tick is cheap, i.e. the time is going to the render thread or to layout rather than to anything this project wrote. |
-| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. Also writes `out-shuffle.png`, `out-arrival.png`, `out-alphabetical.png`, `out-presentation.png` and `out-race.png`, cycling the modes so all three structure views, Presentation Mode and the runner are captured — five of the six only exist once a mode has been selected or a key pressed, so one shot of the opening state proves nothing about them. |
+| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. Also writes `out-shuffle.png`, `out-arrival.png`, `out-alphabetical.png`, `out-presentation.png`, `out-race.png` and `out-mini.png`, cycling the modes so all three structure views, Presentation Mode, the runner and the companion window are captured — six of the seven only exist once a mode has been selected or a key pressed, so one shot of the opening state proves nothing about them. The companion shot is taken from **its own scene** (it is a separate window, so the main one's snapshot contains none of it) and after a seek a third of the way in, because a progress line at zero is a picture of an empty line. |
 
 **The smoke test plays about three seconds of the current song** and prints the measured L/R levels,
 so a run is audible. That is the point: the base screenshot is taken while audio is still flowing,
@@ -209,7 +213,9 @@ tooltips and dialogs are all rebuilt as hard-edged beveled blocks.
 | `Space` (`PLAY`, `PAUSE`) | play / pause |
 | `F5` | Presentation Mode on/off |
 | `F6` | swap the library for the runner, and back |
-| `Esc` | leave Presentation Mode |
+| `F7` | collapse to the companion strip, and back — **the same key in both windows** |
+| `F8` *(companion window)* | put the artwork away, leaving the song and the transport, and back |
+| `Esc` | leave Presentation Mode; on the companion strip, expand |
 | `→` / `Space` *(tree view focused)* | step through one edge of a traversal |
 | `←` / `→` / `A` / `D` *(road focused)* | change lane |
 | `Space` / `↑` / `W` *(road focused)* | jump |
@@ -217,8 +223,8 @@ tooltips and dialogs are all rebuilt as hard-edged beveled blocks.
 
 They are wired across **both phases of event delivery**, and the split is load-bearing:
 
-- **Filter** (runs first, wins everywhere) for `F5`, `Esc` and `Tab`. `Tab` is excused when a text
-  field has focus, where it belongs to the field.
+- **Filter** (runs first, wins everywhere) for `F5`, `F6`, `F7`, `Esc` and `Tab`. `Tab` is excused
+  when a text field has focus, where it belongs to the field.
 - **Handler** (runs last, only if nothing else wanted the key) for the transport keys. The library
   table uses the arrows for its selection, the search box for the caret, the tree view for its
   step-through, and **the runner to steer** — all four consume the event first, so the transport
@@ -226,6 +232,18 @@ They are wired across **both phases of event delivery**, and the split is load-b
   four break at once. `Space` is in this group for the same reason: it steps the tree when the tree
   has focus, jumps the kart when the road has focus, presses whichever button has focus, and only
   reaches play/pause when nothing else claimed it.
+
+**Which is why nothing that duplicates a function key may take keyboard focus.** The header's two
+toggles (`F7 MINI`, `F6 RACE`) and every control on the companion strip are
+`setFocusTraversable(false)`. The header sits at the top of the scene, so whichever of its buttons
+came first held focus from launch and would have answered the **first space bar of the session** —
+and with the mini toggle added, that meant the opening `Space` collapsing the whole window instead
+of starting the music. It is the same fault that left the runner's jump dead, in a different place:
+a control quietly eating the key play/pause is meant to get. These buttons have the key printed on
+them, so focus buys them nothing.
+
+**The companion window has the same two-phase split, for the same reasons.** `F7` and `Esc` are a
+filter so leaving works wherever the pointer left the focus; the transport keys are a handler.
 
 **The driving keys are a scene filter installed while the road is on screen — not a handler waiting
 for focus.** The first version needed the road to have keyboard focus, which is a condition the user
@@ -260,8 +278,11 @@ window goes through it; `javafx.scene.control.Alert` and `Dialog` are not used a
 
 This matches the mini player the brief specifies (`StageStyle.TRANSPARENT`, no title bar,
 custom hide/quit/expand buttons, draggable by the top bar) — the mini player is the same idea
-applied to the companion window, so M8 should build on `PixelDialog`'s drag handling rather
-than reinvent it.
+applied to the companion window, and M8 built on `PixelDialog`'s drag handling rather than
+reinventing it. **`PixelDialog.dragBy(Node, Stage)` is now that one implementation**, called by the
+dialogs' own title bar and by the companion strip's. Any future undecorated window uses it too;
+there must never be a second copy of those eight lines, because a window that cannot be moved is
+the one thing the missing chrome would actually be missed for.
 
 The **native file chooser is the one exception** — it belongs to the operating system and
 cannot be styled.
@@ -310,13 +331,28 @@ class, and active mood**. Both windows bind to it — changing the racer in full
 immediately change the sprite riding the disk in the mini player, and switching mood must
 restyle both at once. Same binding path for all five.
 
-**Mini / companion mode** (`StageStyle.TRANSPARENT`, no title bar):
-- Spinning disk with the racer sprite composited on top, "driving" while audio plays and
-  freezing when paused — **this is the play/pause indicator**.
-- Behind it an Apple-Music-style strip: cover, title, artist, back / play-pause / forward.
+**Mini / companion mode** (`StageStyle.TRANSPARENT`, no title bar) — **a game cartridge standing on
+the record, and nothing else**:
+- The card **is `Cartridge.png`**, darkened by `CARTRIDGE_SHADE`, and the song information sits on
+  its **black label**: cover, title, artist, progress, back / play-pause / forward. The label's
+  rectangle is measured off the artwork by `SpriteSheet.darkRegion`, never written down.
+- The cartridge's width comes from its own inlet, so its foot is exactly as wide as the record and
+  it reads as **plugged into** it; `CARTRIDGE_SEAT` then pushes it down into the record's slot.
+- **A compact view** (`F8`, or the `^` button) puts the cartridge, the record, the kart, the cover,
+  the progress line and the clock away, leaving the song's name and the three transport keys — 210 x
+  87 against the full 280 x 426. It is the state for a window parked in a corner, where the artwork
+  is the part costing screen space rather than the part earning it.
+- Underneath it the **spinning disk is a pedestal**, half again as wide as the card and breaking
+  out past both its edges, with the racer sprite driving on top — "driving" while audio plays and
+  freezing when paused, **this is the play/pause indicator**.
+- **Everything else is transparent.** No outer frame, no background panel, no rectangle around the
+  whole thing: what sits on the desktop is the shape of the artwork. The card keeps its own border
+  (it is `.pixel-window`, the same frame the dialogs draw); the root paints nothing.
 - Custom **hide, quit, expand** buttons — no OS chrome exists, so the window must supply them.
-- Draggable by the top bar (`setOnMousePressed` / `setOnMouseDragged` with offset tracking),
-  built on `PixelDialog`'s drag handling rather than reinvented.
+  They sit **on top**, above the card, on the transparent ground.
+- Draggable by the card and the record (`setOnMousePressed` / `setOnMouseDragged` with offset
+  tracking), built on `PixelDialog.dragBy` rather than reinvented. There is no title bar left to
+  drag by, so the body is the handle.
 
 **Fullscreen mode:**
 - **Top** — playback-mode selector + `ComplexityPanel` for the active mode.
@@ -326,6 +362,185 @@ restyle both at once. Same binding path for all five.
 - **Right** (wider, not an even split) — the 3-lane runner flanked by the L and R meter bars.
 - **Side rail** — Library, Favorites, History, Racer Select, **Moods**, Settings.
 - **Presentation Mode** (function key) — see §7.
+
+### As built (2026-08-13, M8)
+
+**The window is 224 × 394, measured — it is sized to its content and the constants are the ceiling
+it is checked against, not a size it is forced into.** The card is 140 wide with 124 of content, and
+every caption limit comes from `charBudget(CONTENT_WIDTH, fontSize)` rather than from a number
+somebody counted. This is the narrowest thing in the application, and in this font a caption that
+does not fit runs off the side while **nothing anywhere reports it** — so the smoke test measures the
+real window and reads every label back: the printed size against the constants, and every label's
+right edge against the window's.
+
+- **`-fx-background-color: null`, and `transparent` is not the same thing.** Two separate traps, one
+  line. Omitting the declaration does not give a transparent root — **Modena's own `.root` rule wins
+  and paints `#f4f4f4`**, which is a solid grey rectangle on the desktop where the design called for
+  nothing at all. And a `transparent` fill *is still a background*, so the region goes on being
+  picked and the window's invisible corners swallow every click meant for whatever is behind it.
+  Only `null` gives both: nothing drawn and nothing caught. Verified by reading the corner pixels'
+  alpha out of the screenshot, which is the only way to tell these three states apart — all of them
+  look identical in a viewer that composites onto white.
+- **Where the sprites go is measured off the artwork, not guessed.** `SpriteSheet.opaqueBounds(frame)`
+  was added for this: the record occupies the **lower 60%** of its frame with nothing above it, and
+  the racer's driving frames leave 14 transparent rows above the kart and 10 below. Placed by frame
+  rectangle the kart hovers in the air above a record whose top edge is nowhere near where the frame
+  says it is. So the kart stands on the middle of the record's own ink and the card's foot is covered
+  by the record's own top edge. This is knowledge about artwork, so it lives in `assets/` beside the
+  filename matching and the frame-count inference — and art with different margins needs no change
+  anywhere. Measured once per frame and cached; **never call it per repaint.**
+- **The window's whole shape follows from the artwork, and `DISK_SIZE` is the only knob.** The
+  cartridge is **full width down to source row 466 and then steps in 27 pixels a side**, so its
+  *inlet* — the foot it stands on — is 454 of 500. `CARD_TO_DISK_RATIO` is the inverse of that share,
+  which makes the inlet exactly as wide as the record: the cartridge reads as **plugged into** it
+  rather than balanced on it. Matching the cartridge's *widest* part instead leaves the record
+  narrower than the part actually resting on it, which is the version that looks like a mistake.
+- **`DISK_SIZE` is a request, not a promise.** The record is pixel art snapped to a whole multiple of
+  its 32px frame, so 254 draws at 256. `companion inlet` therefore compares the inlet against the
+  record **as drawn** — comparing against the request passes while the two visibly do not meet.
+  Set it to a multiple of 32 for an exact match; anything else is a pixel or two nobody can see.
+  `SpriteSheet.footprint(frame)` is what measures the real inlet, so replacement art that steps in
+  differently is reported rather than silently misaligned.
+- **The cartridge's width is also what decides how long a song title can be**, because the label is
+  only 48% of it and it is the window's width. At the current size the label is 133 and the title
+  fifteen characters; at the 200-wide cartridge this started on it was ten. Whatever the number, the
+  whole value is in the tooltip as it is everywhere else.
+- **The record's canvas is sized to what is drawn, not to what was asked for.** A 256px sprite
+  centred on a 254px canvas loses a pixel off each side; clipping artwork to honour a number nobody
+  can see is the wrong way round.
+- **The cartridge is darkened by one number**, `CARTRIDGE_SHADE`, as a brightness adjustment on the
+  one image rather than a repaint of it, so the grain and the moulded shading survive. It is the only
+  node effect in the application and it is cached, which is what makes it honest: the image never
+  changes, so it is rasterised once rather than recomposited on every frame the record draws — the
+  per-frame cost is the whole of what the warning against node effects is about.
+  **A negative brightness on `ColorAdjust` is a multiplier, not a subtraction** — measured, -0.28
+  took the shell's 113 to 81, which is ×0.72 and not −71. So the scale is proportional: it never
+  quite reaches black, and the label keeps its share of the distance instead of converging on the
+  shell. At -0.5 the shell reads 56 and the label 5.
+- **The label's contents are centred in it, not top-aligned.** The cover can only grow until it is as
+  wide as the label, so on a tall label there is height left that it cannot take. Piled up under the
+  transport that reads as a band somebody forgot to fill; split evenly it reads as a margin.
+- **The cover absorbs the slack.** It is the one thing on the label that can be any size, so
+  `fitCoverTo` measures everything else and gives it the difference — a number written down here
+  would be right for one font and quietly wrong for the fallback. Guarded against re-entry, because
+  setting sizes during layout asks for another layout.
+- **`ImageView` is not a resizable node.** `resizeRelocate` moved the cartridge and left it at the
+  artwork's own 500 pixels, which is most of a window three times narrower than that; it is sized by
+  `setFitWidth`/`setFitHeight` and only positioned by the layout.
+- **Content taller than the label is not clipped** — a `VBox` lets it run on down over the grey
+  body, still inside the window, so the check for labels inside the window catches none of it.
+  `companion label` reports the measured panel and the overflow.
+- **The cartridge is seated *into* the record, not stood on it.** `CARTRIDGE_SEAT` is 0.5 — half way
+  down the record's own ink, which is where its slot is and the same line the kart's wheels stand on.
+  The record is drawn in front of the cartridge, so its near half closes over the foot. Measured at
+  the join: rows 345–360 of the window are 256px wide, which is the record's widest band and the
+  cartridge's 254px inlet at once — you cannot see where one ends and the other starts, which is the
+  whole effect. A fraction of the ink rather than a pixel count, so it stays the same *position* if
+  the record is resized or the art replaced.
+- **`CARD_FOOT` is now only the fallback**, for the layout used when there is no cartridge art at
+  all.
+- **A title too long for the compact strip scrolls**, and one that fits sits still — motion carrying
+  no information is just something moving in the corner of the eye. The window is cut from the title
+  followed by a copy of itself, so it wraps seamlessly; in a fixed-width font a character is a whole
+  step, so it needs no measuring pass and can never land on half a glyph. It runs on **wall time**,
+  not the playback clock: a title that stopped moving when the music paused reads as a stuck window,
+  where a *rainbow* that stops reads as the beat stopping, which it has.
+- **The compact title is a rainbow walked in time with the track** — one step per beat, taken from
+  the beatmap's tempo, falling back to a fixed rate for the first seconds of a song nobody has
+  analysed yet. The colours are the runner's star's, made of **roles** for the same reason: reaching
+  for `Color.hsb` would put six colours into the interface that no mood could ever reach. It is
+  interpolated rather than stepped, with a small lift toward `TEXT_PRIMARY` peaking on the beat, so
+  the beat arrives as a swell in an already-moving colour and never as a flash — which is what keeps
+  it inside §8b's cap on beat reactivity. A hard colour switch per beat would not be.
+- **The kart is darkened by `RACER_SHADE`** in the full view. It is the one bright thing in a window
+  that is otherwise a dark cartridge on a dark record, and at full strength it read as pasted on.
+  Drawn through a `ColorAdjust` set on the `GraphicsContext` and **cleared straight afterwards** —
+  an effect left on the context shades whatever the next repaint draws first, which is the record.
+  Moods still must never tint sprite art; this is a fixed decision about one window's lighting, in
+  the same breath as `CARTRIDGE_SHADE`.
+- **The compact strip is wider than the cartridge's label**, which is the pleasant surprise in it:
+  with no cartridge to fit inside, the title gets the whole window rather than the 48% of it the
+  label is — twenty-five characters against fifteen. Compact is where long titles read best.
+- **CSS outranks a value set in code, and that cost three separate bugs in one sitting.** JavaFX
+  ranks an author stylesheet *above* a programmatic value (only an inline style beats it), so:
+  `title.setTextFill(rainbow)` did nothing at all — the title stayed perfectly legible in
+  `.mini-title`'s colour and the effect simply never appeared; and `.mini-compact { -fx-padding: 8 }`
+  silently replaced the padding the title had been measured against. **Colours that have to win are
+  set with `setStyle`; sizes the layout depends on are set in code and deliberately absent from the
+  stylesheet.**
+- **A border is part of a region's insets.** The compact strip is 210 wide and a child inside it gets
+  210 less the padding *and* less the 3px `.pixel-window` frame, twice. Six pixels the title thought
+  it had is exactly one glyph, and one glyph over is the difference between a title that scrolls and
+  one the label cuts short a second time — which looks like the marquee is broken rather than like
+  the arithmetic is.
+- **The font really does advance one em per glyph — measured, 8.00px at 8px.** `Fonts.advance(size)`
+  answers it for the one caption that has to fit outright rather than be ellipsized. Measuring it
+  needs care: layout bounds are the *ink*, so a single string is short by the bearings at both ends
+  and underestimates. It measures **the difference between two lengths**, which cancels them.
+- **Everything that spans the column is re-sized when the view changes** (`fitRowsTo`). The first
+  version was not, so the compact strip inherited the *label's* width: the title was cut at fourteen
+  characters where twenty-five fitted, and the transport huddled in the middle of a strip built to
+  hold it. Nothing overflowed and nothing threw — it quietly wasted most of the window it was given,
+  which is the failure mode this whole window keeps having and why so much of it is measured.
+- **The window is resized around the new contents.** A toolkit does not shrink a window because its
+  contents stopped filling it, so without `sizeToScene` the compact view is a full-size window with a
+  hole in it. `companion compact` prints both sizes and fails if it did not shrink, if the transport
+  stopped being clickable, or if it did not come back to exactly its old size.
+- **The record takes no mouse events at all, and that is not optional.** A `Canvas` is picked on its
+  whole rectangle whatever it has drawn in it, and this one is 224 square reaching a long way up over
+  the card — measured, it covers the transport row completely (canvas y 173–397, keys at y 220–249).
+  Left pickable it **silently swallowed every click on play, previous and next**: the keys still
+  highlighted on hover, because that is the card underneath, and then did nothing. Nothing throws, no
+  screenshot shows it, and the keyboard shortcuts kept working the whole time, so the smoke test's
+  `companion space` line stayed green through all of it. `disk.setMouseTransparent(true)`, and the
+  window is dragged by the card and by `recordGrip` — a transparent region over the part of the
+  record hanging *below* the card, where it cannot be in front of anything.
+  **`companion clicks` is the check**, and it was confirmed to fail when the flag is taken away
+  rather than merely to pass with it there.
+- **Three knobs adjust the kart**, all named and all in `MiniPlayerView`: `RACER_SHARE` (size, in
+  whole-number steps — 0.44 to 0.71 all land on 2x), `RECORD_SURFACE` (where on the record it
+  stands, as a fraction down the record's ink) and `RACER_LIFT` (how far above that it floats), plus
+  `RACER_NUDGE_X` sideways.
+- **The spinning disk freezes because the playback position does, and nothing is told to freeze.**
+  The disk frame and the kart's frame are both functions of `engine.positionSeconds()` through
+  `SmoothClock` — pause the card and the picture stops with it, exactly as the runner's road does.
+  The indicator and the audio cannot disagree because there is only one of them. `SmoothClock` is
+  here for its usual reason: a card reports whole buffers, and a record driven straight off one
+  jerks.
+- **`previewAt(seconds)` exists because this is unphotographable.** A still picture of a spinning
+  disk is a static disk, and the frame loop cannot be watched either — the smoke test holds the
+  interface thread, so no pulse arrives. Two different moments are asked for and compared, which is
+  simultaneously the check that it *stops*: same position in, same frame out.
+- **A missing cover gets the library's magenta placeholder, not an empty frame.** On a card this
+  small the cover is most of what there is to look at, and a bare outline reads as something that
+  failed to draw. It wears `cover-placeholder-label` for its colour and `mini-cover-label` only for
+  its size, so the two placeholders cannot drift apart and no new hex literal was added.
+- **The first version of this window was a landscape strip** — 420 × 190, cover and record side by
+  side with the text beside them. It worked and it was wrong: it read as a widget in a box. The
+  portrait card on a plinth is the design, and the difference is almost entirely that the record is
+  allowed out of the frame.
+- **The companion window has no owner, and it is shown before the main one is hidden.** An owned
+  window is hidden along with its owner, which is precisely the moment this one has to stay up; and
+  JavaFX exits when the last window is hidden, so the order is what separates collapsing the
+  application from closing it. Both are one line and neither fails loudly.
+- **Collapsing stops what the main window was drawing** — meters, beatmap timeline, playback clock,
+  structure view and runner. An `AnimationTimer` does not stop because its window was hidden; the
+  companion keeps the toolkit's pulse running, so five canvases would carry on recording draw
+  commands for a window nobody can see, on the one arrangement designed to sit in the background for
+  a whole album. `StructureView.start()` and `PlaybackBar.startClock()` were added as the
+  counterparts of the `stop()`s that already existed.
+- **Stopping the runner also files the run**, which is the same thing closing the window does and
+  the right answer to the same question: collapsing to the companion is leaving the race, because
+  there is no longer a road to look at.
+- **`Space` on the companion is checked by the smoke test and `→` is checked with its
+  precondition.** Space is the key a focused button steals, so nothing here is focus-traversable;
+  the arrow only has somewhere to go if the running order does, and a disabled next control doing
+  nothing is a drained queue behaving correctly rather than a key that failed to arrive. Reporting
+  that distinction is the difference between a check and a red light nobody trusts.
+- **Hide is reported, not asserted.** Minimising belongs to the window manager and an undecorated
+  transparent window is exactly where one may decline; on this machine it minimises to the dock. A
+  dead button on some other platform is worth knowing about and is not a reason to fail a build.
+- Screenshots of every view live in `docs/screenshots/`.
 
 ## 4. Package layout
 
@@ -1095,6 +1310,7 @@ manifest is absent, **write a template out on first run** populated with what wa
 | `Star.png` | 288×32 | 9 frames of 32×32 |
 | `Coin.png` | 32×32 | single frame |
 | `Mario/Luigi/Peach/Yoshi/Bowser.png` | 256×64 | 4 frames of 64×64 each |
+| `Cartridge.png` | 500×575 | 1 frame — the companion window's body; **not pixel art**, see below |
 
 **A racer sheet's four frames are not four steps of one animation** — see `assets/RacerFrame`:
 
@@ -1108,6 +1324,23 @@ Looping all four — which is what a generic `SpriteAnimation` over the sheet do
 kart between a side view, a rear view and a menu icon several times a second. Ask
 `RacerFrame.driving(seconds)` for the cycle rather than counting frames by hand, and mirror the
 sprite (`drawSprite(..., flipped)`) to face left; the art is drawn facing right only.
+
+**`Cartridge.png` is the one asset in the project that is not 8-bit pixel art, and it is scaled
+smoothly for that reason.** Measured: 500×575, **1830 colours, per-pixel grain across the whole
+body, not a single flat block** — a high-resolution illustration of an object, in the same category
+as album art, which this application has always scaled to fit. Ground rule 8 is about hand-drawn
+sprites, where interpolating between pixels placed one at a time reads as bad artwork; drawn at a
+whole number this would be 500px wide in a 224px window, and drawn at a fraction with smoothing off
+its ridges alias into moiré. Every real sprite — the record, the kart, everything in the runner —
+still goes through an integer scale with smoothing off. **Check this before adding the next asset
+that "looks like" a sprite**: `getcolors()` and a run-length scan answer it in seconds.
+
+**Where its label is, is measured rather than written down** — `SpriteSheet.darkRegion(frame)`
+returns the bounding box of the dark panel, which for this cartridge is 238×389 at (204, 3), i.e.
+48% of its width. It is **refused** rather than guessed when the result is not panel-shaped: under a
+fifth of the frame, over 0.7 of it, or a box the dark pixels do not fill. That bar is what stops the
+magenta placeholder — which is 88% near-black backing — from being reported as a perfectly good
+panel and having the song laid out over a missing-artwork marker.
 
 Still missing: background, obstacle/bump. These must resolve to magenta placeholders without
 breaking anything, and as of M7 they do — the runner draws a magenta X where a bump should be and
@@ -1426,7 +1659,7 @@ pane, the whole app is the preview.
 | M5 | ⭐ `LocalFileAudioSource`, real playback, PCM tap, independent L/R meters | ✅ done |
 | M6 | `BeatmapAnalyzer` + cache + debug view (BPM, onsets on a timeline) | ✅ done |
 | M7 | ⭐ 3-lane runner: lookahead spawning, coins, bumps, star, cc classes, scoring, beat pulse | ✅ done |
-| M8 | ⭐ Mini companion mode: transparent stage, disk + racer, expand/hide/quit | ⬜ |
+| M8 | ⭐ Mini companion mode: transparent stage, disk + racer, expand/hide/quit | ✅ done |
 | M9 | Sweep: favorites, history, statistics, keyboard shortcuts, **`DARK` + `LIGHT` moods and a switcher** — the dark-mode bonus ships as moods, not a boolean | ⬜ |
 | M11 | ⭐ **Mood system** — 16-color GBA palettes, gradient/image/procedural overlay layers, live customizer, 16×16 / 32×32 pixel editor, `.gpl` + `.hex` import, `MoodValidator`, presets | ⬜ |
 | M10 | *Optional:* `go-librespot` child process. Strictly additive — nothing in M0–M9 or M11 may import it | ⬜ |
@@ -1537,6 +1770,33 @@ Report the measured time and which model applies **before** implementing either.
 - Flattening the BST for in-order navigation is the single most likely shortcut to get caught.
 - Clean shutdown: stop the game loop, stop playback, drain and close the `SourceDataLine`,
   release the stage.
+- **Hiding the last visible window exits the application**, and swapping between the main window
+  and the companion is exactly where that bites. Show the new one first, always.
+- **An owned window is hidden with its owner.** The companion must not call `initOwner`.
+- **A control that duplicates a function key must not be focus-traversable**, or it answers the
+  first `Space` of the session instead of play/pause.
+- **CSS beats code.** An author stylesheet outranks a value set programmatically; only an inline
+  style outranks the stylesheet. A `setTextFill` that silently does nothing, and a `-fx-padding` that
+  silently replaces the one a layout measured against, are the two shapes this takes.
+- **A border is part of a region's insets**, so children get the width less padding *and* less the
+  border, twice.
+- **`-fx-background-color: transparent` is not the same as no background**, and *omitting* it is not
+  the same as either — Modena's `.root` then paints `#f4f4f4` over the lot. A transparent fill is
+  still picked, so an undecorated window's invisible corners eat clicks meant for the desktop. Use
+  `null`, and check the corner pixels' alpha in a screenshot: all three states look identical in any
+  viewer that composites onto white.
+- **A sprite frame is not the same shape as what is drawn in it.** Standing one sprite on another by
+  frame rectangle puts it in the air; ask `SpriteSheet.opaqueBounds(frame)` instead — and never per
+  repaint.
+- **`ImageView` is not resizable.** `resizeRelocate` positions it and leaves it at the artwork's own
+  size. Use `setFitWidth`/`setFitHeight`.
+- **Not every asset is pixel art.** Check before applying ground rule 8 to it: a flat-block sheet
+  wants an integer scale with smoothing off, a 1830-colour illustration wants to be fitted like
+  album art. `Cartridge.png` is the second kind and is the only one so far.
+- **A `Canvas` in front of a control eats its clicks**, over the canvas's whole rectangle, however
+  little it has drawn. The control still hovers and still does nothing, and the keyboard path keeps
+  working so every key-driven test stays green. `setMouseTransparent(true)` on any canvas that
+  overlaps something clickable.
 - **A hex literal anywhere outside `mood/`** — it looks harmless per site and turns M11 into a
   find-and-replace across a finished UI, which is where the feature gets abandoned.
 - **Smoothed pixel art.** JavaFX interpolates by default; the sprites turn to mush and it reads
