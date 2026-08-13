@@ -267,13 +267,24 @@ class AssetRegistryTest {
         }
 
         @Test
-        @DisplayName("the explosion the project has not drawn yet is reported as missing")
+        @DisplayName("asking for artwork that does not exist is answered, never thrown")
         void missingKindIsReportedNotThrown(@TempDir Path dir) {
-            // Ground rule: the application launches and is usable with no artwork at all. The
-            // explosion sheet does not exist yet, and asking for it must not be a failure.
+            // Ground rule 5: the application launches and is usable with no artwork at all, so
+            // every kind must be answerable whether the art has arrived or not.
+            //
+            // This used to name the explosion, on the grounds that the project had not drawn it
+            // yet - and it broke the day somebody dropped the file in, which is the one day the
+            // asset layer was working exactly as designed. A test that fails when art *arrives* is
+            // testing the contents of a folder, not the code. So it asks the question that is
+            // actually the rule, of every kind there is.
             AssetRegistry registry = AssetRegistry.scan(dir);
 
-            assertTrue(registry.firstEntry(AssetKind.EXPLOSION).isEmpty());
+            for (AssetKind kind : AssetKind.values()) {
+                assertNotNull(registry.sheet(kind),
+                        kind + " must resolve to a sheet - a placeholder if there is no artwork");
+                assertTrue(registry.sheet(kind).frameCount() >= 1,
+                        kind + " must have at least one frame to draw");
+            }
         }
     }
 }

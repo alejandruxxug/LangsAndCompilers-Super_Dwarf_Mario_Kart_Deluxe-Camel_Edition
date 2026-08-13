@@ -1,5 +1,6 @@
 package com.eia.superdwarfkart.app;
 
+import com.eia.superdwarfkart.game.SpeedClass;
 import com.eia.superdwarfkart.model.ModeId;
 import com.eia.superdwarfkart.model.Racer;
 import com.eia.superdwarfkart.model.Song;
@@ -21,8 +22,8 @@ import javafx.beans.property.SimpleObjectProperty;
  * on JavaFX, so {@link com.eia.superdwarfkart.playback.Player} publishes plain callbacks and
  * this class - which lives in {@code app/} and may - republishes them as properties.
  *
- * <p>Speed class and active mood join these properties at their milestones; the binding path is
- * the same for all of them.
+ * <p>The active mood joins these properties at its milestone; the binding path is the same for all
+ * of them.
  */
 public class AppState implements PlaybackListener {
 
@@ -30,6 +31,8 @@ public class AppState implements PlaybackListener {
     private final ObjectProperty<ModeId> modeId = new SimpleObjectProperty<>(this, "modeId");
     private final ObjectProperty<Racer> racer =
             new SimpleObjectProperty<>(this, "racer", Racer.defaultRacer());
+    private final ObjectProperty<SpeedClass> speedClass =
+            new SimpleObjectProperty<>(this, "speedClass", SpeedClass.defaultClass());
 
     /** @return the song currently playing, or {@code null} */
     public ReadOnlyObjectProperty<Song> currentSongProperty() {
@@ -68,6 +71,33 @@ public class AppState implements PlaybackListener {
      */
     public void setRacer(Racer selected) {
         racer.set(selected == null ? Racer.defaultRacer() : selected);
+    }
+
+    /**
+     * The speed class the runner is driven at.
+     *
+     * <p>Shared rather than owned by the runner, for the same reason the racer is: the class
+     * changes which course a song generates and therefore which high score applies to it, so the
+     * library's rank badge and the game have to be reading the same value.
+     *
+     * @return the selected speed class
+     */
+    public ObjectProperty<SpeedClass> speedClassProperty() {
+        return speedClass;
+    }
+
+    /** @return the selected speed class */
+    public SpeedClass getSpeedClass() {
+        return speedClass.get();
+    }
+
+    /**
+     * Sets the speed class the runner is driven at.
+     *
+     * @param selected the class to use; {@code null} restores the default
+     */
+    public void setSpeedClass(SpeedClass selected) {
+        speedClass.set(selected == null ? SpeedClass.defaultClass() : selected);
     }
 
     /**

@@ -154,7 +154,8 @@ public final class BeatmapCache {
                     data.durationSeconds,
                     data.bpm,
                     data.onsets == null ? new double[0] : data.onsets,
-                    data.strongBeats == null ? new double[0] : data.strongBeats));
+                    data.strongBeats == null ? new double[0] : data.strongBeats,
+                    data.strongBeatStrengths));
         } catch (RuntimeException e) {
             LOG.warning("Discarding an invalid cached beatmap at " + file + ": " + e.getMessage());
             return Optional.empty();
@@ -185,6 +186,7 @@ public final class BeatmapCache {
         data.bpm = beatmap.bpm();
         data.onsets = beatmap.onsets();
         data.strongBeats = beatmap.strongBeats();
+        data.strongBeatStrengths = beatmap.strongBeatStrengths();
 
         Path destination = fileFor(beatmap.sourceHash());
         Path temporary = null;
@@ -241,5 +243,6 @@ public final class BeatmapCache {
         public double bpm;
         public double[] onsets;
         public double[] strongBeats;
+        public double[] strongBeatStrengths;
     }
 }

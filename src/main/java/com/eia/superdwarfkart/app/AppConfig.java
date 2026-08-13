@@ -85,8 +85,12 @@ public final class AppConfig {
     /**
      * Version of the beat detection algorithm. Cached beatmaps are keyed by content hash
      * <em>and</em> this number, so incrementing it invalidates every previously cached map.
+     *
+     * <p>Bumped to 2 in M7, when each strong beat gained a strength - how far it stood above its
+     * own surroundings. The beats themselves did not move; the game needs the strengths to know
+     * which of them deserve a wall of obstacles, and a map without them cannot supply one.
      */
-    public static final int ANALYZER_VERSION = 1;
+    public static final int ANALYZER_VERSION = 2;
 
     // ------------------------------------------------------------------
     // Windows

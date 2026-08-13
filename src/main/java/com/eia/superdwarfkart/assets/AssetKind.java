@@ -29,7 +29,15 @@ public enum AssetKind {
     /** The spinning disk shown in the mini player. */
     DISK("disk", "disc"),
 
-    /** Menu and portrait art for choosing a racer. */
+    /**
+     * Backdrop and furniture for the racer-select screen.
+     *
+     * <p><strong>Not the portraits.</strong> A racer's portrait is frame 3 of their own sheet -
+     * {@link RacerFrame#ICON} - which is what that frame is drawn for and why it is the one frame
+     * that must never be animated. Every racer already has one, so the select screen needs no
+     * portrait artwork at all; this kind covers only whatever frames or backdrop the screen itself
+     * wants, and its absence is not a missing portrait.
+     */
     SELECT("select"),
 
     /** The invulnerability star. */

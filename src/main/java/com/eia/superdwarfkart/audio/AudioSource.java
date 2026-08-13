@@ -83,10 +83,50 @@ public interface AudioSource extends AutoCloseable {
     Duration position();
 
     /**
+     * The same reading as {@link #position()}, in fractional seconds.
+     *
+     * <p><strong>This exists because {@code java.time.Duration.toSeconds()} is a trap and this
+     * project walked into it.</strong> That method returns a {@code long} - whole seconds, the
+     * fraction discarded - and Java widens it to {@code double} without a murmur, so
+     * {@code position().toSeconds()} compiles, reads correctly, and quantises the application's
+     * clock to one second. It is the opposite of {@code javafx.util.Duration.toSeconds()}, which
+     * returns a {@code double}, and the two are told apart by nothing but the import.
+     *
+     * <p>What that cost: the runner's road crawled and then lurched about once a second, and
+     * whether a jump cleared a wall stopped depending on when the key was pressed. Anything that
+     * wants a fraction of a second must come through here or through {@link #toSeconds(Duration)};
+     * nothing in this project should call {@code Duration.toSeconds()} again except to format a
+     * clock face, where whole seconds are the point.
+     *
+     * @return the current position in seconds, to nanosecond resolution
+     */
+    default double positionSeconds() {
+        return toSeconds(position());
+    }
+
+    /**
      * @return the loaded track's playing time, or {@link Duration#ZERO} when it is not known -
      *         which a variable-bitrate file with no header can genuinely be
      */
     Duration duration();
+
+    /**
+     * @return the loaded track's playing time in fractional seconds; see {@link #positionSeconds()}
+     *         for why this is not {@code duration().toSeconds()}
+     */
+    default double durationSeconds() {
+        return toSeconds(duration());
+    }
+
+    /**
+     * Converts a duration to fractional seconds without losing the fraction.
+     *
+     * @param duration the duration to convert; {@code null} counts as zero
+     * @return the duration in seconds, to nanosecond resolution
+     */
+    static double toSeconds(Duration duration) {
+        return duration == null ? 0 : duration.toNanos() / 1_000_000_000d;
+    }
 
     /** @return whether audio is being rendered right now */
     boolean isPlaying();

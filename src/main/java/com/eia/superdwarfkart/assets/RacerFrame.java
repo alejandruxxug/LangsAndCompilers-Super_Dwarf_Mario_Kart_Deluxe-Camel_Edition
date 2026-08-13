@@ -24,7 +24,14 @@ public enum RacerFrame {
     /** The kart from behind, for driving away from the viewer or across a map seen from above. */
     BACK(2),
 
-    /** Static portrait, for menus and labels. Never animated. */
+    /**
+     * Static portrait, for menus and labels. Never animated.
+     *
+     * <p><strong>This is the racer-select portrait.</strong> There is no separate portrait artwork
+     * and none is needed - every racer sheet carries its own here, so M9's select screen draws
+     * {@code assets.racer(racer)} at this frame rather than looking for an
+     * {@link AssetKind#SELECT} entry per racer.
+     */
     ICON(3);
 
     /** How many frames a racer sheet holds. */

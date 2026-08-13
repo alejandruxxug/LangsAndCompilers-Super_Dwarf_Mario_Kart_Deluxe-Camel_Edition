@@ -22,6 +22,10 @@
         <sdmk.smokeTest>false</sdmk.smokeTest>
         <sdmk.home></sdmk.home>
         <sdmk.screenshot></sdmk.screenshot>
+        <!-- -Dsdmk.diag=true            measure the runner's frame pacing (F3 toggles it live)
+             -Djavafx.pulseLogger=true   the toolkit's own per-phase frame log -->
+        <sdmk.diag>false</sdmk.diag>
+        <javafx.pulseLogger>false</javafx.pulseLogger>
 
         <!-- Versions below were verified to resolve against Maven Central before use. -->
         <javafx.version>26.0.2</javafx.version>
@@ -110,6 +114,11 @@
                         <option>-Dsdmk.smokeTest=${sdmk.smokeTest}</option>
                         <option>-Dsdmk.home=${sdmk.home}</option>
                         <option>-Dsdmk.screenshot=${sdmk.screenshot}</option>
+                        <option>-Dsdmk.diag=${sdmk.diag}</option>
+                        <!-- The toolkit's own pulse log, which splits a frame into its phases and
+                             is the only way to see time going to the render thread or to layout
+                             rather than to anything this application wrote. -->
+                        <option>-Djavafx.pulseLogger=${javafx.pulseLogger}</option>
                     </options>
                 </configuration>
             </plugin>

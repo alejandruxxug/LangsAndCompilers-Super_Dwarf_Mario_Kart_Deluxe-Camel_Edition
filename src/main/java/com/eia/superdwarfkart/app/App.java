@@ -1,6 +1,7 @@
 package com.eia.superdwarfkart.app;
 
 import com.eia.superdwarfkart.analysis.Beatmap;
+import com.eia.superdwarfkart.analysis.BeatmapIndex;
 import com.eia.superdwarfkart.analysis.BeatmapService;
 import com.eia.superdwarfkart.assets.AssetKind;
 import com.eia.superdwarfkart.assets.AssetRegistry;
@@ -8,15 +9,24 @@ import com.eia.superdwarfkart.audio.AudioSource;
 import com.eia.superdwarfkart.audio.LevelAnalyzer;
 import com.eia.superdwarfkart.audio.Levels;
 import com.eia.superdwarfkart.audio.LocalFileAudioSource;
+import com.eia.superdwarfkart.game.Course;
+import com.eia.superdwarfkart.game.Entity;
+import com.eia.superdwarfkart.game.Lane;
+import com.eia.superdwarfkart.game.Obstacle;
+import com.eia.superdwarfkart.game.RunnerGame;
+import com.eia.superdwarfkart.game.SpeedClass;
 import com.eia.superdwarfkart.model.Library;
 import com.eia.superdwarfkart.model.ModeId;
 import com.eia.superdwarfkart.model.Song;
 import com.eia.superdwarfkart.persistence.LibraryRepository;
 import com.eia.superdwarfkart.persistence.PersistenceException;
 import com.eia.superdwarfkart.persistence.Repository;
+import com.eia.superdwarfkart.persistence.ScoreRepository;
 import com.eia.superdwarfkart.playback.AlphabeticalMode;
 import com.eia.superdwarfkart.playback.ArrivalOrderMode;
 import com.eia.superdwarfkart.playback.PlaybackEngine;
+import com.eia.superdwarfkart.playback.PlaybackListener;
+import com.eia.superdwarfkart.playback.PlaybackMode;
 import com.eia.superdwarfkart.playback.Player;
 import com.eia.superdwarfkart.playback.ShuffleMode;
 import com.eia.superdwarfkart.ui.BeatmapTimeline;
@@ -26,6 +36,7 @@ import com.eia.superdwarfkart.ui.LevelMeterView;
 import com.eia.superdwarfkart.ui.LibraryView;
 import com.eia.superdwarfkart.ui.PixelDialog;
 import com.eia.superdwarfkart.ui.PlaybackBar;
+import com.eia.superdwarfkart.ui.RunnerView;
 import com.eia.superdwarfkart.ui.Theme;
 import com.eia.superdwarfkart.ui.visualizer.OperationCounter;
 import com.eia.superdwarfkart.ui.visualizer.PresentationView;
@@ -36,7 +47,9 @@ import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
+import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.Tooltip;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.layout.BorderPane;
@@ -103,6 +116,23 @@ public class App extends Application {
     /** Function key that hands the whole stage to the visualizer. */
     private static final KeyCode PRESENTATION_KEY = KeyCode.F5;
 
+    /**
+     * Function key that swaps the library for the rhythm game.
+     *
+     * <p>The two share the middle of the window rather than splitting it. At one em per glyph the
+     * table needs every pixel it has, and the runner needs a road long enough to read a lookahead
+     * off - neither survives being given half. It is also the shape the side rail will formalise:
+     * Library is one destination among several, not a permanent fixture.
+     */
+    private static final KeyCode RACE_KEY = KeyCode.F6;
+
+    /**
+     * Where into the track the runner is drawn for its screenshot, in seconds.
+     *
+     * <p>Far enough in that a track which opens quietly has got going.
+     */
+    private static final double SCREENSHOT_COURSE_SECONDS = 45;
+
     private Library library;
     private Repository<Song> libraryRepository;
     private AssetRegistry assets;
@@ -116,6 +146,16 @@ public class App extends Application {
     private LevelMeterView meters;
     private BeatmapService beatmaps;
     private BeatmapTimeline beatmapTimeline;
+
+    private ScoreRepository scores;
+    private BeatmapIndex courseIndex;
+    private RunnerView runner;
+    private LibraryView libraryView;
+    private Button viewToggle;
+    private boolean racing;
+
+    /** Set when the user chose the library by hand, so pressing play does not overrule them. */
+    private boolean libraryPinned;
 
     private BorderPane root;
     private PlaybackBar playbackBar;
@@ -164,8 +204,31 @@ public class App extends Application {
         player.addListener((mode, current) -> beatmaps.request(fileOf(current)));
         beatmaps.request(fileOf(player.current()));
 
-        LibraryView libraryView = new LibraryView(library, libraryRepository);
+        // Read before the library view is built: the table shows a rank badge per song, and a board
+        // that failed to load has to leave the column empty rather than stop the window opening.
+        scores = new ScoreRepository();
+
+        // Which songs already have a course, hashed on a background thread so the table can ask
+        // per row per repaint without reading a byte.
+        courseIndex = new BeatmapIndex(beatmaps.cache());
+
+        libraryView = new LibraryView(library, libraryRepository, scores, courseIndex);
         libraryView.setOnSongActivated(song -> player.select(song));
+        courseIndex.setOnUpdated(Platform::runLater, libraryView::refreshBadges);
+        // Moving off a song is the moment its analysis has either finished or been abandoned, so
+        // that is when the index is asked to look at it again. Cheaper and far more reliable than
+        // polling the analysis service for a transition nobody else needs to hear about.
+        player.addListener(new PlaybackListener() {
+            private Song previous = player.current();
+
+            @Override
+            public void playbackChanged(PlaybackMode mode, Song current) {
+                if (previous != null && !previous.equals(current)) {
+                    courseIndex.recheck(previous.getFilePath());
+                }
+                previous = current;
+            }
+        });
 
         playbackBar = new PlaybackBar(player, engine, counter);
         ComplexityPanel complexityPanel = new ComplexityPanel(player, counter);
@@ -181,6 +244,15 @@ public class App extends Application {
 
         visualizer = new StructureVisualizer(player, state, assets);
         presentation = new PresentationView(counter);
+
+        runner = new RunnerView(state, assets, beatmaps, engine, levels, scores);
+        if (!Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
+            // Not during a smoke test: that plays a few seconds of audio to measure the meters, and
+            // an automatic hop to the road would replace the library in every screenshot taken
+            // afterwards - including the ones taken to check the library.
+            runner.setOnRaceStarted(this::showRaceOnPlay);
+        }
+        runner.start();
 
         complexityPanel.setPrefHeight(COMPLEXITY_HEIGHT);
         complexityPanel.setMinHeight(COMPLEXITY_HEIGHT);
@@ -207,6 +279,38 @@ public class App extends Application {
 
         if (Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
             runSmokeTest(stage, scene, pixelFont);
+            return;
+        }
+        // After the window is on screen, so the dialog has something to centre on and the user can
+        // see what they are being asked about.
+        Platform.runLater(() -> offerToStart(stage));
+    }
+
+    /**
+     * Asks whether to start playing, once, on the first launch of a session.
+     *
+     * <p>Nothing plays until somebody says so. Opening a music player and having it start making
+     * noise at whatever the shuffle picked is the behaviour every one of them is disliked for, and
+     * here it would also drop the user straight into a race they had not asked to drive.
+     *
+     * <p>Accepting starts the music, which brings the road up on its own - see
+     * {@link RunnerView#setOnRaceStarted}. Declining leaves the library on screen, paused, with
+     * everything still reachable.
+     *
+     * @param stage the window to centre the question on
+     */
+    private void offerToStart(Stage stage) {
+        Song song = player.current();
+        if (song == null) {
+            return;
+        }
+        boolean start = PixelDialog.confirm(stage, "START YOUR ENGINES",
+                song.getTitle() + "\nby " + song.getArtist()
+                        + "\n\nPlay this and drive its course?"
+                        + "\n\nF6 swaps the road for the library at any time.");
+        if (start) {
+            engine.play();
+            playbackBar.refresh();
         }
     }
 
@@ -222,11 +326,12 @@ public class App extends Application {
      *       field.</li>
      *   <li><strong>A handler</strong> for the transport keys, which run <em>last</em> - only if
      *       nothing else wanted them. The library table uses the arrows to move its selection,
-     *       the search box to move the caret, and the tree view to step through a traversal; all
-     *       three consume the event first, so the transport never steals a key out from under a
-     *       control that was using it. Space belongs to the same group for the same reason: it
-     *       steps the tree when the tree has focus, and it presses whichever button does, and only
-     *       reaches playback when nothing else claimed it.</li>
+     *       the search box to move the caret, the tree view to step through a traversal, and the
+     *       runner to steer; all four consume the event first, so the transport never steals a key
+     *       out from under a control that was using it. Space belongs to the same group for the
+     *       same reason: it steps the tree when the tree has focus, jumps the kart when the road
+     *       has it, presses whichever button does, and only reaches playback when nothing else
+     *       claimed it.</li>
      * </ul>
      *
      * @param scene the scene to listen on
@@ -235,6 +340,9 @@ public class App extends Application {
         scene.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
             if (event.getCode() == PRESENTATION_KEY) {
                 togglePresentation(scene);
+                event.consume();
+            } else if (event.getCode() == RACE_KEY) {
+                toggleRace();
                 event.consume();
             } else if (event.getCode() == KeyCode.ESCAPE && presenting) {
                 togglePresentation(scene);
@@ -326,11 +434,66 @@ public class App extends Application {
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        HBox header = new HBox(14, name, spacer, version);
+        viewToggle = new Button();
+        viewToggle.getStyleClass().add("view-toggle");
+        viewToggle.setTooltip(new Tooltip("Swap the library for the rhythm game\nF6"));
+        viewToggle.setOnAction(event -> toggleRace());
+        updateViewToggle();
+
+        HBox header = new HBox(14, name, spacer, viewToggle, version);
         header.setAlignment(Pos.CENTER_LEFT);
         header.setPadding(new Insets(14, 16, 14, 16));
         header.getStyleClass().add("app-header");
         return header;
+    }
+
+    /**
+     * Swaps the middle of the window between the library and the runner.
+     *
+     * <p>Focus goes to the road on the way in, because the arrows and space belong to the kart
+     * while it has focus and to the transport otherwise - the whole arrangement rests on which node
+     * the keys reach first, so leaving focus behind in the search box would make the controls look
+     * broken.
+     *
+     * <p>The runner's frame loop keeps running either way. It is the thing that notices a song
+     * change and files the score for the run that just ended, and stopping it would mean a run
+     * abandoned by switching to the library was silently lost.
+     */
+    private void toggleRace() {
+        racing = !racing;
+        if (racing) {
+            root.setCenter(runner);
+            runner.requestFocus();
+        } else {
+            root.setCenter(libraryView);
+            // A run that ended while the road was on screen may have changed the board.
+            libraryView.refreshBadges();
+        }
+        // Leaving the road by hand is a decision, and pressing play afterwards must not overrule
+        // it. Coming back to the road withdraws it.
+        libraryPinned = !racing;
+        updateViewToggle();
+    }
+
+    /**
+     * Brings the road up when the music starts.
+     *
+     * <p>The game is the point of the application, so it appears because a race began rather than
+     * because somebody found a function key. It does not fight the user for the window, though:
+     * once they have chosen the library, playing and pausing leaves them there until they choose
+     * the road again.
+     */
+    private void showRaceOnPlay() {
+        if (!racing && !libraryPinned) {
+            toggleRace();
+        }
+    }
+
+    /** Brings the header's toggle caption in step with what is on screen. */
+    private void updateViewToggle() {
+        if (viewToggle != null) {
+            viewToggle.setText(racing ? "F6 LIBRARY" : "F6 RACE");
+        }
     }
 
     /**
@@ -408,6 +571,8 @@ public class App extends Application {
 
         reportAudio();
         reportBeatmap();
+        reportCourse();
+        reportRunner(scene);
         System.out.println("[smoke] assets found      : " + assets.size());
         System.out.println("[smoke] asset manifest    : " + assets.manifestFile());
         // Decodes each sheet, which normal startup does not do. Worth it here: how a sheet gets
@@ -478,7 +643,7 @@ public class App extends Application {
         sleepQuietly(1000);
 
         System.out.println("[smoke] audio playing     : " + engine.isPlaying());
-        System.out.println("[smoke] track length      : " + engine.duration().toSeconds() + "s");
+        System.out.printf("[smoke] track length      : %.1fs%n", engine.durationSeconds());
         System.out.println("[smoke] position after 1s : " + engine.position().toMillis() + "ms");
         System.out.printf("[smoke] level L           : rms %.4f  peak %.4f%n",
                 levels.leftRms(), levels.leftPeak());
@@ -544,6 +709,224 @@ public class App extends Application {
         }
     }
 
+    /**
+     * Generates the current song's course at every speed class and reports what came out.
+     *
+     * <p>Three things here cannot be checked any other way. The <strong>entity counts per
+     * class</strong> are the claim that difficulty comes from the music rather than from a timer,
+     * and they are only meaningful against a real track's onsets. The <strong>determinism</strong>
+     * line regenerates each course and compares it, which is what the stored high scores rest on.
+     * And the <strong>scripted lap</strong> drives the whole course through the collision rules at
+     * the frame rate the game actually runs at - a rank of S out of that says the lookahead, the
+     * resolution window and the scoring all agree with each other over four minutes of real
+     * beatmap, which no screenshot could show and no unit test could reach with this much data.
+     */
+    private void reportCourse() {
+        Song song = player.current();
+        if (song == null) {
+            System.out.println("[smoke] course            : - no song -");
+            return;
+        }
+        Beatmap beatmap = beatmaps.beatmap();
+        for (SpeedClass speedClass : SpeedClass.values()) {
+            Course course = Course.generate(song.getId(), beatmap, speedClass);
+            Course again = Course.generate(song.getId(), beatmap, speedClass);
+            boolean deterministic = course.entities().equals(again.entities());
+            System.out.printf("[smoke]   %-6s course   : %d coins, %d bumps, %d walls, %d stars, "
+                            + "%.2fs lookahead  %s  lap %s%n",
+                    speedClass.displayName(), course.coinsAvailable(), course.obstacleCount(),
+                    course.wallCount(), course.starCount(), course.travelTimeSeconds(),
+                    deterministic ? "- reproducible" : "- NOT REPRODUCIBLE",
+                    driveScriptedLap(course));
+        }
+    }
+
+    /**
+     * Proves the driving controls reach the game, and measures what a frame of it costs.
+     *
+     * <p>Both of these were guessed at once and both guesses were wrong. The controls used to wait
+     * for keyboard focus, which nothing on screen indicated and no key could reliably give them, so
+     * jumping silently paused the music instead - a fault a screenshot cannot show and a unit test
+     * cannot reach, because it lives entirely in how the scene routes an event. Firing the real key
+     * at the real scene is the only check that means anything.
+     *
+     * <p>The frame timing answers the other one. "It looks laggy" has several possible causes and
+     * they need different fixes: drawing every entity on the course rather than the ones on screen
+     * would show up here as a large and song-length-dependent number, where a projection that makes
+     * things crawl and then rush shows up as a fast frame that still looks wrong.
+     *
+     * @param scene the scene to deliver keys to
+     */
+    private void reportRunner(Scene scene) {
+        toggleRace();
+        scene.getRoot().applyCss();
+        scene.getRoot().layout();
+        runner.previewAt(screenshotMoment());
+
+        RunnerGame game = runner.game();
+        System.out.println("[smoke] runner course     : " + game.course());
+
+        Lane before = game.lane();
+        fireKey(scene, KeyCode.LEFT);
+        fireKey(scene, KeyCode.LEFT);
+        System.out.println("[smoke] steering          : " + before + " -> " + game.lane()
+                + (game.lane() == before ? "  DID NOTHING" : "  ok"));
+
+        fireKey(scene, KeyCode.SPACE);
+        boolean jumped = game.isJumping();
+        // Half a jump on, so the reported height is the top of the arc rather than the instant of
+        // take-off, where it is legitimately zero and looks like a failure.
+        game.update(game.now() + RunnerGame.JUMP_SECONDS / 2);
+        System.out.println("[smoke] jump              : " + (jumped
+                ? String.format("airborne, %.0f%% of the way up at the apex", game.jumpHeight() * 100)
+                : "DID NOTHING"));
+
+        // What is actually on screen, against what the course holds. The gap between the two is the
+        // whole of the lookahead's job.
+        int onScreen = game.lastVisible() - game.firstVisible() + 1;
+        System.out.println("[smoke] entities drawn    : " + Math.max(0, onScreen)
+                + " of " + game.course().size() + " on the course");
+
+        long startedAt = System.nanoTime();
+        int frames = 120;
+        for (int frame = 0; frame < frames; frame++) {
+            runner.redraw();
+        }
+        double perFrame = (System.nanoTime() - startedAt) / 1e6 / frames;
+        System.out.printf("[smoke] frame cost        : %.2f ms  (%.0f fps headroom)  %s%n",
+                perFrame, 1000 / perFrame,
+                perFrame < 16.6 ? "- comfortably inside a 60 fps frame" : "- TOO SLOW FOR 60 FPS");
+
+        toggleRace();
+    }
+
+    /**
+     * Chooses the instant the runner is drawn at for its screenshot.
+     *
+     * <p>Aimed at a <strong>wall three quarters of the way down the road</strong>, because that one
+     * frame carries more of this milestone than any other: the lookahead as a picture, a row of
+     * obstacles the accents put there, and the jump prompt. Falling back to a fixed moment, and
+     * clamped into the track - a short sample has no 45th second, and drawing past the end shows
+     * an empty road.
+     *
+     * @return where in the track to draw, in seconds
+     */
+    private double screenshotMoment() {
+        double length = beatmaps.beatmap().durationSeconds();
+        double fallback = length > 0
+                ? Math.min(SCREENSHOT_COURSE_SECONDS, length * 0.6)
+                : SCREENSHOT_COURSE_SECONDS;
+
+        Song song = player.current();
+        if (song == null) {
+            return fallback;
+        }
+        Course course = Course.generate(song.getId(), beatmaps.beatmap(), state.getSpeedClass());
+        // The wall nearest the preferred moment, in either direction. Searching only forwards found
+        // nothing on the eight-second sample in the library, whose one wall is before it.
+        double chosen = -1;
+        for (Entity entity : course.entities()) {
+            if (entity instanceof Obstacle obstacle && obstacle.isWall()
+                    && (chosen < 0 || Math.abs(obstacle.beatTime() - fallback)
+                            < Math.abs(chosen - fallback))) {
+                chosen = obstacle.beatTime();
+            }
+        }
+        // Three quarters of the way down the road: close enough to read as a wall, far enough that
+        // the lookahead behind it is still in shot.
+        return chosen < 0 ? fallback : chosen - course.travelTimeSeconds() * 0.25;
+    }
+
+    /** How far ahead the scripted driver treats a bump as a reason to be elsewhere, in seconds. */
+    private static final double DANGER_HORIZON_SECONDS = 0.2;
+
+    /** How far ahead the scripted driver looks for something to collect, in seconds. */
+    private static final double AIM_HORIZON_SECONDS = 0.6;
+
+    /**
+     * Drives a course from start to finish with a scripted driver, at sixty frames a second.
+     *
+     * <p>The driver is greedy and short-sighted: get out of any lane with a bump about to arrive in
+     * it, and otherwise sit in the lane of the next thing worth collecting. That is deliberately
+     * not an optimal player - it loses coins whenever a bump and a coin want opposite lanes at the
+     * same moment - but it is enough to make the line mean something. A course that a competent
+     * driver <em>cannot</em> get a good rank on is a generated course the rules cannot survive: two
+     * bumps too close together to dodge, or an entity placed where the resolution window can never
+     * reach it. That is what this catches, over four minutes of real beatmap, on every launch.
+     *
+     * @param course the course to drive
+     * @return the rank the scripted driver earned
+     */
+    private static String driveScriptedLap(Course course) {
+        if (course.isEmpty()) {
+            return "- empty -";
+        }
+        RunnerGame lap = new RunnerGame(course);
+        double step = 1 / 60d;
+        double end = course.entityAt(course.size() - 1).beatTime() + 1;
+
+        for (double at = 0; at <= end; at += step) {
+            boolean[] dangerous = new boolean[Lane.COUNT];
+            int aim = -1;
+            for (int index = course.firstEntityAtOrAfter(at);
+                    index < course.size()
+                            && course.entityAt(index).beatTime() <= at + AIM_HORIZON_SECONDS;
+                    index++) {
+                Entity entity = course.entityAt(index);
+                if (entity instanceof Obstacle) {
+                    if (entity.beatTime() <= at + DANGER_HORIZON_SECONDS) {
+                        dangerous[entity.lane().index()] = true;
+                    }
+                } else if (aim < 0) {
+                    aim = entity.lane().index();
+                }
+            }
+
+            if (aim >= 0 && !dangerous[aim]) {
+                steerTowards(lap, Lane.ofIndex(aim));
+            }
+            if (dangerous[lap.lane().index()]) {
+                int safe = firstSafeLane(dangerous);
+                if (safe >= 0) {
+                    steerTowards(lap, Lane.ofIndex(safe));
+                } else {
+                    // Every lane is blocked. That is what the jump is for.
+                    lap.jump();
+                }
+            }
+            lap.update(at);
+        }
+        return lap.score().rank() + " " + lap.score().coinsCollected() + "/"
+                + course.coinsAvailable();
+    }
+
+    /**
+     * @param dangerous which lanes have a bump arriving
+     * @return the index of the first lane that does not, or {@code -1} when they all do
+     */
+    private static int firstSafeLane(boolean[] dangerous) {
+        for (int index = 0; index < dangerous.length; index++) {
+            if (!dangerous[index]) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Moves the scripted driver one lane towards a target.
+     *
+     * @param lap    the run being driven
+     * @param target the lane to head for
+     */
+    private static void steerTowards(RunnerGame lap, Lane target) {
+        if (lap.lane().index() < target.index()) {
+            lap.moveRight();
+        } else if (lap.lane().index() > target.index()) {
+            lap.moveLeft();
+        }
+    }
+
     private static void sleepQuietly(long millis) {
         try {
             Thread.sleep(millis);
@@ -592,6 +975,21 @@ public class App extends Application {
         togglePresentation(scene);
         layoutAndCapture(scene, destination, "presentation");
         togglePresentation(scene);
+
+        // The runner last, because it is the one view that only exists behind a key press: a shot
+        // of the opening state proves nothing at all about it.
+        toggleRace();
+        // 150cc, and part-way into the track. Every course opens with a lead-in of its own travel
+        // time, so a picture taken at the three seconds this test has actually played is a picture
+        // of an empty road - and at 50cc the entities are two seconds apart by design, which is
+        // correct and photographs as almost nothing.
+        state.setSpeedClass(SpeedClass.CC150);
+        scene.getRoot().applyCss();
+        scene.getRoot().layout();
+        runner.previewAt(screenshotMoment());
+        writeScreenshot(scene, derivedPath(destination, "race"));
+        state.setSpeedClass(SpeedClass.defaultClass());
+        toggleRace();
     }
 
     /**
@@ -613,13 +1011,25 @@ public class App extends Application {
             visualizer.view().settle();
         }
 
+        writeScreenshot(scene, derivedPath(basePath, suffix));
+    }
+
+    /**
+     * Names a screenshot beside the one the run was given: {@code shot.png} plus {@code race}
+     * becomes {@code shot-race.png}.
+     *
+     * @param basePath the screenshot path the run was given
+     * @param suffix   appended to the base file name
+     * @return where to write it
+     */
+    private static java.nio.file.Path derivedPath(String basePath, String suffix) {
         java.nio.file.Path base = java.nio.file.Path.of(basePath);
         String name = base.getFileName().toString();
         int dot = name.lastIndexOf('.');
         String derived = dot < 0
                 ? name + "-" + suffix
                 : name.substring(0, dot) + "-" + suffix + name.substring(dot);
-        writeScreenshot(scene, base.resolveSibling(derived));
+        return base.resolveSibling(derived);
     }
 
     /**
@@ -694,11 +1104,19 @@ public class App extends Application {
         if (meters != null) {
             meters.stop();
         }
+        // Stops the frame loop and files whatever the run in progress achieved. A run abandoned by
+        // closing the window is still a run, and the board only takes it if it beat what was there.
+        if (runner != null) {
+            runner.stop();
+        }
         if (beatmapTimeline != null) {
             beatmapTimeline.stop();
         }
         if (beatmaps != null) {
             beatmaps.close();
+        }
+        if (courseIndex != null) {
+            courseIndex.close();
         }
         if (playbackBar != null) {
             playbackBar.stopClock();

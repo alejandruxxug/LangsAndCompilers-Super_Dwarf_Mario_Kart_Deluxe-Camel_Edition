@@ -61,11 +61,31 @@ public final class Fonts {
      * @return a usable font, never {@code null}
      */
     public static Font pixel(double size) {
-        if (load()) {
-            return Font.font(AppConfig.FONT_FAMILY, size);
+        Font cached = BY_SIZE.get(size);
+        if (cached != null) {
+            return cached;
         }
-        return Font.font("Monospaced", size);
+        Font font = load()
+                ? Font.font(AppConfig.FONT_FAMILY, size)
+                : Font.font("Monospaced", size);
+        BY_SIZE.put(size, font);
+        return font;
     }
+
+    /**
+     * Every font handed out so far, by size.
+     *
+     * <p>The canvases ask for a font several times per repaint - the runner's head-up display alone
+     * wants four sizes every frame - and each of those calls otherwise takes the monitor on
+     * {@link #load()} and goes back through the platform's font lookup. Sizes here are whole pixels
+     * and there are under a dozen of them in the whole interface, so this fills once and never
+     * grows again.
+     *
+     * <p>Concurrent because a font is asked for from the interface thread and, during a smoke test,
+     * from whatever thread is taking a snapshot.
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<Double, Font> BY_SIZE =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     /** @return whether the bundled 8-bit font is in use rather than the fallback */
     public static boolean isPixelFontAvailable() {

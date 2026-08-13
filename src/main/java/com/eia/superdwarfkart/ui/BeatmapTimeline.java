@@ -128,7 +128,7 @@ public class BeatmapTimeline extends Pane {
      */
     private void tick() {
         BeatmapService.Status current = service.status();
-        double position = engine.position().toSeconds();
+        double position = engine.positionSeconds();
         int playheadPixel = (int) Math.round(playheadX(current, position));
         boolean lamp = lampLit(current, position);
 
@@ -167,7 +167,7 @@ public class BeatmapTimeline extends Pane {
         drawnHeight = getHeight();
 
         BeatmapService.Status status = service.status();
-        double position = engine.position().toSeconds();
+        double position = engine.positionSeconds();
 
         GraphicsContext gc = canvas.getGraphicsContext2D();
         gc.setFill(color(PaletteRole.SURFACE));
@@ -371,7 +371,7 @@ public class BeatmapTimeline extends Pane {
         double analysed = status.beatmap().durationSeconds();
         // The analysed length is the one the ticks are drawn against, so the playhead must use it
         // too; the transport's figure is only a stand-in while there is nothing to draw.
-        return analysed > 0 ? analysed : engine.duration().toSeconds();
+        return analysed > 0 ? analysed : engine.durationSeconds();
     }
 
     /**

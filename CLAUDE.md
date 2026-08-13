@@ -68,6 +68,11 @@ live in `AppConfig` and are referenced everywhere instead of hardcoded strings:
    several times what the feature does. If a milestone comes back with a new hex literal in
    it, fix it that day.
 
+   **Still true after M7:** the runner is a full-screen canvas of road, sky, kerbs, sprites and a
+   head-up display and it added **zero** hex literals — every one of them resolves through a role,
+   and where two roles were too close together to tell apart the fix was a `Palette.mix` between
+   roles rather than a colour. The CSS is still the only debt.
+
    **Paid down in M4:** `mood/PaletteRole`, `mood/Palette` and `mood/GbaColor` exist now — the
    16 roles, an immutable palette snapped to the 5-bit GBA grid, and `Palette.active()` as the
    accessor. Every color the visualizer draws resolves through a role, so M4 added **zero** new
@@ -78,6 +83,19 @@ live in `AppConfig` and are referenced everywhere instead of hardcoded strings:
    `setSmooth(false)` on every `ImageView`. JavaFX interpolates by default, which turns
    hand-drawn 8-bit sprites into mush at any scale other than 1:1. Scale by **integer**
    factors only (2×, 3×, 4×) — never fractional.
+
+   **One exception, and it is exactly one: entities travelling down the runner's road**
+   (`RunnerView.entityScale`). The integer rule was written about a sprite sitting *still* at a
+   scale, and about that it is right. A sprite coming towards the camera is a different case:
+   snapping between four sizes meant it visibly jumped three times on the way in, and on the one
+   thing the player is trying to **time**, a sprite that changes size in a step reads as a sprite
+   that changed *position* in a step. The mush is avoided rather than accepted — smoothing stays
+   off, so this is a nearest-neighbour blow-up and never a blurred one, and `drawSprite` rounds the
+   destination rectangle to whole pixels so nothing straddles a half pixel. What it costs is uneven
+   pixel widths at fractional scales, which is invisible on something moving and is what the
+   hardware did anyway. **Everything else — the racer, the explosion, every sprite in the
+   interface — still goes through `spriteScale` and still snaps.** Do not widen this without the
+   same argument.
 
 ---
 
@@ -96,7 +114,9 @@ block (a bare `-D` on the Maven command line does **not** reach the app):
 |---|---|
 | `-Dsdmk.smokeTest=true` | Launch, print what was verified, auto-close after ~2 s. Use this to check a launch without leaving a window on screen. |
 | `-Dsdmk.home=/tmp/demo` | Use a scratch profile instead of `~/.superdwarfkart`. Seed a `library.json` there to demo against fake data without touching the user's real library. |
-| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. Also writes `out-shuffle.png`, `out-arrival.png`, `out-alphabetical.png` and `out-presentation.png`, cycling the modes so all three structure views and Presentation Mode are captured — three of the four only exist once a mode has been selected, so one shot of the opening state proves nothing about them. |
+| `-Dsdmk.diag=true` | Measure the runner's frame loop: achieved fps and frame-interval percentiles, the tick split, and the playback clock's own granularity. Prints a line every two seconds and draws a readout over the road. **`F3` toggles it live** (off → printed + overlay → printed only), which is the more useful of the two — a stutter somebody is watching can be measured while it happens. |
+| `-Djavafx.pulseLogger=true` | The toolkit's own per-phase frame log. Reach for this only when `sdmk.diag` says the frame interval is long but the tick is cheap, i.e. the time is going to the render thread or to layout rather than to anything this project wrote. |
+| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. Also writes `out-shuffle.png`, `out-arrival.png`, `out-alphabetical.png`, `out-presentation.png` and `out-race.png`, cycling the modes so all three structure views, Presentation Mode and the runner are captured — five of the six only exist once a mode has been selected or a key pressed, so one shot of the opening state proves nothing about them. |
 
 **The smoke test plays about three seconds of the current song** and prints the measured L/R levels,
 so a run is audible. That is the point: the base screenshot is taken while audio is still flowing,
@@ -108,6 +128,22 @@ identically because they were never deinterleaved.
 The line to read is `grid deviation`: a tempo is always a plausible number, but beats sitting a few
 milliseconds off the grid means the detected beat is the one in the music, and a figure approaching
 a quarter of the beat means the histogram picked a tempo the track does not have.
+
+**And it generates the course at all four speed classes and drives each one.** Three things on
+those lines cannot be checked any other way. The entity counts are the claim that difficulty comes
+from the music rather than from a timer, and only mean something against a real track's onsets.
+`reproducible` regenerates each course and compares it — every stored high score rests on that
+holding. And `lap` runs a scripted greedy driver over the whole course at sixty frames a second
+through the real collision rules; a course a competent driver cannot rank well on is a generated
+course the rules cannot survive, and that is what the line catches, over four minutes of beatmap,
+on every launch.
+
+**Then it drives the runner with real key events and times a frame.** `steering` and `jump` fire
+`LEFT` and `SPACE` at the scene and report what the kart actually did — a control that never reaches
+the game is a routing fault, invisible to both a screenshot and a unit test, and this found exactly
+that twice. `entities drawn` is what is on screen against what the course holds, and `frame cost` is
+the average of 120 repaints. Read those two together before believing the game is slow: a projection
+that makes things crawl and then rush looks laggy at 0.2 ms a frame.
 
 ```bash
 # Full verification run against seeded data, leaving a screenshot behind
@@ -172,19 +208,39 @@ tooltips and dialogs are all rebuilt as hard-edged beveled blocks.
 | `Tab` | cycle the playback mode |
 | `Space` (`PLAY`, `PAUSE`) | play / pause |
 | `F5` | Presentation Mode on/off |
+| `F6` | swap the library for the runner, and back |
 | `Esc` | leave Presentation Mode |
 | `→` / `Space` *(tree view focused)* | step through one edge of a traversal |
+| `←` / `→` / `A` / `D` *(road focused)* | change lane |
+| `Space` / `↑` / `W` *(road focused)* | jump |
+| `F3` *(road on screen)* | cycle the frame-pacing readout: off → drawn → printed only |
 
 They are wired across **both phases of event delivery**, and the split is load-bearing:
 
 - **Filter** (runs first, wins everywhere) for `F5`, `Esc` and `Tab`. `Tab` is excused when a text
   field has focus, where it belongs to the field.
 - **Handler** (runs last, only if nothing else wanted the key) for the transport keys. The library
-  table uses the arrows for its selection, the search box for the caret, and the tree view for its
-  step-through — all three consume the event first, so the transport never takes a key out from
-  under a control that was using it. Put the arrows in a filter and all three break at once.
-  `Space` is in this group for the same reason: it steps the tree when the tree has focus, presses
-  whichever button has focus, and only reaches play/pause when nothing else claimed it.
+  table uses the arrows for its selection, the search box for the caret, the tree view for its
+  step-through, and **the runner to steer** — all four consume the event first, so the transport
+  never takes a key out from under a control that was using it. Put the arrows in a filter and all
+  four break at once. `Space` is in this group for the same reason: it steps the tree when the tree
+  has focus, jumps the kart when the road has focus, presses whichever button has focus, and only
+  reaches play/pause when nothing else claimed it.
+
+**The driving keys are a scene filter installed while the road is on screen — not a handler waiting
+for focus.** The first version needed the road to have keyboard focus, which is a condition the user
+cannot see and had no reliable way to satisfy: `Tab` is bound to the mode cycle application-wide, so
+focus could only be taken by clicking the right pixels, and any button pressed since took it away.
+Pressing space then fell through to the transport and *paused the music* instead of jumping — which
+is exactly what a broken control looks like. The filter runs before anything else and does not care
+what has focus. The cost is that the transport shortcuts are unavailable during a race; the buttons
+at the top still work and `F6` hands the keys back.
+
+The runner **only claims the keys while the music is running**, and it asks the engine outright
+rather than reading a flag the frame loop maintains — that flag is stale for a frame after every
+resume, which left the controls dead exactly when they were first pressed. Steering a frozen kart to
+line up an obstacle that cannot reach it is not a control, and `Space` has to reach the transport
+while paused or the play key stops working when it is the only one wanted.
 
 **`Tab` no longer moves focus between controls.** That is the deliberate cost of binding it; the
 interface is mouse-driven and every control is reachable by clicking.
@@ -283,17 +339,18 @@ com.eia.superdwarfkart
 │                 ShuffleMode, ArrivalOrderMode, AlphabeticalMode, Player,
 │                 PlaybackEngine (running order <-> audio output)
 ├── audio/        AudioSource (interface), LocalFileAudioSource, PcmFormat, MonoPcmReader,
-│                 PcmListener, Levels, LevelAnalyzer, AudioMetadata, AudioException
-├── analysis/     BeatmapAnalyzer, Beatmap, BeatmapCache, OnsetDetector, Fft, BeatmapService
-├── game/         RunnerGame, Course, Lane, Entity, Obstacle, Coin,
-│                 Star, ScoreKeeper, SpeedClass
+│                 PcmListener, Levels, LevelAnalyzer, SmoothClock, AudioMetadata, AudioException
+├── analysis/     BeatmapAnalyzer, Beatmap, BeatmapCache, OnsetDetector, Fft, BeatmapService,
+│                 BeatmapIndex
+├── game/         RunnerGame, RunnerListener, Course, Lane, Entity (sealed), Obstacle, Coin,
+│                 Star, EntityState, ScoreKeeper, Rank, ScoreEntry, SpeedClass
 ├── persistence/  Repository<T> (interface), LibraryRepository, ScoreRepository
 ├── assets/       AssetRegistry, SpriteSheet, SpriteAnimation, RacerFrame
 ├── mood/         Palette, PaletteRole (enum), GbaColor            ← built in M4
 │                 Mood, MoodLayer, GradientLayer, ImageLayer,
 │                 ProceduralLayer, PixelTile, MoodRepository,
 │                 PaletteImporter, ImageQuantizer, MoodValidator   ← M11
-└── ui/           MiniPlayerView, FullscreenView, LibraryView, BeatmapTimeline,
+└── ui/           MiniPlayerView, FullscreenView, LibraryView, BeatmapTimeline, RunnerView,
                   RacerSelectView, LevelMeterView, ComplexityPanel,
                   MoodCustomizerView, PixelEditorView, MoodOverlayRenderer
     └── visualizer/  StructureView (base) -> RoadView (base) -> CircuitView,
@@ -302,6 +359,11 @@ com.eia.superdwarfkart
                      OperationCounter, Measurement, ComplexityScatter,
                      StructureComparison, PresentationView
 ```
+
+**`game/` holds no JavaFX and `ui/RunnerView` draws it.** Ground rule 3 does not list `game/`, and
+the runner is documented as a `Canvas` — but splitting them anyway is what makes the collision
+rules, the scoring and the generator testable by handing them a sequence of times, with no window,
+no sound card and no beatmap. `RunnerGameTest` and `CourseTest` are that split paying for itself.
 
 **Three naming collisions to avoid:** never name the model class `Character`
 (`java.lang.Character`), the sprite class `Animation` (`javafx.animation.Animation`), or the
@@ -493,12 +555,96 @@ All entities are placed **on beats**, never on a timer.
 - **Coin** — frequent. `+1 coin × multiplier`, collect feedback + particle pop.
 - **Obstacle (bump)** — avoided by changing lane or jumping. Hit while unstarred: **−5 coins**
   plus brief invulnerability, so a single mistake cannot chain into a wipeout.
-- **Star** — rare, on a beat, seeded like everything else. Grants invulnerability for N beats;
+- **Wall** — a row of obstacles across **all three lanes**, placed on the track's **accented**
+  beats. There is no lane to change into, so the only way past is the jump. This is what makes the
+  jump a control the player has to learn rather than one they can ignore for a whole song, and it
+  is the reason the analyser records a strength per beat at all.
+- **Star** — uncommon, on a beat, seeded like everything else, and **spaced at least 15 s apart so
+  every class actually gets some**: at the first tuning a four-minute track at 50cc got none at all,
+  which made the invulnerability, the explosion and the break bonus three features nobody ever met.
+  `CourseTest` now asserts every class puts at least one on a long track. Grants invulnerability for
+  N beats;
   passing *through* an obstacle while starred **breaks it**, plays the 2-frame explosion and
   awards bonus coins. The star sheet is animated — slice and loop it.
-- **Beat feedback:** a subtle scale/flash pulse of the course on each strong beat, and
-  lane-edge glow driven by the live L/R RMS. This is where the metering and the game visibly
-  meet — it is the reason the meters are not just decoration.
+- **Entities are drawn far to near, and the loop runs *backwards* for that reason.** The course is in
+  ascending beat order, so a low index arrives sooner — which is the entity closest to the racer and
+  lowest on the screen. Walking up from `firstVisible` therefore drew the nearest first and let every
+  farther entity paint over it: a coin still up at the horizon clipped through the bump about to hit
+  you. Descending is the painter's algorithm the receding road actually needs. Resolved entities fall
+  out of it for free — their effects belong on top of everything, they hold the lowest indices, and a
+  descending walk draws them last.
+- **Every wall's hazard band is laid down before any sprite**, in a pass of its own. A wall is three
+  obstacles sharing one beat and each asks for the band; drawn inline with its own sprite, the second
+  obstacle's band painted over the first obstacle's sprite and the third over both, so the bumps
+  looked cut off at the ankles. The band is opaque and identical for all three, so hoisting it into
+  its own pass costs nothing and makes the overdraw invisible, which is what it was always meant
+  to be.
+- **Effects are drawn after the kart, not with the other entities.** Every one of them happens *at*
+  the racer — the coin pop, the explosion, the coins a bump scattered — and the kart is nearly two
+  hundred pixels of opaque sprite standing exactly there. Drawn before it, an explosion is a ring of
+  light peeping out from behind the thing it supposedly hit, which reads as the effect going off
+  somewhere else. `drawEffects` is its own pass for this reason.
+- **The beat effect's length is a share of the track's own beat, not a fixed number of seconds.**
+  A fixed length has to be chosen for some tempo and is wrong at every other: at the old 0.18 s a
+  90 BPM track barely flickered between beats while a 175 BPM track never returned to normal at
+  all — the screen sat permanently part-washed and it stopped reading as a beat and started reading
+  as a haze. `pulseSeconds()` takes 62% of the period, clamped to 0.14–0.38 s, falling back to the
+  fixed figure when no tempo was established. Same reasoning as the star's life in beats and the
+  wall's warning as a fraction of the travel time.
+- **The wash has a strike *and* a release.** Two lobes over one envelope: a squared dip toward
+  `SHADOW` that is hardest at the beat and lets go fast, then a hump peaking halfway through the
+  decay that lifts past normal toward `TEXT_PRIMARY` before settling. Darkening alone reads as the
+  picture being dimmed — it has a beginning and no end — and it is the release that makes the beat
+  legible out of the corner of an eye while the player is watching the road. The lift is smaller
+  than the dip because brightening a palette this dark washes the road out far faster than
+  darkening it hides anything.
+- **The camera punches in on the beat, and that is not the thing this file forbids.** `beatZoom` is a
+  uniform scale of the finished frame about the canvas centre — 5.5%, squared so it is sharp
+  and gone, and only ever inwards so the canvas edges stay covered. The version that failed grew the
+  *road's width*, and the reason that failed is worth stating precisely: the road's width is an input
+  to the projection, so changing it moved every entity relative to the lane lines and to each other.
+  Where a thing was stopped meaning when it would arrive, which is the projection's only job. A
+  uniform scale moves every pixel by the same factor, so nothing moves relative to anything else and
+  the lookahead still reads as timing; what changes is how much of the frame you can see, which is
+  what a camera is. The head-up display, the banner and the washes are drawn **outside** the
+  transform — text must not scale, and a full-canvas wash must stay full-canvas.
+- **Beat feedback: washes over the picture, and never the geometry.** Three of them now, all drawn
+  over the finished frame and *under* the head-up display, so none can make a score unreadable:
+  - the **beat wash** dips the whole screen towards `SHADOW` on a strong beat, squared so it is a
+    brief dip rather than a throb across the beat. It **darkens**; a light wash over this palette
+    washes out the road and hides the entities the beat has just placed on it.
+  - a **pickup lights the screen `PRIMARY`** — the palette's yellow, the same role the coin counter
+    is drawn in — and fades. A star does it for twice as long, a broken bump for the same as a coin.
+  - **a bump lights it `NEGATIVE` and pulses** three times before it goes (fading envelope × a
+    rectified sine, so it beats and dies rather than strobing and then vanishing mid-flash). A
+    single fade reads as a change in the light; a few beats of it read as an alarm, which is what a
+    bump is, and it is the one event the player may have missed the cause of.
+
+  All three fire from `RunnerListener` callbacks, so each happens exactly once per event rather than
+  being deduced per frame by diffing `EntityState` — which is wrong the first time a frame is
+  dropped. They are timed off the game clock, so a pause freezes them with everything else.
+- **The star cycles the kart through the palette, and the rainbow is made of roles.**
+  `RunnerView.RAINBOW` walks `PRIMARY → POSITIVE → METER_LOW → ACCENT → HIGHLIGHT → NEGATIVE`,
+  mixing between neighbours and snapping back onto the 5-bit grid. Reaching for `Color.hsb` would
+  have been shorter and would have put six colours into the runner that no mood can reach — exactly
+  the debt ground rule 7 exists to prevent, and it would leave the star looking like it belonged to
+  a different game the moment M11 lands. This way it restyles itself for free. The kart itself is
+  tinted with a hue-cycling `ColorAdjust` on the one sprite, for the eight beats the star runs;
+  **moods still never tint artwork** — a power-up saying so is not a theme.
+- **The star's halo is drawn as blocks, not as an ellipse** (`fillPixelOval`). A smooth
+  anti-aliased oval was the one shape on that screen that gave away a modern toolkit: everything
+  else is hard-edged and the eye finds the odd one out immediately.
+- **`explode` clamps the frame index rather than letting it wrap.** `SpriteSheet.viewport` takes the
+  index modulo the frame count, which is right for a loop and wrong for an animation that plays
+  once: at the last instant of the effect the index reaches `frameCount` and a two-frame explosion
+  snapped back to its first frame for a single frame as it faded.
+- **Beat feedback: a flash, and never the geometry.** The horizon line flashes on each strong beat
+  and the lane edges glow with the live L/R RMS — that is where the metering and the game visibly
+  meet, and it is the reason the meters are not just decoration. **The road's width and its scroll
+  rate are functions of the speed class alone.** An earlier version swelled the road a few percent
+  per beat, as the brief originally said, and it was wrong: the whole picture pumped, the kart
+  appeared to lurch, and the motion stopped reading as driving. Speed is a constant; what the music
+  does is put things *on* the road — coins, stars, and a wall on the big hits.
 - **Rank** = coins collected as a percentage of coins *available in that generated course* →
   S / A / B / C / D. `ScoreRepository` persists the best score per `(songId, speedClass)` to
   `~/.superdwarfkart/scores.json`; the library view shows a rank badge per song, and marks
@@ -717,6 +863,218 @@ about a second. Re-run those numbers with `-Dsdmk.smokeTest=true` — the smoke 
   one pixel about six times a second), because redrawing a thousand ticks at 60 fps to show nothing
   new would cost most of a core.
 
+### As built (2026-08-12, M7)
+
+**Measured on `Crimewave` (4:18, 120.0 BPM, 826 onsets, 461 on the beat).** The four classes place
+66 / 119 / 235 / 454 coins, 33 walls each, and 1 / 4 / 11 / 11 stars, at 2.22 / 1.59 / 1.23 / 1.01
+seconds of lookahead. The event counts follow the density rule exactly — every 4th strong beat, every
+2nd, every one, and the deduplicated onset list — less whatever the walls' clear road takes out. The
+smoke test prints all of it and re-derives it every launch.
+
+**Walls, and the accents that place them** (added the same day, after the first pass):
+
+- **`ANALYZER_VERSION` is 2, and the bump bought one thing: a strength per strong beat.** The beats
+  themselves did not move — the same track still reads 120.0 BPM, 826 onsets, 461 on the beat. What
+  is new is *how big* each of those beats was, which is what the game needs to know where a wall
+  belongs. Old cache entries are a miss and re-analyse in about a second.
+- **Strength is the ratio to the local mean, not the raw novelty.** Raw novelty tracks how loud the
+  music is, so ranking by it would call every attack in a loud chorus big and none in a quiet verse
+  — the opposite of useful, since a quiet passage's snare is just as much of a landmark. The ratio
+  asks how far the attack stood above *its own* surroundings, which is already the quantity the
+  sensitivity is compared against, so a strength of 6 means literally "six times its neighbourhood".
+- **The accent threshold is a percentile of the track's own beats**, the top fifth
+  (`Beatmap.ACCENT_FRACTION`), never a fixed number — a sparse recording's snare towers over its
+  surroundings where a dense mix's does not, and a fixed bar would wall one track solid and leave
+  the other bare. A map with no strengths recorded returns an **infinite** threshold, so it gets no
+  walls rather than a wall on every beat.
+- **Measured: 33 walls on the 4:18 track**, one every ~7.8 s, and the same 33 at every speed class —
+  a wall is on the music, not on the difficulty. Nothing else is placed within 0.6 s either side, so
+  the jump is never also a lane change, and the scripted lap still ranks S at 50cc and 100cc.
+- **Wall-ness is part of the course**, not something worked out by looking for three obstacles at
+  one instant: `Obstacle.isWall()`, compared by `equals`, so two courses that differ only in it
+  compare different. `Entity.equals` stays final and subclasses extend it through `sameDetails`.
+- The view draws a **hazard band across the whole road** behind the three sprites — three bumps in a
+  row read as three bumps you might squeeze between — and shouts **JUMP!** from 45% of the way down
+  the lookahead. That is a fraction of the travel time rather than a number of seconds, so it warns
+  the same *distance* ahead at every class. Shouting it is not a crutch: a wall has no decision in
+  it, only timing.
+
+- **The runner is seen from behind the kart, down a road that recedes to a horizon**, and a
+  **sprite only ever draws at 1x, 2x, 3x or 4x**, snapping between them as it comes in. That is not
+  a compromise between perspective and ground rule 8, it is what the hardware this look comes from
+  actually did, and it is the reason it reads as a GBA game rather than as a 3D engine with
+  filtering off.
+- **Everything on the road is placed by one curve, and it is not a perspective divide.**
+  `screenFraction(progress) = progress^1.25`, where progress is purely how much of the travel time
+  has gone. Entities, surface bands, kerbs and lane lines all go through it, so they move as one
+  picture and can never slide against each other; the road's half-width is then simply proportional
+  to how far down the screen it is, which is exactly right for a straight flat road and needs no
+  divide at all.
+
+  **The first version used a real `1/z` divide with depth linear in time, and it was unplayable.**
+  A still frame of it looked like a perfectly good road. In motion, half the travel was spent inside
+  the top fifth of the road and the last tenth of it covered 44% of the screen, so an entity hung
+  around the horizon and then whooshed past — which is what "everything pools at the horizon" looks
+  like, and it is why the game did not read as a rhythm game. Nothing about where a thing was told
+  you when it would arrive, which is the only job this projection has. `RunnerProjectionTest` pins
+  the replacement: monotonic, spanning exactly horizon to racer, and no tenth of the travel time
+  covering more than three times the road of any other.
+
+  **`PERSPECTIVE_BIAS` is the one knob.** 1.0 is Piano Tiles exactly — constant screen speed, where
+  a thing is *is* when it arrives. 2.0 is a true perspective divide. 1.25 keeps a visible
+  foreshortening while leaving position near enough proportional to time to be read as timing.
+- **The road is about a dozen filled trapezoids, not a scanline loop**, and the bands are spaced in
+  **time** rather than in depth — nine across the whole lookahead — so a band travels exactly as an
+  entity does and the surface is visibly faster at the quick classes for free.
+- **Measured, not guessed: a frame costs 0.15–0.2 ms**, which the smoke test prints. When the game
+  was reported as laggy the suspicion was that every entity on the course was being drawn; the
+  measurement said otherwise (three-figure headroom, and the visible window is a handful of entities
+  out of hundreds) and pointed at the projection instead. Keep that line — "it feels slow" has
+  several causes and they need different fixes.
+
+  **But know what that line does not measure, because it was later trusted too far.** A `Canvas`
+  call draws nothing: it appends to a command buffer the render thread rasterises during the pulse.
+  So the smoke test's figure is the cost of *writing the commands down*, and a tight loop of
+  `redraw()` calls that never yields has the renderer coalesce the lot and paint once. It reports
+  three-figure headroom on a game that visibly stutters, by construction. **The number with no blind
+  spot is the interval between `AnimationTimer` callbacks** — the toolkit will not start a pulse
+  while the last one is still being painted, so the render thread, the layout pass, another view's
+  timer and a garbage collection all land in it. That is what `-Dsdmk.diag` reports, and it is the
+  number the player is looking at. Measured on this machine: **120 Hz display, p50 8.3 ms, tick
+  0.23 ms** — the runner is nowhere near the frame budget and never was.
+- **The palette is too dark to draw a road from two adjacent surface roles.** `SURFACE` and
+  `SURFACE_RAISED` are a few 5-bit steps apart, and the first version drew a correct road nobody
+  could see against the verge. The lit band is `mix(SURFACE_RAISED, TEXT_DIM, 0.22)` — a *distance
+  between roles*, not a colour, so it still lifts in a dark mood and darkens in a light one.
+- **`audio/SmoothClock` is the fix for the stutter, and it is not the accumulated frame time this
+  project forbids.** A sound card reports `position()` in whole buffers: read sixty times a second
+  it stands still for several frames and then jumps, and a road drawn straight off it stutters on
+  any machine. The clock free-runs on wall time and is pulled back onto the audio position by 8% of
+  the error *every frame*, so it cannot be more than a few milliseconds out — an accumulator has
+  nothing correcting it and is a beat wrong inside a minute. It snaps past 250 ms (a seek, a new
+  song), caps one step at 100 ms (a minimised window), and reports the raw position while paused.
+- **`java.time.Duration.toSeconds()` returns a `long`, and it quantised the entire game clock to one
+  second.** `engine.position().toSeconds()` compiles, reads exactly right, and is silently widened to
+  `double` with the fraction already gone — because the method everyone remembers is
+  `javafx.util.Duration.toSeconds()`, which returns a `double`. The two are told apart by nothing but
+  the import, and ground rule 3 puts `java.time` on this side of the line.
+
+  Nothing threw and no test failed. What it did instead: the road crawled and then lurched about once
+  a second, and clearing a wall stopped depending on when the key was pressed. **Both reported
+  symptoms — "laggy driving" and "the jumps are frame perfect" — were the same one line.** Measured
+  at 60 Hz against a real track, before and after: the clock advanced **0.9 times a second in flat
+  1000 ms steps** and now advances **59.8 times a second in 21 ms steps**; `SmoothClock` went from
+  191.7 ms of error and a snap every second to **6.2 ms and no snaps at all**, and the smoothed
+  reading's median step went from **2.1 ms per frame to 16.6 ms** — from one eighth of real time to
+  exactly real time.
+
+  `SmoothClock` was doing its job perfectly and made the bug *harder* to see rather than easier: fed
+  a stale target it pulls back 8% of the error per frame, which settles at a reading that has almost
+  stopped moving instead of one that is visibly frozen. A frozen road is a bug report in one word; a
+  road running at an eighth speed is "laggy". **`AudioSource.positionSeconds()` /
+  `PlaybackEngine.positionSeconds()` are now the only way to read the clock**, and
+  `AudioSourceSecondsTest` fails if `toSeconds()` comes back. The only legitimate remaining calls are
+  in `PlaybackBar.formatTime` and `LibraryView`, where a clock face wants whole seconds.
+- **Pausing the music pauses the game, and nothing is told to.** The clock stops because the card
+  stopped, so the entities stop, the road stops and the star stops running out. The two can never
+  disagree because there is only one of them.
+- **The timing window has a late half, and it did not used to.** A jump covers
+  `[pressed, pressed + JUMP_SECONDS)`, so judging an obstacle on its beat accepted any press in
+  `(T - 0.45s, T]` and **nothing whatsoever after `T`** — 450 ms of early tolerance and zero late
+  tolerance. Human timing error is symmetric about what the player aimed at, so that threw away half
+  of every player's attempts, and precisely the half they cannot see themselves making: a key
+  pressed a frame late looks, on screen, exactly like a key pressed on time. It reads as a
+  frame-perfect input. `RunnerGame.JUDGEMENT_GRACE_SECONDS` is 0.10 and moves judgement that far
+  past the beat, so the window is now roughly symmetric.
+
+  Three details make it honest rather than merely lenient. The entity is still **drawn** arriving on
+  its beat — only the verdict is late, and a pop that begins a tenth of a second after contact is
+  the trade every rhythm game makes. The jump test is an **interval overlap**
+  (`clearedByJump`), not a reading of `isJumping()` at the moment of judgement, which would refuse a
+  jump that was airborne for the whole arrival and had just landed. And **the lane that counts is
+  the lane the racer was in on the beat** (`laneAt`), not the one they are in a grace period later —
+  otherwise the grace would quietly punish steering, hitting a player with an obstacle they had
+  already gone past. That last one is the trap that comes free with a delayed judgement, and
+  `RunnerGameTest.theGraceDoesNotPunishSteering` is what keeps it shut. The grace is applied to
+  every entity, not just obstacles, because the resolution cursor walks the course in beat order.
+- **The road scrolled the wrong way for a whole milestone.** A surface band's progress was
+  `(band - scroll)`, which *shrinks* as the clock advances, so the surface climbed towards the
+  horizon while every entity standing on it came down the screen. It is `(scroll - band)` — the same
+  direction `progressOf` moves. Nobody could name what was wrong with the picture, which is exactly
+  how it survived: a still frame of a scrolling road is a static road, so no screenshot shows it.
+  `RunnerProjectionTest` now pins both the direction and that the surface covers exactly the ground
+  an entity does in the same time.
+- **A collision is resolved at the entity's beat time, not by overlapping two rectangles.** The
+  entity is drawn travelling towards a fixed racer over `travelTime`, so it arrives exactly when its
+  note sounds. A hit test in screen space would be a test of the renderer's geometry; this is a test
+  of the music.
+- **A course carries no run state.** Entities are immutable and `RunnerGame` keeps an `EntityState`
+  array beside them, so a course can be replayed, screenshotted and driven twice. Put a `collected`
+  flag on the entity and the second run starts with every coin already taken.
+- **Seeking forward writes off what it skipped.** Anything more than 250 ms overdue resolves as
+  `MISSED` without scoring, so a course cannot be collected by dragging the playhead across it — and
+  a second of dropped frames cannot silently award whatever was in the racer's lane. Seeking
+  backwards re-arms the stretch and deliberately **keeps** the tally: re-scoring would let a run be
+  farmed over one good bar, and clearing it would throw a run away because somebody nudged the bar.
+- **The lane changes at once; only the sprite glides.** A logical lane that eased across with the
+  drawing would count a player who moved as still standing in front of the thing they moved away
+  from, and there is no way to explain that to them — the screen showed them moving.
+- **The generator makes courses that can be survived.** Two obstacles closer together than 0.30 s
+  are forced into the same lane, because no player can get out of two different lanes in that time.
+  It is real seconds rather than course units — a human reaction is being allowed for, not a
+  distance — which is exactly why the fast classes are harder without ever becoming unfair. Entities
+  closer than 90 ms are merged, since an onset can register twice a few milliseconds apart.
+- **Coins come in runs.** A lane drawn independently per coin gives a field of scattered dots that
+  reads as output; coins within 0.55 s continue the previous lane 60% of the time and read as a
+  route somebody chose.
+- **The seed is FNV-1a over `songId|CLASS`, defined in `Course` rather than taken from
+  `String.hashCode()`.** 64 bits instead of 32, and pinned here so a future runtime cannot change
+  the number and silently re-roll every stored score.
+- **`ScoreKeeper` keeps two numbers and keeping them apart is the point.** `coinsCollected` never
+  goes down and is what `Rank` divides by the course's coins; `coins` is the balance, less 5 a bump
+  and plus 5 an obstacle broken. Break bonuses are deliberately **not** in the rank — a bonus that
+  was never on the course could otherwise push it past 100%.
+- **The rank ignores the speed class and the score does not.** A clean 50cc run is an S and so is a
+  clean 200cc one; what separates them is what the coins were worth. Weighting the rank as well
+  would put the letter out of reach at the class a beginner starts on.
+- **`ScoreRepository` is its own in-memory model**, unlike `Library` and its repository. There is
+  nothing for a separate `ScoreBoard` to do — at most one entry per song per class, only ever read
+  by key, and every change has to reach disk immediately anyway. A run that earned an S and was lost
+  because the window closed is worse than any amount of symmetry. `record` compares first, so
+  skipping a track ten seconds in cannot wipe out the complete run before it — which matters because
+  skipping is how most runs actually end.
+- **The rank is derived on read, never stored.** The file carries a `rank` field for a human reading
+  it and it is ignored on the way back in; two counts and a letter that can disagree with them is a
+  bug waiting for a hand edit.
+- **`analysis/BeatmapIndex` exists because the cache is keyed by content hash.** The library table
+  marks songs whose course is ready, and asking the cache per row would read the whole audio file —
+  megabytes per frame per row over a scrolling table. The hashing happens once on a background
+  thread and `isReady` is a map lookup; answers are invalidated by size and modification time.
+- **The library and the runner share the middle of the window, swapped by F6.** At one em per glyph
+  the table needs every pixel and the runner needs a road long enough to read a lookahead off;
+  neither survives half. It is also the shape the M9 side rail will formalise, where Library is one
+  destination among several rather than a permanent fixture.
+- **Nothing plays until the user says so.** A dialog on first launch asks, and accepting brings the
+  road up on its own — the game appears because a race began, not because a function key was found.
+  Leaving the road by hand pins the library, so play and pause stop moving the window under them.
+- **The smoke test fires the real keys at the real scene** and prints what the kart did, because a
+  routing fault lives entirely in how the scene delivers an event: no screenshot shows it and no
+  unit test reaches it. It caught the dead jump the moment it was added, and it caught the stale
+  playing-flag straight after.
+- **A jump lifts the kart 130 px, not the 54 it started at**, with the shadow shrinking and pulling
+  away and a puff of dust at the take-off point. On a 190 px kart the original lift was a bob
+  indistinguishable from the sprite sitting still — the control worked and read as broken, which is
+  the same bug as not working.
+- **The controls appear in the middle of the road for three and a half seconds when the music
+  starts**, then fade on their own. The corner line is a reminder for somebody who already knows;
+  this is the one moment somebody who does not is both looking at the road and about to need them.
+- **`Fonts.pixel` caches by size.** It was calling a `synchronized` loader and the platform font
+  lookup on every text draw, several times a frame, across four canvases.
+- **A bump explodes and scatters the coins it cost.** Each dropped coin's arc is a pure function of
+  the obstacle's beat time and its index — thrown, scattered, pulled down — so there is no particle
+  list, nothing allocated per frame, and the same bump scatters the same way every run. A number
+  ticking down in the corner is arithmetic; coins on the floor are a mistake.
+
 ---
 
 ## 8. Assets — assume nothing about the folder
@@ -744,15 +1102,40 @@ manifest is absent, **write a template out on first run** populated with what wa
 |---|---|---|
 | 0, 1 | the driving cycle, side view | **the only two that may loop** |
 | 2 | the kart from behind | for driving away, or across a map seen from above |
-| 3 | static icon | menus and labels; never animated |
+| 3 | static icon | menus, labels **and the racer-select portrait**; never animated |
 
 Looping all four — which is what a generic `SpriteAnimation` over the sheet does — flickers the
 kart between a side view, a rear view and a menu icon several times a second. Ask
 `RacerFrame.driving(seconds)` for the cycle rather than counting frames by hand, and mirror the
 sprite (`drawSprite(..., flipped)`) to face left; the art is drawn facing right only.
 
-Still missing: explosion (2 frames), background, racer select portraits, obstacle/bump.
-These must resolve to magenta placeholders without breaking anything.
+Still missing: background, obstacle/bump. These must resolve to magenta placeholders without
+breaking anything, and as of M7 they do — the runner draws a magenta X where a bump should be and
+stays entirely playable.
+
+**Racer-select portraits are not missing and never were: they are frame 3 of each racer's own
+sheet** (`RacerFrame.ICON`), which is exactly what that frame is drawn for and why it is the one
+frame that must never be animated. All five racers already have one. So M9's select screen draws
+`assets.racer(racer)` at `RacerFrame.ICON` and needs no portrait artwork at all; `AssetKind.SELECT`
+covers only whatever backdrop or furniture that screen wants, and its absence is not a missing
+portrait. Do not put a portrait file per racer on the art to-do list.
+
+**`Explosion.png` arrived and needed no code at all**, which is the asset layer working exactly as
+designed. It is 64×32; square-frame inference read it as **2 frames of 32×32** with no manifest
+entry, and `RunnerView.explode` already spread whatever count it found across the effect's life. The
+only change it forced was a bug fix it exposed: `explode` now **clamps** the frame index instead of
+letting `SpriteSheet.viewport` wrap it, because at the last instant of the effect the index reaches
+`frameCount` and a two-frame explosion snapped back to its first frame for a single frame as it
+faded. A longer sheet drops in the same way, including into `~/.superdwarfkart/assets/` with no
+rebuild. The **wall's hazard band and the flash under a bump are drawn from the palette, not from the
+sheet**, so a bump reads as a bump with no artwork at all and gains the sprite when it arrives.
+
+**A test that fails when artwork *arrives* is testing a folder, not the code.**
+`AssetRegistryTest.missingKindIsReportedNotThrown` used to name the explosion as the kind the project
+had not drawn yet, and it broke the day the file was dropped in — the one day the asset layer was
+behaving perfectly. It now asks the question that is actually the rule, of every `AssetKind` there
+is: each must resolve to a drawable sheet with at least one frame, art or no art. Do not write the
+next one against whatever happens to be missing today.
 
 ### As built (2026-08-12)
 
@@ -955,6 +1338,11 @@ modulation; cap visible change at **3 Hz** regardless of BPM; and put a **"Reduc
 switch in Settings that kills reactivity and all layer scrolling globally. A fullscreen overlay
 flashing at 8 Hz in a darkened classroom is a genuine problem, not a style question.
 
+**The runner's beat effects already fall under this and must be wired to that switch when it is
+built.** `beatZoom`, the dip-and-lift wash and the pickup/bump flashes are all full-screen, and on a
+120 BPM track the beat ones fire at 2 Hz — inside the 3 Hz cap, but only because the cap was
+respected by luck rather than by a check. "Reduce motion" must reach `RunnerView`, not only `mood/`.
+
 ### Palette import — the highest-value 40 lines in this milestone
 
 `PaletteImporter` reads two text formats:
@@ -1037,7 +1425,7 @@ pane, the whole app is the preview.
 | M4 | ⭐ **Structure visualizer** — circuit, starting grid, animated BST traversal, `OperationCounter`, live scatter, Presentation Mode | ✅ done |
 | M5 | ⭐ `LocalFileAudioSource`, real playback, PCM tap, independent L/R meters | ✅ done |
 | M6 | `BeatmapAnalyzer` + cache + debug view (BPM, onsets on a timeline) | ✅ done |
-| M7 | ⭐ 3-lane runner: lookahead spawning, coins, bumps, star, cc classes, scoring, beat pulse | ⬜ |
+| M7 | ⭐ 3-lane runner: lookahead spawning, coins, bumps, star, cc classes, scoring, beat pulse | ✅ done |
 | M8 | ⭐ Mini companion mode: transparent stage, disk + racer, expand/hide/quit | ⬜ |
 | M9 | Sweep: favorites, history, statistics, keyboard shortcuts, **`DARK` + `LIGHT` moods and a switcher** — the dark-mode bonus ships as moods, not a boolean | ⬜ |
 | M11 | ⭐ **Mood system** — 16-color GBA palettes, gradient/image/procedural overlay layers, live customizer, 16×16 / 32×32 pixel editor, `.gpl` + `.hex` import, `MoodValidator`, presets | ⬜ |
@@ -1136,6 +1524,12 @@ Report the measured time and which model applies **before** implementing either.
 - Little-endian byte order and sign extension.
 - The PCM callback is on the audio thread: analyze fast, return, never touch the scene graph.
 - Game timing from `audioSource.position()`, never accumulated frame time.
+- **`java.time.Duration.toSeconds()` truncates to a whole `long` second and widens to `double`
+  without a warning.** Its JavaFX namesake returns a `double`, so the call site looks correct and the
+  compiler agrees. Read the clock through `positionSeconds()`; the only place `toSeconds()` belongs
+  is formatting `m:ss`. This cost a milestone's worth of "the game feels laggy" — see §7, M7.
+- **Measuring a `Canvas` by timing `redraw()` measures nothing but the command recording.** The
+  frame-to-frame interval is the honest number; `-Dsdmk.diag` prints it.
 - **Dequeuing in mode 2 must not delete songs from the library.**
 - **BST deletion with two children, and duplicate song titles** — the two places this breaks.
   Both are covered by tests; keep them passing.

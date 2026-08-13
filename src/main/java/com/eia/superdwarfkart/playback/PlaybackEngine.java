@@ -260,6 +260,24 @@ public class PlaybackEngine implements PlaybackListener, AutoCloseable {
     }
 
     /**
+     * The clock everything timed against the music must read.
+     *
+     * <p>Never {@code position().toSeconds()}: on {@code java.time.Duration} that method returns a
+     * {@code long} and silently throws the fraction away. See {@link AudioSource#positionSeconds()}
+     * for what that cost.
+     *
+     * @return how far into the current song playback has reached, in fractional seconds
+     */
+    public double positionSeconds() {
+        return audio.positionSeconds();
+    }
+
+    /** @return the current song's playing time in fractional seconds */
+    public double durationSeconds() {
+        return AudioSource.toSeconds(duration());
+    }
+
+    /**
      * Returns the current song's playing time.
      *
      * <p>Falls back to what the library recorded when the decoder cannot say - a variable-bitrate

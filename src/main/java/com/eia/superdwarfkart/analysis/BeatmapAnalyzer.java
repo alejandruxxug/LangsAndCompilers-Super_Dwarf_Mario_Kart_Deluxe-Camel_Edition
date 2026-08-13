@@ -210,9 +210,11 @@ public final class BeatmapAnalyzer {
         }
 
         double duration = frames / (double) AppConfig.SAMPLE_RATE;
-        double[] onsets = OnsetDetector.pickPeaks(novelty, count, sensitivity);
+        OnsetDetector.Peaks peaks = OnsetDetector.pickPeaksWithStrength(novelty, count, sensitivity);
+        double[] onsets = peaks.times();
         double bpm = estimateBpm(onsets);
         double[] strong = strongBeats(onsets, bpm, duration);
+        double[] strength = strengthsOf(strong, peaks);
 
         if (progress != null) {
             progress.accept(1.0);
@@ -220,7 +222,30 @@ public final class BeatmapAnalyzer {
         LOG.info(String.format("Analysed %s in %.2fs: %.1f BPM, %d onsets, %d on the beat",
                 file.getFileName(), (System.nanoTime() - startedAt) / 1e9, bpm,
                 onsets.length, strong.length));
-        return new Beatmap(sourceHash, AppConfig.ANALYZER_VERSION, duration, bpm, onsets, strong);
+        return new Beatmap(sourceHash, AppConfig.ANALYZER_VERSION, duration, bpm, onsets, strong,
+                strength);
+    }
+
+    /**
+     * Carries each strong beat's strength across from the onset it came from.
+     *
+     * <p>A strong beat is one of the onsets, so this is a lookup rather than a second measurement -
+     * which matters, because a strength measured a second time from a different quantity could
+     * disagree with the one the beat was chosen by.
+     *
+     * @param strong the strong beat times, ascending
+     * @param peaks  every onset and its strength
+     * @return one strength per strong beat
+     */
+    private static double[] strengthsOf(double[] strong, OnsetDetector.Peaks peaks) {
+        double[] strength = new double[strong.length];
+        for (int index = 0; index < strong.length; index++) {
+            int at = Arrays.binarySearch(peaks.times(), strong[index]);
+            // Always a hit - a strong beat is an onset, taken from this very array - but a miss
+            // must leave a usable number rather than an exception on the analysis thread.
+            strength[index] = at >= 0 ? peaks.strengths()[at] : 0;
+        }
+        return strength;
     }
 
     /**

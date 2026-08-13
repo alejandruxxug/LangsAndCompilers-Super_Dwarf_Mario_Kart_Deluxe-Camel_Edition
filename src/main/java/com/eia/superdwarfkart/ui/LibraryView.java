@@ -1,11 +1,14 @@
 package com.eia.superdwarfkart.ui;
 
+import com.eia.superdwarfkart.analysis.BeatmapIndex;
+import com.eia.superdwarfkart.game.ScoreEntry;
 import com.eia.superdwarfkart.model.Genre;
 import com.eia.superdwarfkart.model.Library;
 import com.eia.superdwarfkart.model.LibraryListener;
 import com.eia.superdwarfkart.model.Song;
 import com.eia.superdwarfkart.persistence.PersistenceException;
 import com.eia.superdwarfkart.persistence.Repository;
+import com.eia.superdwarfkart.persistence.ScoreRepository;
 import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -81,12 +84,26 @@ public class LibraryView extends BorderPane {
      */
     private static final double COVER_DECODE_SIZE = 512;
 
+    /**
+     * Shown in the race column for a song whose course is built but never driven.
+     *
+     * <p>A chevron rather than a letter, so it cannot be mistaken for a rank at a glance across a
+     * column of them.
+     */
+    private static final String COURSE_READY_MARK = ">";
+
     private static final String ANY_ARTIST = "ALL ARTISTS";
     private static final String ANY_ALBUM = "ALL ALBUMS";
     private static final Genre ANY_GENRE = null;
 
     private final Library library;
     private final Repository<Song> repository;
+
+    /** The score board the race column reads, or {@code null} when the view was built without one. */
+    private final ScoreRepository scores;
+
+    /** Which songs already have a course, or {@code null} when the view was built without one. */
+    private final BeatmapIndex courses;
 
     /** Every song in the library, mirrored for the table. */
     private final ObservableList<Song> masterList = FXCollections.observableArrayList();
@@ -128,14 +145,31 @@ public class LibraryView extends BorderPane {
     private int cellPhase;
 
     /**
-     * Builds the view over a library and its storage.
+     * Builds the view over a library and its storage, with no race column.
+     *
+     * <p>For tests and for any caller that has no score board to show.
      *
      * @param library    the library to display and edit; must not be {@code null}
      * @param repository where changes are persisted; must not be {@code null}
      */
     public LibraryView(Library library, Repository<Song> repository) {
+        this(library, repository, null, null);
+    }
+
+    /**
+     * Builds the view over a library and its storage.
+     *
+     * @param library    the library to display and edit; must not be {@code null}
+     * @param repository where changes are persisted; must not be {@code null}
+     * @param scores     the score board the race column reads, or {@code null} to omit the column
+     * @param courses    which songs already have a course, or {@code null} to omit the marker
+     */
+    public LibraryView(Library library, Repository<Song> repository, ScoreRepository scores,
+                       BeatmapIndex courses) {
         this.library = library;
         this.repository = repository;
+        this.scores = scores;
+        this.courses = courses;
 
         getStyleClass().add("library-view");
         setTop(buildHeader());
@@ -291,8 +325,13 @@ public class LibraryView extends BorderPane {
         playsColumn.setPrefWidth(68);
         playsColumn.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue().getPlayCount()));
 
-        table.getColumns().setAll(List.of(titleColumn, artistColumn, albumColumn, genreColumn,
-                yearColumn, durationColumn, ratingColumn, favoriteColumn, playsColumn));
+        List<TableColumn<Song, ?>> columns = new java.util.ArrayList<>(List.of(
+                titleColumn, artistColumn, albumColumn, genreColumn, yearColumn, durationColumn,
+                ratingColumn, favoriteColumn, playsColumn));
+        if (scores != null || courses != null) {
+            columns.add(buildRaceColumn());
+        }
+        table.getColumns().setAll(columns);
 
         // FilteredList cannot be sorted directly, so the table sorts a SortedList wrapped around
         // it and the comparator is bound to whichever column the user clicks.
@@ -327,6 +366,93 @@ public class LibraryView extends BorderPane {
             }
         });
         return table;
+    }
+
+    /**
+     * Builds the race column: what this song has been driven to, and whether it can be driven yet.
+     *
+     * <p>Three states, in order of what they are worth: the best <strong>rank</strong> the song has
+     * been driven to at any speed class, a bare marker for a song whose course is built and waiting,
+     * and nothing for one that has never been analysed. That ordering matters more than it looks -
+     * the column's job is to answer "what should I put on next", and a song already ranked S is a
+     * worse answer than one with a fresh course on it.
+     *
+     * <p>Neither lookup touches the disk. The board is held in memory and the course marker comes
+     * from {@link BeatmapIndex}, which does its hashing on a background thread precisely so that a
+     * scrolling table never does.
+     *
+     * @return the column
+     */
+    private TableColumn<Song, String> buildRaceColumn() {
+        TableColumn<Song, String> raceColumn = new TableColumn<>("RACE");
+        raceColumn.setPrefWidth(64);
+        raceColumn.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(raceBadge(c.getValue())));
+        raceColumn.setCellFactory(c -> new TableCell<>() {
+            @Override
+            protected void updateItem(String badge, boolean empty) {
+                super.updateItem(badge, empty);
+                getStyleClass().removeAll("race-rank", "race-ready");
+                if (empty || badge == null || badge.isEmpty()) {
+                    setText("");
+                    setTooltip(null);
+                    return;
+                }
+                setText(badge);
+                getStyleClass().add(COURSE_READY_MARK.equals(badge) ? "race-ready" : "race-rank");
+                setTooltip(new Tooltip(raceTooltip(getTableRow() == null
+                        ? null : getTableRow().getItem())));
+            }
+        });
+        return raceColumn;
+    }
+
+    /**
+     * @param song the song, or {@code null}
+     * @return the letter or marker shown in the race column
+     */
+    private String raceBadge(Song song) {
+        if (song == null) {
+            return "";
+        }
+        if (scores != null) {
+            var best = scores.bestAnyClass(song.getId());
+            if (best.isPresent()) {
+                return best.get().rank().name();
+            }
+        }
+        return courses != null && courses.isReady(song.getFilePath()) ? COURSE_READY_MARK : "";
+    }
+
+    /**
+     * @param song the song, or {@code null}
+     * @return what the race column's badge means for it
+     */
+    private String raceTooltip(Song song) {
+        if (song == null) {
+            return "";
+        }
+        if (scores != null) {
+            var best = scores.bestAnyClass(song.getId());
+            if (best.isPresent()) {
+                ScoreEntry entry = best.get();
+                return "Best rank " + entry.rank() + " at " + entry.speedClass().displayName()
+                        + "\n" + entry.coinsCollected() + " of " + entry.coinsAvailable()
+                        + " coins  (" + Math.round(entry.completion() * 100) + "%)"
+                        + "\nScore " + entry.score();
+            }
+        }
+        return "Course ready - press F6 and drive it.";
+    }
+
+    /**
+     * Repaints the race column.
+     *
+     * <p>Called when a run is filed and when the course index finishes a batch. The table holds
+     * live {@link Song} references and the badge is not one of their fields, so nothing about the
+     * list has changed and only a forced re-render will show it.
+     */
+    public void refreshBadges() {
+        table.refresh();
     }
 
     private static TableColumn<Song, String> column(String title, double width,
@@ -566,6 +692,12 @@ public class LibraryView extends BorderPane {
         masterList.setAll(library.all());
         rebuildFilterChoices();
         applyFilters();
+
+        // Look up anything new in the background. Already-known files are skipped inside, so this
+        // costs nothing on a refresh that only changed a rating.
+        if (courses != null) {
+            courses.request(masterList.stream().map(Song::getFilePath).toList());
+        }
 
         if (previouslySelected != null) {
             library.findById(previouslySelected.getId()).ifPresent(this::select);

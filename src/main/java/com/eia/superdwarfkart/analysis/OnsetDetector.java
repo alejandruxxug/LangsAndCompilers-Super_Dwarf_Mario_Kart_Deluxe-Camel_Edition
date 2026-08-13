@@ -189,8 +189,46 @@ public final class OnsetDetector {
      * @return the onset times in seconds, ascending, never {@code null}
      */
     public static double[] pickPeaks(float[] novelty, int count, double sensitivity) {
+        return pickPeaksWithStrength(novelty, count, sensitivity).times();
+    }
+
+    /**
+     * The onsets and how far each of them stood out.
+     *
+     * @param times     the onset times in seconds, ascending
+     * @param strengths how many times above its own neighbourhood each attack stood, parallel to
+     *                  {@code times}
+     */
+    public record Peaks(double[] times, double[] strengths) {
+
+        /** @return how many onsets were found */
+        public int size() {
+            return times.length;
+        }
+    }
+
+    /**
+     * Picks the onsets out of a finished novelty curve, and records how big each one was.
+     *
+     * <p><strong>Strength is the ratio to the local mean, not the raw novelty.</strong> Raw novelty
+     * tracks how loud the music is at that moment, so ranking by it would call every attack in a
+     * loud chorus a big one and none in a quiet verse - which is the opposite of useful, because a
+     * quiet passage's snare is just as much of a landmark as a loud one's. The ratio asks a
+     * different question: how far did this attack stand above <em>its own surroundings</em>. That is
+     * already the quantity {@code sensitivity} is compared against, so a returned strength is
+     * always at least the sensitivity, and a value of 6 means literally "six times its
+     * neighbourhood".
+     *
+     * <p>This is what the game reads to know which beats are worth a wall of obstacles.
+     *
+     * @param novelty     the curve, one value per hop
+     * @param count       how many entries of it are valid
+     * @param sensitivity how far above its neighbourhood a peak must stand
+     * @return the onsets and their strengths, never {@code null}
+     */
+    public static Peaks pickPeaksWithStrength(float[] novelty, int count, double sensitivity) {
         if (novelty == null || count < 3) {
-            return new double[0];
+            return new Peaks(new double[0], new double[0]);
         }
 
         double[] localMean = localMeans(novelty, count);
@@ -198,6 +236,7 @@ public final class OnsetDetector {
         double minimumGap = MIN_GAP_SECONDS;
 
         double[] onsets = new double[count];
+        double[] strengths = new double[count];
         int found = 0;
         double lastAccepted = Double.NEGATIVE_INFINITY;
 
@@ -215,10 +254,13 @@ public final class OnsetDetector {
             if (time - lastAccepted < minimumGap) {
                 continue;
             }
-            onsets[found++] = time;
+            onsets[found] = time;
+            strengths[found] = localMean[frame] > 0 ? value / localMean[frame] : sensitivity;
+            found++;
             lastAccepted = time;
         }
-        return java.util.Arrays.copyOf(onsets, found);
+        return new Peaks(java.util.Arrays.copyOf(onsets, found),
+                java.util.Arrays.copyOf(strengths, found));
     }
 
     /**

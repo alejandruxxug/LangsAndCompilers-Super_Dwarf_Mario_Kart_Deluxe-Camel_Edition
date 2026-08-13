@@ -25,6 +25,16 @@ public final class Beatmap {
     /** A track with no beatmap: no tempo, no events. Never {@code null}, so callers need no guard. */
     public static final Beatmap EMPTY = new Beatmap("", 0, 0, 0, new double[0], new double[0]);
 
+    /**
+     * The share of strong beats treated as accents by {@link #accentThreshold()}.
+     *
+     * <p>A fraction rather than an absolute strength, because the number that makes a beat stand
+     * out is not comparable between tracks: a sparse recording's snare towers over its surroundings
+     * where a dense mix's does not. Asking for "the loudest fifth of this track's beats" gives the
+     * game the same amount to work with whatever it is handed.
+     */
+    public static final double ACCENT_FRACTION = 0.2;
+
     private final String sourceHash;
     private final int analyzerVersion;
     private final double durationSeconds;
@@ -33,7 +43,19 @@ public final class Beatmap {
     private final double[] strongBeats;
 
     /**
-     * Builds a beatmap.
+     * How far above its own surroundings each strong beat stood, parallel to {@link #strongBeats}.
+     *
+     * <p>This is what tells a downbeat from a hi-hat, and it is what the game reads to decide which
+     * beats deserve a wall of obstacles. See {@link OnsetDetector.Peaks} for why it is a ratio to
+     * the local mean and not a loudness.
+     */
+    private final double[] strongBeatStrengths;
+
+    /**
+     * Builds a beatmap with no strength information.
+     *
+     * <p>For tests and for anything hand-assembling a map. Every beat reads as equally strong, so
+     * nothing accents.
      *
      * @param sourceHash      content hash of the analysed file, the cache's key
      * @param analyzerVersion the algorithm version that produced it
@@ -45,6 +67,25 @@ public final class Beatmap {
      */
     public Beatmap(String sourceHash, int analyzerVersion, double durationSeconds, double bpm,
                    double[] onsets, double[] strongBeats) {
+        this(sourceHash, analyzerVersion, durationSeconds, bpm, onsets, strongBeats, null);
+    }
+
+    /**
+     * Builds a beatmap.
+     *
+     * @param sourceHash          content hash of the analysed file, the cache's key
+     * @param analyzerVersion     the algorithm version that produced it
+     * @param durationSeconds     the track's playing time
+     * @param bpm                 the detected tempo, or 0 when none could be established
+     * @param onsets              every detected onset, in seconds, ascending
+     * @param strongBeats         the subset of onsets that fell on the tempo grid, ascending
+     * @param strongBeatStrengths how far each strong beat stood above its surroundings, parallel to
+     *                            {@code strongBeats}; {@code null} or the wrong length reads as no
+     *                            strength information at all
+     * @throws IllegalArgumentException if either series is not ascending
+     */
+    public Beatmap(String sourceHash, int analyzerVersion, double durationSeconds, double bpm,
+                   double[] onsets, double[] strongBeats, double[] strongBeatStrengths) {
         this.sourceHash = Objects.requireNonNull(sourceHash, "sourceHash must not be null");
         this.analyzerVersion = analyzerVersion;
         this.durationSeconds = Math.max(0, durationSeconds);
@@ -53,6 +94,12 @@ public final class Beatmap {
         // able to reach in and change a course after it has been cached.
         this.onsets = requireAscending(onsets, "onsets");
         this.strongBeats = requireAscending(strongBeats, "strongBeats");
+        // A mismatched length is a stale cache entry, not a reason to refuse the whole map: the
+        // beats are still right and the game simply stops accenting until it is re-analysed.
+        this.strongBeatStrengths =
+                strongBeatStrengths != null && strongBeatStrengths.length == this.strongBeats.length
+                        ? strongBeatStrengths.clone()
+                        : new double[this.strongBeats.length];
     }
 
     /**
@@ -134,6 +181,53 @@ public final class Beatmap {
     /** @return how many of them fell on the beat */
     public int strongBeatCount() {
         return strongBeats.length;
+    }
+
+    /** @return how far each strong beat stood above its surroundings; a copy, safe to modify */
+    public double[] strongBeatStrengths() {
+        return strongBeatStrengths.clone();
+    }
+
+    /**
+     * @param index which strong beat, counting from zero
+     * @return how many times above its own surroundings that attack stood, or 0 when the map
+     *         carries no strength information
+     * @throws IndexOutOfBoundsException if there is no such beat
+     */
+    public double strongBeatStrengthAt(int index) {
+        return strongBeatStrengths[index];
+    }
+
+    /**
+     * The strength at which a beat counts as an accent on this track.
+     *
+     * <p>Measured as a percentile of this track's own beats rather than as a fixed number, because
+     * a strength is only meaningful relative to the recording it came from - see
+     * {@link #ACCENT_FRACTION}.
+     *
+     * @return the threshold, or {@link Double#POSITIVE_INFINITY} when there is nothing to rank, so
+     *         a caller comparing against it accents nothing rather than everything
+     */
+    public double accentThreshold() {
+        return accentThreshold(ACCENT_FRACTION);
+    }
+
+    /**
+     * @param topFraction the share of beats to treat as accents, 0.0 to 1.0
+     * @return the strength at which a beat is in that share, or {@link Double#POSITIVE_INFINITY}
+     *         when the map carries no usable strength information
+     */
+    public double accentThreshold(double topFraction) {
+        double[] ranked = strongBeatStrengths.clone();
+        Arrays.sort(ranked);
+        // All zeros is a map from before strengths were recorded, or one with no tempo. Either way
+        // there is nothing to rank, and accenting every beat would be far worse than accenting none.
+        if (ranked.length == 0 || ranked[ranked.length - 1] <= 0) {
+            return Double.POSITIVE_INFINITY;
+        }
+        double fraction = Math.clamp(topFraction, 0d, 1d);
+        int at = (int) Math.floor((1 - fraction) * ranked.length);
+        return ranked[Math.clamp(at, 0, ranked.length - 1)];
     }
 
     /**

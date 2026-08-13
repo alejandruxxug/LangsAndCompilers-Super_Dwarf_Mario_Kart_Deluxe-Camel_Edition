@@ -989,3 +989,71 @@
     -fx-border-color: transparent transparent transparent -sdmk-edge;
     -fx-border-width: 0 0 0 2;
 }
+
+/* ------------------------------------------------------------------ */
+/* Runner - the three-lane rhythm game                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Only the frame and the control strip are styled here. The road, the sprites and the head-up
+ * display are drawn on a Canvas, through the palette, by role - see RunnerView.
+ */
+.runner-view {
+    -fx-background-color: -sdmk-panel-dark;
+    -fx-border-color: transparent transparent transparent -sdmk-edge;
+    -fx-border-width: 0 0 0 2;
+}
+
+/* A focus ring on the road itself: while it has focus the arrows steer instead of skipping. */
+.runner-view:focused {
+    -fx-border-color: transparent transparent transparent -sdmk-cyan;
+}
+
+.runner-controls {
+    -fx-background-color: -sdmk-panel;
+    -fx-border-color: transparent transparent -sdmk-edge transparent;
+    -fx-border-width: 0 0 2 0;
+}
+
+.runner-controls .button {
+    -fx-font-size: 8px;
+    -fx-padding: 6 9 6 9;
+}
+
+/*
+ * The speed class selector is deliberately the biggest control in this bar. It changes what the
+ * course holds, how fast it arrives and what the coins are worth, so it is not a setting tucked
+ * away with the others - it is the difficulty, and it has to look like it.
+ */
+.class-button {
+    -fx-font-size: 11px;
+    -fx-padding: 8 12 8 12;
+    -fx-text-fill: -sdmk-text-dim;
+}
+
+.class-button:selected {
+    -fx-text-fill: -sdmk-yellow;
+    -fx-background-color: -sdmk-face-hover;
+}
+
+.runner-summary {
+    -fx-font-size: 7px;
+    -fx-text-fill: -sdmk-text-faint;
+}
+
+/* The view toggle in the header, which swaps the library for the road. */
+.view-toggle {
+    -fx-font-size: 8px;
+    -fx-text-fill: -sdmk-cyan;
+}
+
+/* The race column: a best rank, or a marker for a course that is built and never driven. */
+.race-rank {
+    -fx-text-fill: -sdmk-yellow;
+    -fx-alignment: center;
+}
+
+.race-ready {
+    -fx-text-fill: -sdmk-cyan;
+    -fx-alignment: center;
+}
