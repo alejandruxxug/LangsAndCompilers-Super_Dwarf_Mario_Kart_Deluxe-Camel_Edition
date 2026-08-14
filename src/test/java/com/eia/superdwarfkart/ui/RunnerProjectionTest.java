@@ -94,8 +94,9 @@ class RunnerProjectionTest {
         double travel = 2.0;
         // One band boundary, watched over a second of playback. It is a fixed instant on the
         // course, so it must come down the screen exactly as a coin placed at that instant would.
-        double before = RunnerView.bandProgress(RunnerView.bandScroll(3.0, travel), 8);
-        double after = RunnerView.bandProgress(RunnerView.bandScroll(3.5, travel), 8);
+        int band = bandOnTheRoadAt(3.25, travel);
+        double before = RunnerView.bandProgress(RunnerView.bandScroll(3.0, travel), band);
+        double after = RunnerView.bandProgress(RunnerView.bandScroll(3.5, travel), band);
 
         assertTrue(after > before,
                 "the road scrolled backwards: a band went from " + before + " to " + after
@@ -111,12 +112,69 @@ class RunnerProjectionTest {
         // lookahead is a quarter of the road. The surface has to cover the same ground in the same
         // time or the two slide against each other and nothing on the road can be timed by eye.
         double entityMoved = 0.5 / travel;
-        double bandMoved = RunnerView.bandProgress(RunnerView.bandScroll(3.5, travel), 8)
-                - RunnerView.bandProgress(RunnerView.bandScroll(3.0, travel), 8);
+        int band = bandOnTheRoadAt(3.25, travel);
+        double bandMoved = RunnerView.bandProgress(RunnerView.bandScroll(3.5, travel), band)
+                - RunnerView.bandProgress(RunnerView.bandScroll(3.0, travel), band);
 
         assertEquals(entityMoved, bandMoved, 1e-9,
                 "the surface must travel exactly as an entity does, or the road slides under the "
                         + "things standing on it");
+    }
+
+    /**
+     * Picks a band boundary that is somewhere on the road at the given moment.
+     *
+     * <p>Derived rather than written down, because both tests above measure how far a boundary
+     * <em>moved</em> and {@code bandProgress} clamps at the racer's line. A boundary that runs off
+     * the end part way through the interval reports a short distance and fails a rate assertion
+     * that is actually still true - which is what a hard-coded band number did the day the band
+     * count changed.
+     */
+    private static int bandOnTheRoadAt(double seconds, double travel) {
+        return (int) Math.floor(RunnerView.bandScroll(seconds, travel)) - 1;
+    }
+
+    // ------------------------------------------------------------------
+    // The rungs, which are where the road gets its depth from
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a rung is a tick at the horizon and fills its band at the racer")
+    void rungsGrowTowardsTheRacer() {
+        double far = RunnerView.rungFraction(0);
+        assertEquals(1, RunnerView.rungFraction(1), 1e-9,
+                "at the racer's line the rung fills its band, which is the road this replaced");
+        assertTrue(far <= 0.5,
+                "at the horizon a rung covers " + far + " of its band, so the road is back to "
+                        + "alternating bands of near-equal height and reads as a texture scrolling "
+                        + "rather than as a surface going away from the player");
+        assertTrue(RunnerView.rungFraction(1) / far >= 2.5,
+                "a rung grows by " + String.format("%.1f", RunnerView.rungFraction(1) / far)
+                        + " times across the whole road; the projection is deliberately close to "
+                        + "linear, so this growth is the only thing left saying which end is "
+                        + "further away, and it has to be big enough to see");
+    }
+
+    @Test
+    @DisplayName("a rung never shrinks as it comes in")
+    void rungsNeverShrink() {
+        double previous = -1;
+        for (int step = 0; step <= 100; step++) {
+            double at = RunnerView.rungFraction(step / 100d);
+            assertTrue(at > previous, "the rung got shorter as it got closer, at " + step + "%");
+            previous = at;
+        }
+    }
+
+    @Test
+    @DisplayName("a rung stays inside its own band, however far out the argument is")
+    void rungsStayInsideTheirBand() {
+        for (double u : new double[] {-5, 0, 0.5, 1, 5}) {
+            double at = RunnerView.rungFraction(u);
+            assertTrue(at > 0 && at <= 1,
+                    "a rung covering " + at + " of its band would spill into the one behind it, "
+                            + "which is the band boundary the surface scroll is measured from");
+        }
     }
 
     @Test

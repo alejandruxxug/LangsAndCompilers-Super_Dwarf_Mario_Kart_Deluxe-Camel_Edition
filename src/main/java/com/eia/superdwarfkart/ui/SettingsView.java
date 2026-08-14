@@ -30,6 +30,7 @@ public class SettingsView extends ScrollPane {
         {"Previous / next song", "LEFT  RIGHT"},
         {"Play / pause", "SPACE"},
         {"Cycle the playback mode", "TAB"},
+        {"Fold the structure column away", "F4"},
         {"Presentation mode", "F5"},
         {"Swap the library for the road", "F6"},
         {"Collapse to the companion window", "F7"},

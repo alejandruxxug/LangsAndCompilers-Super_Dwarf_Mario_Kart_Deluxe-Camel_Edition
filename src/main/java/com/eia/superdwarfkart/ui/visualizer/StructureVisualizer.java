@@ -43,6 +43,9 @@ public class StructureVisualizer extends BorderPane {
 
     private StructureView view;
 
+    /** Whether the visualizer is on screen and therefore worth drawing. */
+    private boolean drawing = true;
+
     /**
      * Builds the visualizer and starts following the player.
      *
@@ -89,6 +92,13 @@ public class StructureVisualizer extends BorderPane {
         shownMode = mode;
         view = createView(mode);
         holder.getChildren().setAll(view == null ? unsupported(mode) : view);
+        if (!drawing && view != null) {
+            // A view starts its own idle timer as it is built, which is right for a view that is
+            // about to be looked at and wrong for one built while the column is folded away or the
+            // window is behind the companion strip. The mode can be cycled from the keyboard at any
+            // time, so this is not a corner case.
+            view.stop();
+        }
     }
 
     /**
@@ -117,5 +127,30 @@ public class StructureVisualizer extends BorderPane {
     /** @return the view currently on screen, or {@code null} when the mode has none */
     public StructureView view() {
         return view;
+    }
+
+    /**
+     * Picks the frame timer back up, for a visualizer coming back on screen.
+     *
+     * <p>The state is remembered rather than only forwarded, because the view underneath is
+     * replaced whenever the playback mode changes and the replacement must inherit it - see
+     * {@link #swapTo}.
+     */
+    public void start() {
+        drawing = true;
+        if (view != null) {
+            view.start();
+        }
+    }
+
+    /**
+     * Releases the frame timer, for a visualizer being taken off screen - folded away with the
+     * structure column, or hidden behind the companion window.
+     */
+    public void stop() {
+        drawing = false;
+        if (view != null) {
+            view.stop();
+        }
     }
 }

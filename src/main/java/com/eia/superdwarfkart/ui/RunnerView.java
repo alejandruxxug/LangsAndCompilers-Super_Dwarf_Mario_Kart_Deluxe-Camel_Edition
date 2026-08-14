@@ -20,6 +20,7 @@ import com.eia.superdwarfkart.game.ScoreKeeper;
 import com.eia.superdwarfkart.game.SpeedClass;
 import com.eia.superdwarfkart.game.Star;
 import com.eia.superdwarfkart.model.Song;
+import com.eia.superdwarfkart.mood.GbaColor;
 import com.eia.superdwarfkart.mood.Palette;
 import com.eia.superdwarfkart.mood.PaletteRole;
 import com.eia.superdwarfkart.persistence.ScoreRepository;
@@ -133,8 +134,91 @@ public class RunnerView extends BorderPane {
      * <p>Spaced in <em>time</em>, not in depth, so a band travels exactly as an entity does and the
      * two can never slide against each other. It also means the road visibly scrolls faster at the
      * quick classes for free, because their lookahead is shorter.
+     *
+     * <p>Raised from 9 along with the rungs. A rung that is a third of its band needs the band to be
+     * small before "a third of it" is a stripe rather than a stretch of road, and nine bands over
+     * the whole lookahead left the far half of the road with about two boundaries in it - nothing
+     * like enough texture for a gradient across it to be visible. The rate is untouched by this:
+     * {@link #bandProgress} divides by the same figure {@link #bandScroll} multiplies by, so a
+     * boundary still travels at exactly {@code 1/travel} however many of them there are.
      */
-    private static final double BANDS_PER_LOOKAHEAD = 9;
+    private static final double BANDS_PER_LOOKAHEAD = 14;
+
+    /**
+     * How much of its band a surface rung fills right up against the horizon.
+     *
+     * <p><strong>This is where the depth the projection gives up is paid back.</strong>
+     * {@link #PERSPECTIVE_BIAS} is deliberately close to 1 so that where a thing is says when it
+     * arrives, and the price of that is a road which is very nearly a flat ramp: bands of equal
+     * height marching down the screen, which reads as a scrolling texture rather than as a surface
+     * going away from you. The fix cannot be the projection, because the projection carries the
+     * timing and {@code RunnerProjectionTest} pins it there. So the texture supplies the cue:
+     * every band is drawn dark, and the lit part of it is a <em>rung</em> that is a sliver at the
+     * horizon and grows to fill the band by the time it reaches the racer.
+     *
+     * <p>Nothing moves. A rung's near edge is exactly the band boundary it always was, so the
+     * surface still travels at precisely the rate an entity does and the two still cannot slide
+     * against each other - only the rung's trailing edge is new. What changes is the one thing the
+     * eye actually reads depth from, which is that near things are big and far things are small.
+     */
+    private static final double RUNG_FRACTION_FAR = 0.35;
+
+    /**
+     * How much of its band a surface rung fills at the racer's line.
+     *
+     * <p>All of it, so the near end of the road is exactly the alternating band it was before this
+     * existed. The growth is what carries the perspective; the destination is unchanged.
+     */
+    private static final double RUNG_FRACTION_NEAR = 1.0;
+
+    /**
+     * How far the road is faded towards the sky at the vanishing point.
+     *
+     * <p>Atmospheric perspective, and the cheapest depth cue there is: a kerb drawn at full
+     * brightness right up to the horizon is the single loudest claim that the picture is flat.
+     * Expressed as a distance towards {@link PaletteRole#SURFACE_RAISED} because that is what
+     * {@link #drawSky} leaves against the horizon, so the road fades into the sky it meets rather
+     * than into a colour of its own.
+     *
+     * <p><strong>The entities are never hazed.</strong> A coin the player has to read at the far end
+     * of the lookahead must stay legible, and moods do not tint sprite art in any case - so the
+     * road recedes and the things standing on it stay sharp, which incidentally makes them easier
+     * to pick out at distance rather than harder.
+     *
+     * <p>Deliberately small, and it was 0.62 for one screenshot. The road's own unlit colour
+     * <em>is</em> {@code SURFACE_RAISED}, so on the road this does not fade anything into the
+     * distance - all it can do is dissolve the rungs into the surface they sit on, and at 0.62 the
+     * top third of the road came out as one flat slab with no texture in it at all. Which is worse
+     * than the flat road this set out to fix: at least that one had stripes. The far rungs are
+     * meant to be <em>thin</em>, not faint, so this is left just strong enough to soften them.
+     * Whatever it is changed to, check that the ticks at the horizon still read.
+     */
+    private static final double HAZE_MAX = 0.18;
+
+    /**
+     * How far the ground either side of the road is faded towards the sky at the vanishing point.
+     *
+     * <p>Much harder than the road, and this is the single biggest thing that stopped the picture
+     * reading as a scrolling texture. The verge is drawn across the whole canvas, so its bands are
+     * the largest shapes on screen by a wide margin - full-width bars of near-equal height marching
+     * down the frame at full contrast, which is exactly what "lines just scrolling" looks like, and
+     * next to which the road's own convergence is a detail.
+     *
+     * <p>It can afford to recede this hard precisely because it is scenery. The road carries the
+     * timing and must stay legible to the horizon; the ground carries nothing, so fading it almost
+     * into the sky costs nothing and turns the loudest flat thing in the frame into a gradient
+     * going away from the player.
+     */
+    private static final double GROUND_HAZE_MAX = 0.86;
+
+    /**
+     * How sharply the haze gathers at the horizon.
+     *
+     * <p>Higher than a square, because the projection is nearly linear: a given share of the road's
+     * screen height is much further away here than the same share of a real perspective road would
+     * be, so a gentler falloff spreads the haze over ground the player is actually driving through.
+     */
+    private static final double HAZE_BIAS = 2.4;
 
     /** Width of the kerb down each side of the road, at the racer, in pixels. */
     private static final double KERB_WIDTH_NEAR = 22;
@@ -1331,19 +1415,44 @@ public class RunnerView extends BorderPane {
             double halfFar = halfNear * uFar;
             double halfNearEdge = halfNear * uNear;
             boolean lit = (band & 1) == 0;
+            // One haze per band rather than per row. It steps in whole bands, which is the same
+            // posterisation the sky is drawn with and for the same reason - a smooth falloff here
+            // would be the one gradient in an interface made entirely of hard steps.
+            double haze = (uFar + uNear) / 2;
 
-            // The ground either side, so the road reads as a road rather than as a shape.
+            // The ground either side. One flat band hazed by its own distance and nothing else -
+            // it used to alternate like the road, and those were the largest shapes on the screen:
+            // full-width bars of near-equal height at full contrast, all the way to the horizon.
+            // They cannot converge, because a flat plane's own texture is full-width by definition,
+            // so as long as they were there the picture read as horizontal stripes scrolling behind
+            // a triangle however well the triangle itself receded. Drawn plain, the road is the only
+            // thing carrying the motion, and the road is the thing that gets narrower.
             fillTrapezoid(gc, 0, width, yFar, 0, width, yNear,
-                    lit ? color(PaletteRole.BACKGROUND_ALT)
-                            : palette().mix(PaletteRole.BACKGROUND, PaletteRole.SHADOW, 0.5));
+                    hazed(palette().mix(PaletteRole.BACKGROUND, PaletteRole.SHADOW, 0.5),
+                            haze, GROUND_HAZE_MAX));
 
-            // The surface, deliberately lifted well clear of the ground. Both are dark in this
-            // palette and the two alternating road bands alone left the road indistinguishable
-            // from the verge - the shape was there and nobody could see it was a road.
+            // The surface between the kerbs, laid down dark across the whole band. The lit half of
+            // the alternation is the rung below, not this.
+            // Deliberately lifted well clear of the ground. Both are dark in this palette and the
+            // two alternating road bands alone left the road indistinguishable from the verge -
+            // the shape was there and nobody could see it was a road.
             fillTrapezoid(gc, centerX - halfFar, centerX + halfFar, yFar,
                     centerX - halfNearEdge, centerX + halfNearEdge, yNear,
-                    lit ? palette().mix(PaletteRole.SURFACE_RAISED, PaletteRole.TEXT_DIM, ROAD_LIFT)
-                            : color(PaletteRole.SURFACE_RAISED));
+                    hazed(color(PaletteRole.SURFACE_RAISED), haze));
+
+            // Where this band's rung starts. Its near edge is the band boundary, untouched; only
+            // this trailing edge is new, which is what leaves the scroll rate exactly as it was.
+            double uRung = rungTop(progressNear, progressFar, uFar, uNear, depth);
+            double yRung = horizonY + depth * uRung;
+            double halfRung = halfNear * uRung;
+            double rungHaze = (uRung + uNear) / 2;
+
+            if (lit) {
+                fillTrapezoid(gc, centerX - halfRung, centerX + halfRung, yRung,
+                        centerX - halfNearEdge, centerX + halfNearEdge, yNear,
+                        hazed(palette().mix(PaletteRole.SURFACE_RAISED, PaletteRole.TEXT_DIM,
+                                ROAD_LIFT), rungHaze));
+            }
 
             // The kerbs. Their brightness is the channel's level, which is where the meters and
             // the game visibly meet: a hard-panned track lights one side of the road and not the
@@ -1353,20 +1462,21 @@ public class RunnerView extends BorderPane {
             drawKerb(gc, centerX + halfFar, centerX + halfNearEdge, yFar, yNear,
                     uFar, uNear, lit, right, false);
 
-            // The lane lines, dashed by drawing them on alternate bands only. Wider near the
-            // camera, because at one pixel throughout they vanish at the far end and look ragged
-            // at the near one.
+            // The lane lines, dashed by drawing them on alternate bands only, and shortened by the
+            // same rung fraction the surface uses - so a dash is a tick at the horizon and a long
+            // stroke at the racer. Wider near the camera too, because at one pixel throughout they
+            // vanish at the far end and look ragged at the near one.
             if (!lit) {
                 for (int line = 1; line < Lane.COUNT; line++) {
                     double offset = (line / (double) Lane.COUNT - 0.5) * 2;
-                    double halfLineFar = Math.max(0.5, LANE_LINE_WIDTH_NEAR * uFar / 2);
+                    double halfLineFar = Math.max(0.5, LANE_LINE_WIDTH_NEAR * uRung / 2);
                     double halfLineNear = Math.max(0.5, LANE_LINE_WIDTH_NEAR * uNear / 2);
                     fillTrapezoid(gc,
-                            centerX + offset * halfFar - halfLineFar,
-                            centerX + offset * halfFar + halfLineFar, yFar,
+                            centerX + offset * halfRung - halfLineFar,
+                            centerX + offset * halfRung + halfLineFar, yRung,
                             centerX + offset * halfNearEdge - halfLineNear,
                             centerX + offset * halfNearEdge + halfLineNear, yNear,
-                            color(PaletteRole.TEXT_DIM, 0.7));
+                            hazed(color(PaletteRole.TEXT_DIM, 0.7), rungHaze));
                 }
             }
         }
@@ -1401,8 +1511,86 @@ public class RunnerView extends BorderPane {
                 ? palette().mix(PaletteRole.OUTLINE, PaletteRole.METER_HIGH,
                         Math.clamp(Levels.scale((float) level), 0f, 1f))
                 : color(PaletteRole.SHADOW);
+        // Hazed like the surface it edges. A kerb lit by the meters and drawn at full strength all
+        // the way to the vanishing point is the loudest thing on the screen insisting the picture
+        // is flat - it is a bright line that never gets any further away.
         fillTrapezoid(gc, xFar, xFar + direction * widthFar, yFar,
-                xNear, xNear + direction * widthNear, yNear, face);
+                xNear, xNear + direction * widthNear, yNear, hazed(face, (uFar + uNear) / 2));
+    }
+
+    /**
+     * How far back a band's rung reaches, as a screen fraction.
+     *
+     * <p>The rung's near edge is the band boundary and never moves; this is its trailing edge, and
+     * it is what makes the road recede. See {@link #RUNG_FRACTION_FAR}.
+     *
+     * <p>Floored at a pixel of screen height. A polygon thinner than a row renders as a flicker
+     * that comes and goes as it scrolls, and on the one part of the picture whose whole job is to
+     * read as steady motion that looks exactly like dropped frames.
+     *
+     * @param progressNear the band boundary nearest the racer
+     * @param progressFar  the boundary behind it
+     * @param uFar         the far boundary's screen fraction, which the rung may not pass
+     * @param uNear        the near boundary's screen fraction
+     * @param depth        pixels between the horizon and the racer's line
+     * @return the screen fraction the rung starts at
+     */
+    private static double rungTop(double progressNear, double progressFar,
+                                  double uFar, double uNear, double depth) {
+        double back = progressNear - rungFraction(uNear) * (progressNear - progressFar);
+        double u = screenFraction(back);
+        if (depth > 0 && (uNear - u) * depth < 1) {
+            u = uNear - 1 / depth;
+        }
+        return Math.clamp(u, uFar, uNear);
+    }
+
+    /**
+     * How much of its band a rung fills at a given distance down the road.
+     *
+     * <p>A sliver at the horizon growing to the whole band at the racer. Linear between the two,
+     * because the point is that it grows visibly and steadily - a curve here would make the growth
+     * happen mostly at one end of the road, which is the thing the projection was flattened to
+     * avoid in the first place.
+     *
+     * @param u how far down the screen the band's near edge is, 0 at the horizon and 1 at the racer
+     * @return the share of the band the rung covers, between {@link #RUNG_FRACTION_FAR} and
+     *         {@link #RUNG_FRACTION_NEAR}
+     */
+    static double rungFraction(double u) {
+        double at = Math.clamp(u, 0d, 1d);
+        return RUNG_FRACTION_FAR + (RUNG_FRACTION_NEAR - RUNG_FRACTION_FAR) * at;
+    }
+
+    /**
+     * Fades a road colour towards the sky by how far away it is.
+     *
+     * <p>Not a colour of its own: a distance towards {@link PaletteRole#SURFACE_RAISED}, which is
+     * what the sky leaves sitting against the horizon. So this stays right in a light mood, where
+     * the same mix lightens rather than darkens, and it adds no literal (ground rule 7).
+     *
+     * @param face the colour the surface would be at the racer's line
+     * @param u    how far down the screen it is, 0 at the horizon and 1 at the racer
+     * @return the same colour seen through that much distance, snapped back onto the 5-bit grid
+     */
+    private Color hazed(Color face, double u) {
+        return hazed(face, u, HAZE_MAX);
+    }
+
+    /**
+     * Fades a colour towards the sky by how far away it is, at a given strength.
+     *
+     * @param face     the colour the surface would be at the racer's line
+     * @param u        how far down the screen it is, 0 at the horizon and 1 at the racer
+     * @param strength how much of the fade is applied at the vanishing point
+     * @return the same colour seen through that much distance, snapped back onto the 5-bit grid
+     */
+    private Color hazed(Color face, double u, double strength) {
+        double amount = strength * Math.pow(1 - Math.clamp(u, 0d, 1d), HAZE_BIAS);
+        // At the face's own opacity, so a translucent lane line does not quietly become opaque as
+        // it recedes - the interpolation would otherwise drag its alpha towards the sky's.
+        Color sky = color(PaletteRole.SURFACE_RAISED, face.getOpacity());
+        return GbaColor.snap(face.interpolate(sky, amount));
     }
 
     /**

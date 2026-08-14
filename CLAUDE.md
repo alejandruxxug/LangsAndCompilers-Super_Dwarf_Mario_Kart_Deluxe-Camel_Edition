@@ -125,7 +125,7 @@ block (a bare `-D` on the Maven command line does **not** reach the app):
 | `-Dsdmk.home=/tmp/demo` | Use a scratch profile instead of `~/.superdwarfkart`. Seed a `library.json` there to demo against fake data without touching the user's real library. |
 | `-Dsdmk.diag=true` | Measure the runner's frame loop: achieved fps and frame-interval percentiles, the tick split, and the playback clock's own granularity. Prints a line every two seconds and draws a readout over the road. **`F3` toggles it live** (off → printed + overlay → printed only), which is the more useful of the two — a stutter somebody is watching can be measured while it happens. |
 | `-Djavafx.pulseLogger=true` | The toolkit's own per-phase frame log. Reach for this only when `sdmk.diag` says the frame interval is long but the tick is cheap, i.e. the time is going to the render thread or to layout rather than to anything this project wrote. |
-| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. Also writes `out-shuffle.png`, `out-arrival.png`, `out-alphabetical.png`, `out-presentation.png`, `out-race.png` and `out-mini.png`, cycling the modes so all three structure views, Presentation Mode, the runner and the companion window are captured — six of the seven only exist once a mode has been selected or a key pressed, so one shot of the opening state proves nothing about them. The companion shot is taken from **its own scene** (it is a separate window, so the main one's snapshot contains none of it) and after a seek a third of the way in, because a progress line at zero is a picture of an empty line. |
+| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. It also writes one shot per view beside it — `out-shuffle`, `-arrival`, `-alphabetical` (the three structure views), `-presentation`, `-history`, `-racers`, `-settings`, `-moods`, `-moods-light`, `-library-light` (the light palette on the controls, where a bevel drawn the wrong way round shows), `-dsa-folded` (the table with the structure column folded away), `-race` and `-mini` / `-mini-compact`. **Every one of them exists only once a mode has been selected or a key pressed**, so one shot of the opening state proves nothing about any of them. The companion shots are taken from **its own scene** (it is a separate window, so the main one's snapshot contains none of it) and after a seek a third of the way in, because a progress line at zero is a picture of an empty line. |
 
 **The smoke test plays about three seconds of the current song** and prints the measured L/R levels,
 so a run is audible. That is the point: the base screenshot is taken while audio is still flowing,
@@ -216,6 +216,7 @@ tooltips and dialogs are all rebuilt as hard-edged beveled blocks.
 | media prev / next (`TRACK_PREV`, `TRACK_NEXT`) | previous / next song |
 | `Tab` | cycle the playback mode |
 | `Space` (`PLAY`, `PAUSE`) | play / pause |
+| `F4` | fold the structure column away, and back |
 | `F5` | Presentation Mode on/off |
 | `F6` | swap the library for the runner, and back |
 | `F7` | collapse to the companion strip, and back — **the same key in both windows** |
@@ -228,8 +229,8 @@ tooltips and dialogs are all rebuilt as hard-edged beveled blocks.
 
 They are wired across **both phases of event delivery**, and the split is load-bearing:
 
-- **Filter** (runs first, wins everywhere) for `F5`, `F6`, `F7`, `Esc` and `Tab`. `Tab` is excused
-  when a text field has focus, where it belongs to the field.
+- **Filter** (runs first, wins everywhere) for `F4`, `F5`, `F6`, `F7`, `Esc` and `Tab`. `Tab` is
+  excused when a text field has focus, where it belongs to the field.
 - **Handler** (runs last, only if nothing else wanted the key) for the transport keys. The library
   table uses the arrows for its selection, the search box for the caret, the tree view for its
   step-through, and **the runner to steer** — all four consume the event first, so the transport
@@ -238,8 +239,8 @@ They are wired across **both phases of event delivery**, and the split is load-b
   has focus, jumps the kart when the road has focus, presses whichever button has focus, and only
   reaches play/pause when nothing else claimed it.
 
-**Which is why nothing that duplicates a function key may take keyboard focus.** The header's two
-toggles (`F7 MINI`, `F6 RACE`) and every control on the companion strip are
+**Which is why nothing that duplicates a function key may take keyboard focus.** The header's three
+toggles (`F4 HIDE DSA`, `F7 MINI`, `F6 RACE`) and every control on the companion strip are
 `setFocusTraversable(false)`. The header sits at the top of the scene, so whichever of its buttons
 came first held focus from launch and would have answered the **first space bar of the session** —
 and with the mini toggle added, that meant the opening `Space` collapsing the whole window instead
@@ -1003,6 +1004,8 @@ search across all three at once and reports the three counts side by side.
 - **Layout: the visualizer and the complexity panel share one 400 px left column, stacked.** Side
   by side they left the library table ~470 px, and at one em per glyph that truncates every song
   title to three characters. Presentation Mode gives the visualizer the height back.
+  **And `F4` folds the column away entirely** — see below; the stacking recovered enough width for
+  the table to be read, the fold is for when the structures are not what the user is doing.
 - Presentation Mode is **F5** (Escape also leaves), wired as a scene event filter rather than an
   accelerator so the tree keeps receiving space and the arrow keys for its step-through. The
   visualizer node is *moved*, not duplicated, so pan, zoom and any walk in progress survive the
@@ -1143,10 +1146,46 @@ smoke test prints all of it and re-derives it every launch.
   **`PERSPECTIVE_BIAS` is the one knob.** 1.0 is Piano Tiles exactly — constant screen speed, where
   a thing is *is* when it arrives. 2.0 is a true perspective divide. 1.25 keeps a visible
   foreshortening while leaving position near enough proportional to time to be read as timing.
-- **The road is about a dozen filled trapezoids, not a scanline loop**, and the bands are spaced in
-  **time** rather than in depth — nine across the whole lookahead — so a band travels exactly as an
-  entity does and the surface is visibly faster at the quick classes for free.
-- **Measured, not guessed: a frame costs 0.15–0.2 ms**, which the smoke test prints. When the game
+- **The road is a few dozen filled trapezoids, not a scanline loop**, and the bands are spaced in
+  **time** rather than in depth — fourteen across the whole lookahead — so a band travels exactly as
+  an entity does and the surface is visibly faster at the quick classes for free.
+- **The depth the projection gives up, the road's own texture pays back.** With `PERSPECTIVE_BIAS` at
+  1.25 the road is very nearly a flat ramp, and drawn as plain alternating bands it read exactly like
+  that: *"the lines don't look like they are in a 3D space, they look just lines scrolling."* The fix
+  cannot be the projection — that carries the timing and `RunnerProjectionTest` pins it there — so it
+  is the texture, in three parts, none of which moves anything:
+  - **Rungs that grow.** A band is drawn dark across its whole depth and its lit part is a *rung*
+    whose near edge is the band boundary it always was, and whose trailing edge is new:
+    `rungFraction` takes it from about a third of its band at the horizon to all of it at the racer.
+    Only the trailing edge is new, so a boundary still travels at exactly the entity rate and the two
+    still cannot slide against each other. The lane dashes are shortened by the same fraction, so a
+    dash is a tick at the horizon and a long stroke underfoot. Fourteen bands rather than nine,
+    because a third of a band is only a *stripe* if the band is small, and nine left the far half of
+    the road with about two boundaries in it.
+  - **Haze.** Road, kerbs and ground fade towards `SURFACE_RAISED`, which is what `drawSky` leaves
+    sitting against the horizon — so the road fades into the sky it meets rather than into a colour
+    of its own, and a light mood lightens where a dark one darkens. **The entities are never hazed**:
+    a coin at the far end of the lookahead has to stay readable, moods do not tint sprite art, and an
+    unhazed sprite over a hazed road is *easier* to pick out at distance, not harder.
+  - **The verge stopped being stripes at all**, and this was the largest single change. It is drawn
+    across the whole canvas, so its bands were the biggest shapes on screen by a wide margin —
+    full-width bars of near-equal height at full contrast, marching to the horizon. A flat plane's
+    own texture *is* full-width, so those bars could never converge, and while they were there the
+    picture read as horizontal stripes scrolling behind a triangle however well the triangle itself
+    receded. It is now one flat band per step hazed by its own distance: a posterised gradient going
+    away from the player, with the road left as the only thing carrying the motion — and the road is
+    the thing that gets narrower.
+
+  Two numbers were tuned by screenshot and are worth knowing. `HAZE_MAX` is **0.18** on the road and
+  **0.86** on the ground, and the split is not fussiness: the road's own unlit colour *is*
+  `SURFACE_RAISED`, so haze cannot make the road recede — all it can do there is dissolve the rungs
+  into the surface they sit on. At the 0.62 it started at, the top third of the road came out as one
+  flat slab with no texture in it at all, which is worse than the flat road this set out to fix: at
+  least that one had stripes. The far rungs are meant to be **thin, not faint**. The ground has the
+  opposite problem and can afford to recede hard, because it carries nothing.
+- **Measured, not guessed: a frame costs 0.25–0.45 ms**, which the smoke test prints. (It was
+  0.15–0.2 before the rungs and the extra bands above; the figure is noisy by about twice across
+  runs, so read it as an order of magnitude rather than as a stopwatch.) When the game
   was reported as laggy the suspicion was that every entity on the course was being drawn; the
   measurement said otherwise (three-figure headroom, and the visible window is a handful of entities
   out of hundreds) and pointed at the projection instead. Keep that line — "it feels slow" has
@@ -1743,6 +1782,44 @@ library.
   once their button has been pressed, so the base shot proves nothing about any of them; the light
   mood is photographed on the mood screen *and* over the library, because a palette that fails does
   so on the controls rather than on the canvases. Screenshots in `docs/screenshots/`.
+
+### The structure column folds away (`F4`)
+
+The column is 400 of the window's 1440 pixels and it earns them while the structures are being
+shown — but it is not always what the user is doing. `F4` folds it, and **measured, the middle of
+the window goes from 815 px to 1215 px**: at one em per glyph that is fifty more characters of song
+title, and it is the difference between a library table whose artist column reads `Crys...` and one
+that reads `Crystal Castles`. Compare `docs/screenshots/sdmk-alphabetical.png` with
+`sdmk-dsa-folded.png` — the filter row stops wrapping onto two lines as well.
+
+- **Invisible is not enough; it has to be unmanaged too.** A node that is merely invisible still
+  takes its 400 px in the layout, so the column disappears and hands its width to *nobody* — the
+  table stays exactly as narrow as it was, beside a blank strip. That photographs as a rendering
+  fault rather than a layout one, which is why the smoke test measures the centre rather than
+  checking a flag: `dsa fold` prints `815 -> 1215 -> 815 px` and fails if the width went nowhere or
+  did not come back.
+- **The visualizer stops drawing while it is folded**, and the reason is the one already learned
+  behind the companion window: an `AnimationTimer` is driven by the toolkit's pulse and knows
+  nothing about whether the node it paints can be seen. `StructureView.isRunning()` exists so that
+  this is *observable* — a timer left running is silent forever and costs a repaint per frame for
+  the rest of the session, so it cannot be left to assumption.
+- **`StructureVisualizer` remembers whether it is meant to be drawing**, rather than the state
+  living only at the call site. It builds a *new* view whenever the playback mode changes and that
+  view starts its own idle timer as it is constructed — and `Tab` cycles the mode from anywhere, so
+  a fresh road scrolling behind a folded column is not a corner case.
+- **Three separate things hide the visualizer** — the fold, the companion window, and presentation
+  mode showing it in the opposite direction — and any one can be in force while another changes.
+  `updateVisualizerDrawing()` decides from the state instead, because the combinations are what
+  break: folding during a presentation must not stop the view filling the stage, and leaving a
+  presentation back into a folded column must not start one. `F5` out of a fold is the case that
+  matters — it is how somebody who folded the column reaches the tree for a question.
+- **Both captions are the same width** (`F4 HIDE DSA` / `F4 SHOW DSA`). In a fixed-width font a
+  toggle that changes width shoves the two keys beside it along as it is pressed, and those are
+  exactly where the pointer already is.
+- Nothing about the running order changes: this is a fold in the window, not a change of mode. The
+  structure underneath goes on holding the queue and unfolding shows it where it got to.
+- **Not persisted, deliberately.** The visualizer is the showpiece and the view used at the defence,
+  so every launch comes up with it on screen.
 
 ## 9. Milestone tracker
 

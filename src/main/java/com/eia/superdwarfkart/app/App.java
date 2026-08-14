@@ -128,6 +128,20 @@ public class App extends Application {
      */
     private static final double METER_COLUMN_WIDTH = 130;
 
+    /**
+     * Function key that folds the structure column away, and brings it back.
+     *
+     * <p>The column is 400 of the window's 1440 pixels and it is worth every one of them while the
+     * structures are being shown - but it is not always what the user is doing. Folding it hands
+     * that width to whatever is in the middle: fifty more characters of song title in the table, or
+     * a road wide enough to read a lookahead off from across a room.
+     *
+     * <p>It sits beside {@link #PRESENTATION_KEY} on the keyboard because the two are the same
+     * decision at opposite ends - F4 gives the visualizer none of the window and F5 gives it all of
+     * it.
+     */
+    private static final KeyCode STRUCTURE_KEY = KeyCode.F4;
+
     /** Function key that hands the whole stage to the visualizer. */
     private static final KeyCode PRESENTATION_KEY = KeyCode.F5;
 
@@ -198,6 +212,8 @@ public class App extends Application {
     private BorderPane root;
     private PlaybackBar playbackBar;
     private VBox sideColumn;
+    private Button structureToggle;
+    private boolean structureFolded;
     private StructureVisualizer visualizer;
     private PresentationView presentation;
     private boolean presenting;
@@ -472,7 +488,10 @@ public class App extends Application {
      */
     private void installShortcuts(Scene scene) {
         scene.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
-            if (event.getCode() == PRESENTATION_KEY) {
+            if (event.getCode() == STRUCTURE_KEY) {
+                toggleStructureColumn();
+                event.consume();
+            } else if (event.getCode() == PRESENTATION_KEY) {
                 togglePresentation(scene);
                 event.consume();
             } else if (event.getCode() == RACE_KEY) {
@@ -529,6 +548,62 @@ public class App extends Application {
     }
 
     /**
+     * Folds the structure column away, and brings it back.
+     *
+     * <p><strong>Invisible is not enough - it has to be unmanaged too.</strong> A node that is
+     * merely invisible still takes its 400 pixels in the layout, so the column would disappear and
+     * hand its width to nothing at all: the table would be exactly as narrow as before, beside a
+     * blank strip. Giving that width away is the entire feature.
+     *
+     * <p>The visualizer stops drawing while it is folded. An {@code AnimationTimer} is driven by the
+     * toolkit's pulse and knows nothing about whether the node it paints can be seen, so a road that
+     * kept scrolling behind a fold would cost a repaint per frame for the rest of the session and
+     * report it nowhere - the same fault, in the same shape, as the canvases left running behind the
+     * companion window.
+     *
+     * <p>Nothing about the running order changes. This is a fold in the window, not a change of
+     * mode: the structure underneath goes on holding the queue, and unfolding shows it exactly where
+     * it got to.
+     */
+    private void toggleStructureColumn() {
+        structureFolded = !structureFolded;
+        sideColumn.setVisible(!structureFolded);
+        sideColumn.setManaged(!structureFolded);
+        updateStructureToggle();
+        updateVisualizerDrawing();
+    }
+
+    /**
+     * Brings the header's fold caption in step with what the column is doing.
+     *
+     * <p>Both captions are the same length on purpose. In a fixed-width font a toggle that changes
+     * width shoves everything beside it along as it is pressed, and the two keys beside this one are
+     * exactly where the pointer already is.
+     */
+    private void updateStructureToggle() {
+        if (structureToggle != null) {
+            structureToggle.setText(structureFolded ? "F4 SHOW DSA" : "F4 HIDE DSA");
+        }
+    }
+
+    /**
+     * Starts or stops the visualizer's frame timer according to whether it can currently be seen.
+     *
+     * <p>Three separate things hide it - the fold above, the companion window, and presentation mode
+     * showing it in the opposite direction - and any one of them can be in force while another
+     * changes. Deciding from the state rather than at each call site is what stops the combinations
+     * from disagreeing: folding the column during a presentation must not stop the view that is
+     * filling the stage, and leaving a presentation into a folded column must not start one.
+     */
+    private void updateVisualizerDrawing() {
+        if (presenting || !structureFolded) {
+            visualizer.start();
+        } else {
+            visualizer.stop();
+        }
+    }
+
+    /**
      * Moves the visualizer between the main layout and the full stage.
      *
      * <p>The same node travels in both directions, so the tree keeps its pan, its zoom and any
@@ -539,10 +614,12 @@ public class App extends Application {
     private void togglePresentation(Scene scene) {
         if (presenting) {
             presentation.detach();
-            // Back above the complexity panel, where it came from.
+            // Back above the complexity panel, where it came from - even when the column is folded
+            // away, so that unfolding finds it there rather than empty.
             sideColumn.getChildren().add(0, visualizer);
             scene.setRoot(root);
             presenting = false;
+            updateVisualizerDrawing();
             return;
         }
         // Detach from the main layout first: a node cannot sit in two places at once.
@@ -550,6 +627,9 @@ public class App extends Application {
         presentation.attach(visualizer);
         scene.setRoot(presentation);
         presenting = true;
+        // F5 is how somebody folded out of the way reaches the visualizer for a question, so this
+        // has to pick the timer back up rather than assume it was left running.
+        updateVisualizerDrawing();
     }
 
     /**
@@ -571,6 +651,13 @@ public class App extends Application {
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
+        structureToggle = new Button();
+        structureToggle.getStyleClass().add("view-toggle");
+        structureToggle.setTooltip(new Tooltip(
+                "Fold the structure column away and give its width to the middle\nF4"));
+        structureToggle.setOnAction(event -> toggleStructureColumn());
+        updateStructureToggle();
+
         viewToggle = new Button();
         viewToggle.getStyleClass().add("view-toggle");
         viewToggle.setTooltip(new Tooltip("Swap the library for the rhythm game\nF6"));
@@ -583,15 +670,16 @@ public class App extends Application {
                 "Put this window away and keep the music on a companion strip\nF7"));
         miniToggle.setOnAction(event -> collapseToCompanion());
 
-        // Neither of these takes keyboard focus. They are shortcuts to the two function keys
-        // printed on them, so focus buys them nothing - and whichever of them held it would be the
-        // node that answered the first space bar of the session, which is the same fault that left
-        // the runner's jump dead: a control quietly eating the key play/pause is meant to get.
-        // Being first in the header, that would be the one collapsing the whole window.
+        // None of these takes keyboard focus. They are shortcuts to the function keys printed on
+        // them, so focus buys them nothing - and whichever of them held it would be the node that
+        // answered the first space bar of the session, which is the same fault that left the
+        // runner's jump dead: a control quietly eating the key play/pause is meant to get. Being
+        // first in the header, that would be the one folding the structure column away.
+        structureToggle.setFocusTraversable(false);
         miniToggle.setFocusTraversable(false);
         viewToggle.setFocusTraversable(false);
 
-        HBox header = new HBox(14, name, spacer, miniToggle, viewToggle, version);
+        HBox header = new HBox(14, name, spacer, structureToggle, miniToggle, viewToggle, version);
         header.setAlignment(Pos.CENTER_LEFT);
         header.setPadding(new Insets(14, 16, 14, 16));
         header.getStyleClass().add("app-header");
@@ -843,9 +931,7 @@ public class App extends Application {
         meters.stop();
         beatmapTimeline.stop();
         playbackBar.stopClock();
-        if (visualizer.view() != null) {
-            visualizer.view().stop();
-        }
+        visualizer.stop();
         runnerWasRunning = runner.isRunning();
         if (runnerWasRunning) {
             runner.stop();
@@ -858,9 +944,9 @@ public class App extends Application {
         beatmapTimeline.start();
         playbackBar.startClock();
         playbackBar.refresh();
-        if (visualizer.view() != null) {
-            visualizer.view().start();
-        }
+        // Not an unconditional start: the column may have been folded away before the window was
+        // put behind the companion, and coming back must not undo that.
+        updateVisualizerDrawing();
         if (runnerWasRunning) {
             runner.start();
         }
@@ -940,6 +1026,8 @@ public class App extends Application {
         boolean tabWorks = player.mode().id() != beforeTab;
         System.out.println("[smoke] tab               : " + beforeTab + " -> " + player.mode().id());
 
+        boolean foldOk = reportStructureFold(scene);
+
         reportAudio();
         reportBeatmap();
         reportCourse();
@@ -971,6 +1059,7 @@ public class App extends Application {
                 && visualizer.view().modeId() == player.mode().id()
                 && arrowWorks
                 && tabWorks
+                && foldOk
                 && companionOk;
         System.out.println("[smoke] RESULT            : " + (ok ? "PASS" : "FAIL"));
 
@@ -983,6 +1072,68 @@ public class App extends Application {
             Platform.exit();
         });
         close.play();
+    }
+
+    /**
+     * Folds the structure column away with the real key and reports what the middle of the window
+     * got for it.
+     *
+     * <p>Three claims here are invisible to everything else. A screenshot of a folded column is a
+     * picture of a window without one and says nothing about where its 400 pixels went - a node left
+     * <em>managed</em> hides the column and hands the width to nobody, which photographs as a wide
+     * blank margin that reads like a rendering fault rather than a layout one. Whether the
+     * visualizer stopped drawing is not visible in any picture at all, and a timer left running is
+     * silent forever. And the fold has to come back to the width it started at, which is the check
+     * that neither pass leaked a pixel.
+     *
+     * @param scene the scene to fire the key at
+     * @return whether the column folded, gave its width away and came back
+     */
+    private boolean reportStructureFold(Scene scene) {
+        boolean drawingBefore = visualizer.view() != null && visualizer.view().isRunning();
+        double before = centreWidth();
+
+        fireKey(scene, STRUCTURE_KEY);
+        layoutNow(scene);
+        double folded = centreWidth();
+        boolean stopped = visualizer.view() == null || !visualizer.view().isRunning();
+        // The whole column, less nothing: the middle takes every pixel it gave up.
+        boolean widthGiven = folded >= before + SIDE_COLUMN_WIDTH - 1;
+
+        fireKey(scene, STRUCTURE_KEY);
+        layoutNow(scene);
+        double restored = centreWidth();
+        boolean drawingAgain = (visualizer.view() != null && visualizer.view().isRunning())
+                == drawingBefore;
+        boolean cameBack = Math.abs(restored - before) < 1;
+
+        System.out.printf("[smoke] dsa fold          : %.0f -> %.0f -> %.0f px%s%s%s%n",
+                before, folded, restored,
+                widthGiven ? "" : "  COLUMN WIDTH WENT NOWHERE",
+                stopped ? "  (view stopped)" : "  VIEW STILL DRAWING WHILE HIDDEN",
+                cameBack && drawingAgain ? "" : "  DID NOT COME BACK");
+        return widthGiven && stopped && cameBack && drawingAgain;
+    }
+
+    /**
+     * @return the measured width of whatever is in the middle of the window
+     */
+    private double centreWidth() {
+        Node centre = root.getCenter();
+        return centre == null ? 0 : centre.getBoundsInParent().getWidth();
+    }
+
+    /**
+     * Forces the layout pass a measurement needs.
+     *
+     * <p>Nothing has a size until the scene has laid it out, and the smoke test holds the interface
+     * thread, so no pulse arrives to do it on its own.
+     *
+     * @param scene the scene to lay out
+     */
+    private static void layoutNow(Scene scene) {
+        scene.getRoot().applyCss();
+        scene.getRoot().layout();
     }
 
     /**
@@ -1132,8 +1283,7 @@ public class App extends Application {
      */
     private void reportRunner(Scene scene) {
         toggleRace();
-        scene.getRoot().applyCss();
-        scene.getRoot().layout();
+        layoutNow(scene);
         runner.previewAt(screenshotMoment());
 
         RunnerGame game = runner.game();
@@ -1238,8 +1388,7 @@ public class App extends Application {
     private boolean reportCompanion() {
         collapseToCompanion();
         Scene scene = miniStage.getScene();
-        scene.getRoot().applyCss();
-        scene.getRoot().layout();
+        layoutNow(scene);
 
         System.out.println("[smoke] companion shown   : " + miniStage.isShowing()
                 + ", main window hidden: " + !mainStage.isShowing());
@@ -1561,6 +1710,14 @@ public class App extends Application {
         state.setMood(Moods.DARK);
         sideRail.select(Destination.LIBRARY);
 
+        // The library with the structure column folded away. This is the one picture that shows
+        // what the fold is for - the table with the whole window, where a title that was ellipsized
+        // in every other shot is written out - and it is the picture that catches the column
+        // vanishing without handing its width on.
+        toggleStructureColumn();
+        layoutAndCapture(scene, destination, "dsa-folded");
+        toggleStructureColumn();
+
         // The runner last, because it is the one view that only exists behind a key press: a shot
         // of the opening state proves nothing at all about it.
         toggleRace();
@@ -1569,8 +1726,7 @@ public class App extends Application {
         // of an empty road - and at 50cc the entities are two seconds apart by design, which is
         // correct and photographs as almost nothing.
         state.setSpeedClass(SpeedClass.CC150);
-        scene.getRoot().applyCss();
-        scene.getRoot().layout();
+        layoutNow(scene);
         runner.previewAt(screenshotMoment());
         writeScreenshot(scene, derivedPath(destination, "race"));
         state.setSpeedClass(SpeedClass.defaultClass());
@@ -1585,8 +1741,7 @@ public class App extends Application {
         engine.seek(engine.duration().dividedBy(3));
         miniPlayer.refresh();
         Scene companion = miniStage.getScene();
-        companion.getRoot().applyCss();
-        companion.getRoot().layout();
+        layoutNow(companion);
         miniPlayer.previewAt(0.5);
         writeScreenshot(companion, derivedPath(destination, "mini"));
 
@@ -1594,8 +1749,7 @@ public class App extends Application {
         // one - there is nothing of it in the shot above.
         miniPlayer.setCompact(true);
         miniStage.sizeToScene();
-        companion.getRoot().applyCss();
-        companion.getRoot().layout();
+        layoutNow(companion);
         writeScreenshot(companion, derivedPath(destination, "mini-compact"));
         miniPlayer.setCompact(false);
         miniStage.sizeToScene();
@@ -1614,8 +1768,7 @@ public class App extends Application {
      * @param suffix      appended to the base file name
      */
     private void layoutAndCapture(Scene scene, String basePath, String suffix) {
-        scene.getRoot().applyCss();
-        scene.getRoot().layout();
+        layoutNow(scene);
         // Jump any move to its end state: the settled view - kart parked, traversal fully lit -
         // is the one worth a picture, and catching one a few milliseconds in shows nothing.
         if (visualizer.view() != null) {
@@ -1735,8 +1888,8 @@ public class App extends Application {
         if (playbackBar != null) {
             playbackBar.stopClock();
         }
-        if (visualizer != null && visualizer.view() != null) {
-            visualizer.view().stop();
+        if (visualizer != null) {
+            visualizer.stop();
         }
         if (engine != null) {
             engine.close();

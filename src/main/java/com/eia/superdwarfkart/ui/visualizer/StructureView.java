@@ -264,6 +264,20 @@ public abstract class StructureView extends BorderPane {
     }
 
     /**
+     * Whether the frame timer is currently running.
+     *
+     * <p>Exposed so that a view taken off screen can be <em>shown</em> to have stopped drawing. A
+     * timer left running for a hidden canvas costs a repaint per frame for the rest of the session
+     * and reports nothing anywhere, which is precisely why it needs to be observable rather than
+     * assumed.
+     *
+     * @return whether a repaint is scheduled
+     */
+    public boolean isRunning() {
+        return timer != null;
+    }
+
+    /**
      * Ends any animation in flight and leaves the view settled.
      *
      * <p>The clock keeps running if the view idles, so the kart's wheels do not stop turning just
