@@ -33,7 +33,7 @@ class AudioSourceSecondsTest {
         }
 
         @Override
-        public void load(Path file) {
+        public void load(String locator) {
             // Not needed for a clock test.
         }
 

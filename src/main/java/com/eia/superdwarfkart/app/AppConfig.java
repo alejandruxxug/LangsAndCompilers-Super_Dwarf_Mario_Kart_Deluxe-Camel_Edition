@@ -172,6 +172,53 @@ public final class AppConfig {
         return appHome().resolve("settings.json");
     }
 
+    // ------------------------------------------------------------------
+    // Spotify
+    // ------------------------------------------------------------------
+
+    /**
+     * Port the go-librespot daemon serves its REST API and event socket on.
+     *
+     * <p>Bound to loopback only. The daemon is a private child of this process, not a service:
+     * nothing else is expected to talk to it, and the API it exposes can start playback and hand
+     * out a Spotify access token.
+     */
+    public static final int SPOTIFY_API_PORT = 3678;
+
+    /** Loopback address the daemon's API is bound to. */
+    public static final String SPOTIFY_API_HOST = "127.0.0.1";
+
+    /**
+     * Device name this application registers with Spotify.
+     *
+     * <p>{@link #APP_NAME_SHORT} rather than {@link #APP_NAME}: this string appears in the Spotify
+     * app's device picker on the user's phone, which is somebody else's interface with somebody
+     * else's width budget.
+     */
+    public static final String SPOTIFY_DEVICE_NAME = APP_NAME_SHORT;
+
+    /**
+     * Playback bitrate requested from Spotify.
+     *
+     * <p>The highest on offer, because this audio is analysed as well as heard: the beat detector
+     * measures spectral flux, and compression artefacts at 96 kbps show up as flux that no
+     * instrument produced.
+     */
+    public static final int SPOTIFY_BITRATE = 320;
+
+    /**
+     * Returns the private folder holding everything to do with the Spotify daemon.
+     *
+     * <p>Its configuration, its credentials, its binary and its audio pipe. Private on purpose: the
+     * configuration is regenerated on every launch and is never meant to be hand-edited, and
+     * {@code state.json} inside it holds the credentials for a Spotify session.
+     *
+     * @return the folder; not guaranteed to exist yet
+     */
+    public static Path spotifyDir() {
+        return appHome().resolve("spotify");
+    }
+
     /**
      * Returns the user's own artwork folder.
      *

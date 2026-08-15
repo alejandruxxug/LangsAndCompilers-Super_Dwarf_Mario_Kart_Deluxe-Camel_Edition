@@ -78,14 +78,7 @@ public final class BeatmapCache {
      */
     public static String hash(Path audioFile) throws IOException {
         Objects.requireNonNull(audioFile, "audioFile must not be null");
-        MessageDigest digest;
-        try {
-            digest = MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException e) {
-            // Every Java platform is required to provide SHA-256; if this one does not, nothing
-            // sensible can be cached and that is a broken installation rather than a runtime case.
-            throw new IllegalStateException("SHA-256 is not available on this platform", e);
-        }
+        MessageDigest digest = digest();
         byte[] scratch = new byte[HASH_BLOCK];
         try (InputStream in = Files.newInputStream(audioFile);
              DigestInputStream digesting = new DigestInputStream(in, digest)) {
@@ -94,6 +87,77 @@ public final class BeatmapCache {
             }
         }
         return HexFormat.of().formatHex(digest.digest());
+    }
+
+    /**
+     * Fingerprints whatever a song plays from, file or stream.
+     *
+     * <p><strong>This is the one place that decides what identifies a track.</strong> A locator
+     * naming a readable file is hashed by its contents, exactly as before - a path is not an
+     * identity, and two copies of one recording must share one analysis. Anything else is not a
+     * file at all: a {@code spotify:track:...} URI names a recording directly, is already stable
+     * across machines and libraries, and there are no bytes on disk to read. So it is hashed as
+     * text, which puts it in the same namespace and the same directory without a second key format.
+     *
+     * <p>The test is "does this resolve to a readable regular file", never a prefix. A prefix check
+     * would put knowledge of Spotify into {@code analysis/}, which has no business having any -
+     * this package is handed locators and does not care who can open them.
+     *
+     * @param locator what a song plays from; must not be {@code null}
+     * @return the cache key, in lower-case hexadecimal
+     * @throws IOException if the locator names a file that exists but cannot be read
+     */
+    public static String keyFor(String locator) {
+        Objects.requireNonNull(locator, "locator must not be null");
+        Path asFile = asExistingFile(locator);
+        return asFile != null ? hashQuietly(asFile) : hashText(locator);
+    }
+
+    /**
+     * @param locator a locator
+     * @return the file it names, or {@code null} when it does not name a readable regular file
+     */
+    private static Path asExistingFile(String locator) {
+        try {
+            Path path = Path.of(locator);
+            return Files.isRegularFile(path) ? path : null;
+        } catch (java.nio.file.InvalidPathException e) {
+            // A Spotify URI is a perfectly good string and not a path on every platform.
+            return null;
+        }
+    }
+
+    /**
+     * @param file a readable file
+     * @return its content hash
+     * @throws IOException wrapped as unchecked, because the caller already handles a failed lookup
+     */
+    private static String hashQuietly(Path file) {
+        try {
+            return hash(file);
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
+
+    /**
+     * @param text the text to fingerprint
+     * @return its SHA-256, in lower-case hexadecimal
+     */
+    private static String hashText(String text) {
+        return HexFormat.of().formatHex(
+                digest().digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+
+    /** @return a fresh SHA-256 digest */
+    private static MessageDigest digest() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            // Every Java platform is required to provide SHA-256; if this one does not, nothing
+            // sensible can be cached and that is a broken installation rather than a runtime case.
+            throw new IllegalStateException("SHA-256 is not available on this platform", e);
+        }
     }
 
     /**

@@ -234,6 +234,9 @@ public class BeatmapTimeline extends Pane {
         String message = switch (status.stage()) {
             case NONE -> "NO TRACK";
             case ANALYZING -> String.format("ANALYSING %.0f%%", status.progress() * 100);
+            // A streamed track is being heard rather than read, so there is no percentage of a
+            // decode to report and the strip stays empty until the track has played out.
+            case LISTENING -> "LISTENING";
             case READY -> status.fromCache() ? "CACHED" : "ANALYSED";
             case FAILED -> "FAILED: " + status.failure();
         };

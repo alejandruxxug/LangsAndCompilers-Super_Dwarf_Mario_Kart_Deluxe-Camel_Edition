@@ -78,6 +78,11 @@ class FakeAudioSource implements AudioSource {
     }
 
     @Override
+    public void load(String locator) {
+        load(Path.of(locator));
+    }
+
+    @Override
     public void load(Path file) {
         if (unplayable.contains(file)) {
             throw new AudioException("File not found: " + file);

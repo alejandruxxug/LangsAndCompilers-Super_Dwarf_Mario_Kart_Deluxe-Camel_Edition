@@ -1403,7 +1403,7 @@ public class MiniPlayerView extends Pane {
         title.setTooltip(new Tooltip(song.getTitle()));
         artist.setText(LibraryView.ellipsize(song.getArtist(), ARTIST_LIMIT));
         artist.setTooltip(new Tooltip(song.getArtist()));
-        showCover(song.getCoverPath());
+        showCover(song);
     }
 
     /**
@@ -1415,23 +1415,27 @@ public class MiniPlayerView extends Pane {
      * outline is most of what there is to look at, and it reads as something that failed to draw.
      * The same magenta placeholder the library shows says the artwork is missing, on purpose.
      *
-     * @param coverPath the cover image, or {@code null}
+     * <p>Resolved through {@link CoverArt}, so a streamed song shows its artwork here too - it
+     * carries an address rather than a file, and reading only the path left every Spotify track on
+     * the placeholder.
+     *
+     * @param song the song whose cover to show, or {@code null}
      */
-    private void showCover(Path coverPath) {
+    private void showCover(Song song) {
         coverHolder.getChildren().clear();
-        if (coverPath != null && Files.isReadable(coverPath)) {
-            Image image = new Image(coverPath.toUri().toString(),
-                    COVER_DECODE_SIZE, COVER_DECODE_SIZE, true, true);
-            if (!image.isError()) {
-                coverImage.setImage(image);
-                coverImage.setViewport(
-                        LibraryView.centeredSquare(image.getWidth(), image.getHeight()));
-                coverHolder.getChildren().add(coverImage);
-                return;
-            }
-            LOG.warning("Could not read the cover image at " + coverPath
-                    + " - the companion window will show a placeholder");
+        Image image = CoverArt.of(song, COVER_DECODE_SIZE);
+        if (image != null) {
+            coverImage.setImage(image);
+            coverHolder.getChildren().add(coverImage);
+            CoverArt.fit(image, coverImage, this::showCoverPlaceholder);
+            return;
         }
+        showCoverPlaceholder();
+    }
+
+    /** Puts the small "no art" block in the cover frame, replacing whatever is there. */
+    private void showCoverPlaceholder() {
+        coverHolder.getChildren().clear();
 
         // The colour is the library's, so the two placeholders cannot drift apart; the second class
         // only makes it small enough for this card.

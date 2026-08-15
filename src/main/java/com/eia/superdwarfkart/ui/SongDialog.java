@@ -182,6 +182,14 @@ public final class SongDialog {
             Button browseAudio = new Button("BROWSE");
             browseAudio.setOnAction(e -> browseForAudio(owner, currentPath(fileField))
                     .ifPresent(p -> fileField.setText(p.toString())));
+            // A streamed song has no file to browse for. The row still shows its URI, because that
+            // is the one field explaining why the rest of the dialog cannot change where it plays
+            // from - a disabled button with no reason beside it reads as a broken dialog.
+            if (song != null && song.isSpotify()) {
+                browseAudio.setDisable(true);
+                browseAudio.setTooltip(
+                        new javafx.scene.control.Tooltip("Streamed from Spotify - there is no file"));
+            }
 
             coverField.setEditable(false);
             coverField.setPromptText("OPTIONAL");
@@ -235,7 +243,8 @@ public final class SongDialog {
             ratingSlider.setValue(song.getRating());
             ratingValue.setText(String.valueOf(song.getRating()));
             favoriteBox.setSelected(song.isFavorite());
-            fileField.setText(song.getFilePath().toString());
+            // The locator rather than the path: a streamed song has no file and would throw here.
+            fileField.setText(song.locator());
             coverField.setText(song.getCoverPath() == null ? "" : song.getCoverPath().toString());
         }
 
@@ -245,8 +254,6 @@ public final class SongDialog {
          * @throws RuntimeException if the model rejects a value
          */
         private void apply() {
-            Path audio = Path.of(fileField.getText());
-
             song.setTitle(titleField.getText());
             song.setArtist(artistField.getText());
             song.setAlbum(albumField.getText());
@@ -256,6 +263,13 @@ public final class SongDialog {
             song.setFavorite(favoriteBox.isSelected());
             song.setCoverPath(coverField.getText().isBlank() ? null : Path.of(coverField.getText()));
 
+            // Where a streamed song plays from is not the user's to edit, and there is no file to
+            // read a duration out of - Spotify already told us how long it is.
+            if (song.isSpotify()) {
+                return;
+            }
+
+            Path audio = Path.of(fileField.getText());
             boolean fileChanged = !audio.equals(song.getFilePath());
             song.setFilePath(audio);
             if (fileChanged || song.getDuration().equals(Duration.ZERO)) {

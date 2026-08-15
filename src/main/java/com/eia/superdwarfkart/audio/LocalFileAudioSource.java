@@ -122,6 +122,23 @@ public class LocalFileAudioSource implements AudioSource {
     // Loading
     // ------------------------------------------------------------------
 
+    /**
+     * Opens a file named by its path.
+     *
+     * @param locator the path to the audio file; must not be {@code null}
+     */
+    @Override
+    public void load(String locator) {
+        Objects.requireNonNull(locator, "locator must not be null");
+        try {
+            load(Path.of(locator));
+        } catch (java.nio.file.InvalidPathException e) {
+            // A locator this source cannot even name as a file. Reported as an ordinary failure to
+            // open, because that is what it is to everything upstream.
+            throw new AudioException("Not a usable file path: " + locator, e);
+        }
+    }
+
     @Override
     public void load(Path audioFile) {
         Objects.requireNonNull(audioFile, "audioFile must not be null");

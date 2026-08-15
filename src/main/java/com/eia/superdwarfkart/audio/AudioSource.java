@@ -38,11 +38,28 @@ public interface AudioSource extends AutoCloseable {
      * <p>Replaces whatever was loaded before. Does not start playback, so selecting a song in the
      * library while paused leaves the application paused.
      *
+     * <p><strong>The locator is what a {@code Song} answers, not always a file path.</strong> A
+     * local song's locator is its path; a streamed song's is its {@code spotify:track:...} URI.
+     * One string rather than a type is what keeps {@code PlaybackEngine} free of any branch on
+     * where a song's audio comes from - it passes {@code song.locator()} straight through, and
+     * {@code RoutingAudioSource} is the only thing in the application that reads the difference.
+     *
+     * @param locator the file path or URI to open; must not be {@code null}
+     * @throws AudioException if the track is missing or unreadable, or is in a format no installed
+     *                        decoder can turn into the application's PCM format
+     */
+    void load(String locator);
+
+    /**
+     * Opens a file, for the callers that genuinely have a path in hand.
+     *
      * @param file the audio file to open; must not be {@code null}
      * @throws AudioException if the file is missing, unreadable, or in a format no installed
      *                        decoder can turn into the application's PCM format
      */
-    void load(Path file);
+    default void load(Path file) {
+        load(java.util.Objects.requireNonNull(file, "file must not be null").toString());
+    }
 
     /**
      * Starts or resumes playback from the current position.

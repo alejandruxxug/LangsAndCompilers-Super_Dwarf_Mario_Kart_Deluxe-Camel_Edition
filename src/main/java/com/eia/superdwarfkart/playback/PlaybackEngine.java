@@ -62,6 +62,12 @@ public class PlaybackEngine implements PlaybackListener, AutoCloseable {
      */
     private Consumer<Song> onPlayCounted = song -> { };
 
+    /** Told when the playhead is moved by hand. See {@link #setOnSeek}. */
+    private Runnable onSeek = () -> { };
+
+    /** Told when a track has played all the way out, before the running order moves. */
+    private Runnable onTrackEnded = () -> { };
+
     /**
      * Wires a player to an audio source, running callbacks on the calling thread.
      *
@@ -138,7 +144,38 @@ public class PlaybackEngine implements PlaybackListener, AutoCloseable {
     public void seek(Duration position) {
         if (audio.isLoaded()) {
             audio.seek(position);
+            onSeek.run();
         }
+    }
+
+    /**
+     * Sets what happens when the playhead is moved by hand.
+     *
+     * <p>One listener with one caller: anything deriving a result from the audio as it goes past
+     * has to give that result up when the audio stops corresponding to where it thought it was.
+     * The beat analysis of a streamed track is the case - it is the audio, so a seek leaves it with
+     * a curve whose timings are wrong and no way to know it.
+     *
+     * @param action what to run after a seek; must not be {@code null}
+     */
+    public void setOnSeek(Runnable action) {
+        this.onSeek = Objects.requireNonNull(action, "action must not be null");
+    }
+
+    /**
+     * Sets what happens when a track plays all the way out.
+     *
+     * <p>Runs on the same thread the running order is advanced on, immediately before it moves, so
+     * the song that just finished is still the current one. That is the only moment at which
+     * anything built out of the audio can be filed against the right track.
+     *
+     * <p>Distinct from a song change: skipping is not finishing, and a track heard half way through
+     * has produced half a beatmap, which is not a short one but a wrong one.
+     *
+     * @param action what to run at the end of a track; must not be {@code null}
+     */
+    public void setOnTrackEnded(Runnable action) {
+        this.onTrackEnded = Objects.requireNonNull(action, "action must not be null");
     }
 
     // ------------------------------------------------------------------
@@ -193,6 +230,12 @@ public class PlaybackEngine implements PlaybackListener, AutoCloseable {
      * </ul>
      */
     private void advance() {
+        // Announced before the running order moves, and that ordering is the whole point. Anything
+        // deriving a result from the audio as it went past has heard all of the track it is ever
+        // going to hear, and has to be told so while the song it belongs to is still the current
+        // one - a moment later, the beat analysis of a streamed track would be filed against
+        // whatever came next.
+        onTrackEnded.run();
         if (!player.canGoNext()) {
             playWhenReady = false;
             return;
@@ -209,7 +252,9 @@ public class PlaybackEngine implements PlaybackListener, AutoCloseable {
      */
     private boolean open(Song song) {
         try {
-            audio.load(song.getFilePath());
+            // The locator, not the file path: a streamed song has no file, and this is the one
+            // line that would otherwise have to know the difference. See Song.locator().
+            audio.load(song.locator());
             failure = null;
             return true;
         } catch (AudioException e) {

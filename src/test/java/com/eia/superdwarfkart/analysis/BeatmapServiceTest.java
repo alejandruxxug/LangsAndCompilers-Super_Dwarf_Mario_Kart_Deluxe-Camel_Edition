@@ -63,7 +63,7 @@ class BeatmapServiceTest {
         service = new BeatmapService(new BeatmapCache(directory), new BeatmapAnalyzer());
 
         long before = System.nanoTime();
-        service.request(file);
+        service.request(file.toString());
         long elapsedMillis = (System.nanoTime() - before) / 1_000_000;
 
         assertTrue(elapsedMillis < 250,
@@ -82,14 +82,14 @@ class BeatmapServiceTest {
         BeatmapCache cache = new BeatmapCache(directory.resolve("cache"));
 
         service = new BeatmapService(cache, new BeatmapAnalyzer());
-        service.request(file);
+        service.request(file.toString());
         assertTrue(service.await(PATIENCE));
         assertFalse(service.status().fromCache(), "the first pass had nothing to read");
         double firstBpm = service.beatmap().bpm();
         service.close();
 
         service = new BeatmapService(cache, new BeatmapAnalyzer());
-        service.request(file);
+        service.request(file.toString());
         assertTrue(service.await(PATIENCE));
 
         assertTrue(service.status().fromCache(), "the analysis was run a second time");
@@ -102,11 +102,11 @@ class BeatmapServiceTest {
         Path file = track(directory, "song.wav");
         service = new BeatmapService(new BeatmapCache(directory), new BeatmapAnalyzer());
 
-        service.request(file);
+        service.request(file.toString());
         assertTrue(service.await(PATIENCE));
         BeatmapService.Status settled = service.status();
 
-        service.request(file);
+        service.request(file.toString());
 
         assertSame(settled, service.status(),
                 "a listener that fires for reasons other than a song change must be free");
@@ -119,11 +119,11 @@ class BeatmapServiceTest {
         Path second = track(directory, "second.wav");
         service = new BeatmapService(new BeatmapCache(directory), new BeatmapAnalyzer());
 
-        service.request(first);
-        service.request(second);
+        service.request(first.toString());
+        service.request(second.toString());
         assertTrue(service.await(PATIENCE));
 
-        assertEquals(second, service.status().file(),
+        assertEquals(second.toString(), service.status().source(),
                 "the status must describe what is playing now, not what was skipped past");
     }
 
@@ -132,10 +132,10 @@ class BeatmapServiceTest {
     void requestingNullClears(@TempDir Path directory) throws IOException {
         Path file = track(directory, "song.wav");
         service = new BeatmapService(new BeatmapCache(directory), new BeatmapAnalyzer());
-        service.request(file);
+        service.request(file.toString());
         assertTrue(service.await(PATIENCE));
 
-        service.request(null);
+        service.request((String) null);
 
         assertEquals(BeatmapService.Stage.NONE, service.status().stage());
         assertSame(Beatmap.EMPTY, service.beatmap());
@@ -147,7 +147,7 @@ class BeatmapServiceTest {
         Path text = Files.writeString(directory.resolve("notes.txt"), "not audio at all");
         service = new BeatmapService(new BeatmapCache(directory), new BeatmapAnalyzer());
 
-        service.request(text);
+        service.request(text.toString());
         assertTrue(service.await(PATIENCE));
 
         assertEquals(BeatmapService.Stage.FAILED, service.status().stage());
@@ -161,7 +161,7 @@ class BeatmapServiceTest {
         Path file = track(directory, "song.wav");
         service = new BeatmapService(new BeatmapCache(directory), new BeatmapAnalyzer());
 
-        service.request(file);
+        service.request(file.toString());
         assertSame(Beatmap.EMPTY, service.beatmap(),
                 "a half-built course must never reach the game");
 
@@ -174,11 +174,11 @@ class BeatmapServiceTest {
     void closeIsIdempotent(@TempDir Path directory) throws IOException {
         Path file = track(directory, "song.wav");
         service = new BeatmapService(new BeatmapCache(directory), new BeatmapAnalyzer());
-        service.request(file);
+        service.request(file.toString());
 
         service.close();
         service.close();
-        service.request(file);
+        service.request(file.toString());
 
         assertEquals(BeatmapService.Stage.NONE, service.status().stage());
     }
@@ -189,5 +189,106 @@ class BeatmapServiceTest {
         service = new BeatmapService(new BeatmapCache(directory), new BeatmapAnalyzer());
 
         assertTrue(service.await(Duration.ofMillis(50)));
+    }
+
+    /**
+     * A song with no file at all.
+     *
+     * <p>This is the case the whole locator refactor exists for. Before it, a streamed song reached
+     * here as a {@code null} path, the service went idle, and the runner drew "NO COURSE" for the
+     * rest of the session - no exception, no log line, and a rhythm game that silently did not work
+     * for half the library.
+     */
+    @org.junit.jupiter.api.Nested
+    @DisplayName("a track with no file")
+    class Streamed {
+
+        private static final String URI = "spotify:track:4cOdK2wGLETKBW3PvgPWqT";
+
+        @Test
+        @DisplayName("is listened to rather than declared unanalysable")
+        void goesToListening(@TempDir Path directory) {
+            service = new BeatmapService(new BeatmapCache(directory), new BeatmapAnalyzer());
+
+            service.request(URI, 6);
+            assertTrue(service.await(PATIENCE));
+
+            assertEquals(BeatmapService.Stage.LISTENING, service.status().stage());
+            assertTrue(service.status().isAbout(URI));
+            assertTrue(service.streamTap().isArmed(),
+                    "the tap has to be collecting, or playing the track achieves nothing");
+        }
+
+        @Test
+        @DisplayName("has a course the next time it comes round")
+        void playingItBuildsTheCourse(@TempDir Path directory) {
+            BeatmapCache cache = new BeatmapCache(directory);
+            service = new BeatmapService(cache, new BeatmapAnalyzer());
+
+            service.request(URI, 6);
+            assertTrue(service.await(PATIENCE));
+
+            play(service.streamTap());
+            service.finishStream();
+            assertTrue(service.awaitStream(PATIENCE));
+
+            // The map is stored under the URI's key, so a later request is an ordinary cache hit
+            // and the course is there before a note is played.
+            service.close();
+            service = new BeatmapService(cache, new BeatmapAnalyzer());
+            service.request(URI, 6);
+            assertTrue(service.await(PATIENCE));
+
+            assertEquals(BeatmapService.Stage.READY, service.status().stage());
+            assertTrue(service.status().fromCache());
+            assertEquals(120, service.beatmap().bpm(), 2);
+        }
+
+        @Test
+        @DisplayName("seeking gives the run up rather than filing a beatmap built across the jump")
+        void seekingAbandonsTheRun(@TempDir Path directory) {
+            service = new BeatmapService(new BeatmapCache(directory), new BeatmapAnalyzer());
+            service.request(URI, 6);
+            assertTrue(service.await(PATIENCE));
+
+            service.abandonStream();
+
+            assertFalse(service.streamTap().isArmed());
+            play(service.streamTap());
+            service.finishStream();
+            assertTrue(service.awaitStream(PATIENCE));
+            assertEquals(BeatmapService.Stage.LISTENING, service.status().stage(),
+                    "nothing was collected, so nothing became ready");
+        }
+
+        @Test
+        @DisplayName("moving to a local file stops it collecting that file's audio")
+        void movingToAFileDisarmsTheTap(@TempDir Path directory) throws IOException {
+            Path file = track(directory, "song.wav");
+            service = new BeatmapService(new BeatmapCache(directory), new BeatmapAnalyzer());
+            service.request(URI, 6);
+            assertTrue(service.await(PATIENCE));
+            assertTrue(service.streamTap().isArmed());
+
+            service.request(file.toString());
+            assertTrue(service.await(PATIENCE));
+
+            assertFalse(service.streamTap().isArmed(),
+                    "left armed, the local file's audio would be collected and filed under the "
+                            + "Spotify track's key - a course for one song built from another");
+        }
+
+        /**
+         * Plays six seconds of a 120 BPM click track at the tap.
+         *
+         * @param tap the builder to feed
+         */
+        private static void play(StreamBeatmapBuilder tap) {
+            byte[] pcm = ClickTrack.interleave(
+                    ClickTrack.mono(6, ClickTrack.beatsAt(11, 120, 0.35)));
+            for (int at = 0; at < pcm.length; at += 4096) {
+                tap.pcm(pcm, at, Math.min(4096, pcm.length - at));
+            }
+        }
     }
 }

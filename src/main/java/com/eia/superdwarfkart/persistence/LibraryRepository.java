@@ -32,8 +32,14 @@ public class LibraryRepository implements Repository<Song> {
 
     private static final Logger LOG = Logger.getLogger(LibraryRepository.class.getName());
 
-    /** Bumped when the on-disk shape changes in a way older readers could not handle. */
-    private static final int FORMAT_VERSION = 1;
+    /**
+     * Bumped when the on-disk shape changes in a way older readers could not handle.
+     *
+     * <p>Version 2 added {@code spotifyUri}, {@code source} and {@code coverUrl}. A version 1 file
+     * reads unchanged - every song in one has a file path, which is still exactly what makes a song
+     * local - so nothing migrates and nothing is lost.
+     */
+    private static final int FORMAT_VERSION = 2;
 
     private final Path file;
     private final ObjectMapper mapper;
@@ -187,8 +193,12 @@ public class LibraryRepository implements Repository<Song> {
         record.genre = song.getGenre().name();
         record.year = song.getYear();
         record.rating = song.getRating();
-        record.filePath = song.getFilePath().toString();
+        // Exactly one of these two is set, and which one is what makes the song local or streamed.
+        record.filePath = song.getFilePath() == null ? null : song.getFilePath().toString();
+        record.spotifyUri = song.getSpotifyUri();
+        record.source = song.getSource().name();
         record.coverPath = song.getCoverPath() == null ? null : song.getCoverPath().toString();
+        record.coverUrl = song.getCoverUrl();
         record.favorite = song.isFavorite();
         record.playCount = song.getPlayCount();
         return record;
@@ -202,14 +212,22 @@ public class LibraryRepository implements Repository<Song> {
      * @return the reconstructed song
      */
     private static Song toSong(SongData record) {
-        if (record.filePath == null || record.filePath.isBlank()) {
-            throw new IllegalArgumentException("stored song has no file path");
+        String id = record.id == null || record.id.isBlank()
+                ? java.util.UUID.randomUUID().toString()
+                : record.id;
+
+        // The URI is read before the path, and the stored "source" name is deliberately not
+        // consulted to decide which this is. A song is streamed because it has a track URI, full
+        // stop - so a hand-edited or older file with a mismatched source field still loads as
+        // whatever it actually holds, rather than as whatever it claims.
+        Song song;
+        if (record.spotifyUri != null && !record.spotifyUri.isBlank()) {
+            song = Song.spotify(id, record.spotifyUri, record.title, record.artist);
+        } else if (record.filePath != null && !record.filePath.isBlank()) {
+            song = new Song(id, record.title, record.artist, Path.of(record.filePath));
+        } else {
+            throw new IllegalArgumentException("stored song has neither a file path nor a Spotify URI");
         }
-        Song song = new Song(
-                record.id == null || record.id.isBlank() ? java.util.UUID.randomUUID().toString() : record.id,
-                record.title,
-                record.artist,
-                Path.of(record.filePath));
         song.setAlbum(record.album);
         song.setDuration(Duration.ofMillis(Math.max(0, record.durationMillis)));
         song.setGenre(parseGenre(record.genre));
@@ -217,6 +235,7 @@ public class LibraryRepository implements Repository<Song> {
         song.setRating(record.rating);
         song.setCoverPath(record.coverPath == null || record.coverPath.isBlank()
                 ? null : Path.of(record.coverPath));
+        song.setCoverUrl(record.coverUrl);
         song.setFavorite(record.favorite);
         song.setPlayCount(Math.max(0, record.playCount));
         return song;
@@ -257,7 +276,15 @@ public class LibraryRepository implements Repository<Song> {
         public int year;
         public int rating;
         public String filePath;
+        public String spotifyUri;
+        /**
+         * Written for a human reading the file, and ignored on the way back in - the URI decides.
+         * A letter that can disagree with the two fields beside it is a bug waiting for a hand
+         * edit, the same reasoning that keeps the runner's rank derived rather than stored.
+         */
+        public String source;
         public String coverPath;
+        public String coverUrl;
         public boolean favorite;
         public int playCount;
     }

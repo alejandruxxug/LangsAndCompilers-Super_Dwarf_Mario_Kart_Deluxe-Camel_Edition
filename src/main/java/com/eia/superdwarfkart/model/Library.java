@@ -179,7 +179,29 @@ public class Library {
         }
         Path normalized = file.toAbsolutePath().normalize();
         for (Song song : songs) {
-            if (song.getFilePath().toAbsolutePath().normalize().equals(normalized)) {
+            Path stored = song.getFilePath();
+            // Streamed songs have no file at all, and skipping them here is what keeps this from
+            // throwing the moment the first Spotify track joins the library.
+            if (stored != null && stored.toAbsolutePath().normalize().equals(normalized)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Reports whether a song already refers to the given Spotify track, so the same track is not
+     * added twice.
+     *
+     * @param uri the track URI to look for
+     * @return {@code true} if some song already uses it
+     */
+    public boolean containsSpotifyUri(String uri) {
+        if (uri == null || uri.isBlank()) {
+            return false;
+        }
+        for (Song song : songs) {
+            if (uri.equals(song.getSpotifyUri())) {
                 return true;
             }
         }

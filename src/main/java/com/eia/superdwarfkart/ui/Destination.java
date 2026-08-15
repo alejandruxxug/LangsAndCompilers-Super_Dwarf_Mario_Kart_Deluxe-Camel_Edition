@@ -26,6 +26,9 @@ public enum Destination {
     /** Who is driving. Drawn from frame 3 of each racer's own sheet. */
     RACERS("RACERS", "Choose a racer"),
 
+    /** Search Spotify, and connect the account that makes it possible. */
+    SPOTIFY("SPOTIFY", "Search Spotify and add tracks"),
+
     /** The look: a palette applied to every window at once. */
     MOODS("MOODS", "Change the look"),
 

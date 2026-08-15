@@ -40,6 +40,30 @@ public class SettingsRepository {
     private String moodId;
     private String racerId;
     private String speedClass;
+    private String spotifyBinaryPath;
+
+    /**
+     * The registered Spotify application catalogue search runs as.
+     *
+     * <p><strong>The secret is stored in clear, and that is worth being explicit about.</strong>
+     * This file already sits in the user's own home directory under their own account, the
+     * credential grants nothing but catalogue search against a free application they registered
+     * themselves, and there is no key store on this project's dependency list to put it in.
+     * Obscuring it would buy nothing and would suggest a protection that was not there. What does
+     * matter is that it never goes anywhere else: it is not logged, not printed by the smoke test,
+     * and not carried in the library or mood exports.
+     */
+    private String spotifyClientId;
+    private String spotifyClientSecret;
+
+    /**
+     * Whether to fetch the go-librespot binary in the background at startup.
+     *
+     * <p>Defaults to on, so the daemon is simply there by the time anybody opens the Spotify page.
+     * It downloads into this application's own folder and starts nothing - the process, the socket
+     * and the login all still wait to be asked for. Turning it off is for a metered connection.
+     */
+    private boolean spotifyAutoFetch = true;
 
     /** Creates a repository over the default location, {@code ~/.superdwarfkart/settings.json}. */
     public SettingsRepository() {
@@ -70,6 +94,64 @@ public class SettingsRepository {
     /** @return the stored speed class name, or {@code null} when the user has never chosen one */
     public String speedClass() {
         return speedClass;
+    }
+
+    /**
+     * @return the path the user pointed at their own go-librespot build, or {@code null} to search
+     *         the usual places
+     */
+    public String spotifyBinaryPath() {
+        return spotifyBinaryPath;
+    }
+
+    /** @return whether the daemon may be downloaded in the background at startup */
+    public boolean spotifyAutoFetch() {
+        return spotifyAutoFetch;
+    }
+
+    /** @return the registered Spotify application's client id, or {@code null} */
+    public String spotifyClientId() {
+        return spotifyClientId;
+    }
+
+    /** @return the registered Spotify application's client secret, or {@code null} */
+    public String spotifyClientSecret() {
+        return spotifyClientSecret;
+    }
+
+    /**
+     * Stores the Spotify application catalogue search runs as.
+     *
+     * <p>Both together, because half a credential pair is not a usable state and storing them
+     * separately would let a save leave one of the two behind.
+     *
+     * @param clientId     the application id; {@code null} or blank turns catalogue search off
+     * @param clientSecret the application secret
+     */
+    public void setSpotifyCredentials(String clientId, String clientSecret) {
+        this.spotifyClientId = blankToNull(clientId);
+        this.spotifyClientSecret = blankToNull(clientSecret);
+        save();
+    }
+
+    /**
+     * Stores an explicit path to the go-librespot executable.
+     *
+     * @param path the executable's path; {@code null} restores the usual search
+     */
+    public void setSpotifyBinaryPath(String path) {
+        this.spotifyBinaryPath = blankToNull(path);
+        save();
+    }
+
+    /**
+     * Stores whether the daemon may be downloaded at startup.
+     *
+     * @param enabled whether to fetch it
+     */
+    public void setSpotifyAutoFetch(boolean enabled) {
+        this.spotifyAutoFetch = enabled;
+        save();
     }
 
     /**
@@ -117,6 +199,12 @@ public class SettingsRepository {
                 moodId = blankToNull(dto.moodId);
                 racerId = blankToNull(dto.racerId);
                 speedClass = blankToNull(dto.speedClass);
+                spotifyBinaryPath = blankToNull(dto.spotifyBinaryPath);
+                spotifyClientId = blankToNull(dto.spotifyClientId);
+                spotifyClientSecret = blankToNull(dto.spotifyClientSecret);
+                // Absent in a file written before Spotify existed, where Jackson leaves the
+                // boxed field null. Only an explicit false turns it off.
+                spotifyAutoFetch = dto.spotifyAutoFetch == null || dto.spotifyAutoFetch;
             }
         } catch (IOException e) {
             LOG.log(Level.WARNING,
@@ -136,6 +224,10 @@ public class SettingsRepository {
         dto.moodId = moodId;
         dto.racerId = racerId;
         dto.speedClass = speedClass;
+        dto.spotifyBinaryPath = spotifyBinaryPath;
+        dto.spotifyAutoFetch = spotifyAutoFetch;
+        dto.spotifyClientId = spotifyClientId;
+        dto.spotifyClientSecret = spotifyClientSecret;
 
         try {
             Path parent = file.getParent();
@@ -151,8 +243,18 @@ public class SettingsRepository {
         }
     }
 
+    /**
+     * @param value a stored value as typed
+     * @return the value stripped of surrounding whitespace, or {@code null} when nothing is left -
+     *         a pasted credential or path routinely carries a trailing newline, which is invisible
+     *         in the field and breaks the value everywhere it is used
+     */
     private static String blankToNull(String value) {
-        return value == null || value.isBlank() ? null : value;
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.strip();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     /** The on-disk shape. Unknown fields are ignored so a newer file still loads. */
@@ -162,5 +264,10 @@ public class SettingsRepository {
         public String moodId;
         public String racerId;
         public String speedClass;
+        public String spotifyBinaryPath;
+        /** Boxed so an older file, which has no such key, is told apart from an explicit false. */
+        public Boolean spotifyAutoFetch;
+        public String spotifyClientId;
+        public String spotifyClientSecret;
     }
 }

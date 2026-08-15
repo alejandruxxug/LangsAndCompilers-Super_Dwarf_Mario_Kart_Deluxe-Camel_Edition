@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -184,5 +185,72 @@ class BeatmapCacheTest {
     @DisplayName("looking up a missing file is a miss rather than an exception")
     void missingFileIsAMiss(@TempDir Path directory) {
         assertTrue(new BeatmapCache(directory).load(directory.resolve("gone.mp3")).isEmpty());
+    }
+
+    /**
+     * How a track is identified when it is not a file.
+     *
+     * <p>The test is "does this locator resolve to a readable file", never a prefix. Putting a
+     * check for {@code spotify:} here would give {@code analysis/} an opinion about who can open
+     * what, which is precisely what it is not supposed to have.
+     */
+    @org.junit.jupiter.api.Nested
+    @DisplayName("keying a track by what it plays from")
+    class Keys {
+
+        private static final String URI = "spotify:track:4cOdK2wGLETKBW3PvgPWqT";
+
+        @Test
+        @DisplayName("a file is still keyed by its contents, not by its name")
+        void aFileIsKeyedByContent(@TempDir Path directory) throws IOException {
+            Path here = Files.writeString(directory.resolve("song.mp3"), "the same music");
+            Path there = Files.writeString(directory.resolve("moved.mp3"), "the same music");
+
+            assertEquals(BeatmapCache.hash(here), BeatmapCache.keyFor(here.toString()));
+            assertEquals(BeatmapCache.keyFor(here.toString()),
+                    BeatmapCache.keyFor(there.toString()),
+                    "two copies of one recording must share one analysis, as they always have");
+        }
+
+        @Test
+        @DisplayName("a stream is keyed by its URI, which is stable and has no bytes to read")
+        void aStreamIsKeyedByItsUri() {
+            String key = BeatmapCache.keyFor(URI);
+
+            assertEquals(64, key.length());
+            assertTrue(key.matches("[0-9a-f]{64}"));
+            assertEquals(key, BeatmapCache.keyFor(URI), "the same track must key the same way");
+        }
+
+        @Test
+        @DisplayName("two different tracks key differently")
+        void differentTracksDiffer() {
+            assertNotEquals(BeatmapCache.keyFor(URI),
+                    BeatmapCache.keyFor("spotify:track:1301WleyT98MSxVHPZCA6M"));
+        }
+
+        @Test
+        @DisplayName("a beatmap keyed from a URI round-trips through the cache")
+        void aStreamedBeatmapRoundTrips(@TempDir Path directory) {
+            BeatmapCache cache = new BeatmapCache(directory);
+            String key = BeatmapCache.keyFor(URI);
+            Beatmap map = new Beatmap(key, AppConfig.ANALYZER_VERSION, 120, 128,
+                    new double[] {0.5, 1.0}, new double[] {0.5});
+
+            assertTrue(cache.store(map));
+
+            assertTrue(cache.loadByHash(key).isPresent(),
+                    "a streamed track's course has to be found the same way a file's is, or it is "
+                            + "rebuilt from scratch on every play and never appears at all");
+            assertEquals(128, cache.loadByHash(key).orElseThrow().bpm());
+        }
+
+        @Test
+        @DisplayName("a path that names nothing on disk is keyed as text rather than refused")
+        void aMissingFileIsKeyedByName(@TempDir Path directory) {
+            String missing = directory.resolve("gone.mp3").toString();
+
+            assertNotNull(BeatmapCache.keyFor(missing));
+        }
     }
 }

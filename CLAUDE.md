@@ -50,8 +50,8 @@ live in `AppConfig` and are referenced everywhere instead of hardcoded strings:
    Generics (`<T>`) required — graded bonus. Every public method carries a Javadoc line
    stating its time complexity. Three people defend these orally.
 3. **Strict separation of logic and presentation.** Nothing in `ds/`, `model/`, `playback/`,
-   `audio/`, or `analysis/` may import `javafx.*`. The UI observes; it does not own state.
-   (`javafx.util.Duration` included — `model/` uses `java.time.Duration`.)
+   `audio/`, `analysis/`, or `spotify/` may import `javafx.*`. The UI observes; it does not own
+   state. (`javafx.util.Duration` included — `model/` uses `java.time.Duration`.)
 4. **Never block the audio thread.** The PCM callback runs on the playback thread: copy,
    compute, publish to atomics, return. No `Platform.runLater` per audio block — the UI polls
    levels from an `AnimationTimer`.
@@ -125,7 +125,7 @@ block (a bare `-D` on the Maven command line does **not** reach the app):
 | `-Dsdmk.home=/tmp/demo` | Use a scratch profile instead of `~/.superdwarfkart`. Seed a `library.json` there to demo against fake data without touching the user's real library. |
 | `-Dsdmk.diag=true` | Measure the runner's frame loop: achieved fps and frame-interval percentiles, the tick split, and the playback clock's own granularity. Prints a line every two seconds and draws a readout over the road. **`F3` toggles it live** (off → printed + overlay → printed only), which is the more useful of the two — a stutter somebody is watching can be measured while it happens. |
 | `-Djavafx.pulseLogger=true` | The toolkit's own per-phase frame log. Reach for this only when `sdmk.diag` says the frame interval is long but the tick is cheap, i.e. the time is going to the render thread or to layout rather than to anything this project wrote. |
-| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. It also writes one shot per view beside it — `out-shuffle`, `-arrival`, `-alphabetical` (the three structure views), `-presentation`, `-history`, `-racers`, `-settings`, `-moods`, `-moods-light`, `-library-light` (the light palette on the controls, where a bevel drawn the wrong way round shows), `-dsa-folded` (the table with the structure column folded away), `-race` and `-mini` / `-mini-compact`. **Every one of them exists only once a mode has been selected or a key pressed**, so one shot of the opening state proves nothing about any of them. The companion shots are taken from **its own scene** (it is a separate window, so the main one's snapshot contains none of it) and after a seek a third of the way in, because a progress line at zero is a picture of an empty line. |
+| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. It also writes one shot per view beside it — `out-shuffle`, `-arrival`, `-alphabetical` (the three structure views), `-presentation`, `-history`, `-racers`, `-spotify`, `-settings`, `-moods`, `-moods-light`, `-library-light` (the light palette on the controls, where a bevel drawn the wrong way round shows), `-dsa-folded` (the table with the structure column folded away), `-race` and `-mini` / `-mini-compact`. **Every one of them exists only once a mode has been selected or a key pressed**, so one shot of the opening state proves nothing about any of them. The companion shots are taken from **its own scene** (it is a separate window, so the main one's snapshot contains none of it) and after a seek a third of the way in, because a progress line at zero is a picture of an empty line. |
 
 **The smoke test plays about three seconds of the current song** and prints the measured L/R levels,
 so a run is audible. That is the point: the base screenshot is taken while audio is still flowing,
@@ -137,6 +137,16 @@ identically because they were never deinterleaved.
 The line to read is `grid deviation`: a tempo is always a plausible number, but beats sitting a few
 milliseconds off the grid means the detected beat is the one in the music, and a figure approaching
 a quarter of the beat means the histogram picked a tempo the track does not have.
+
+**Then it builds the same beatmap the way a streamed track has to, and compares the two.**
+`stream vs file` is how the Spotify course path is verified **without a Spotify account**: a
+streamed track has no file, so its course is built from the audio going past the playback tap, and
+the only property that matters is that it comes out identical to what the file analyser produced.
+The blocks are read through `PcmFormat`, which is the same decode playback uses, so they are the
+bytes the tap would genuinely see. A synthetic click track cannot establish this — a tempo fit that
+disagreed only on real music would pass every unit test — and no screenshot can show it. Anything
+other than `identical` on that line means a score earned on a streamed track is meaningless on a
+local copy of the same recording.
 
 **And it generates the course at all four speed classes and drives each one.** Three things on
 those lines cannot be checked any other way. The entity counts are the claim that difficulty comes
@@ -366,7 +376,7 @@ the record, and nothing else**:
   visualizer for the active mode**. This *is* the queue view: upcoming songs are shown
   structurally, not as a flat list, and it swaps automatically when the mode changes.
 - **Right** (wider, not an even split) — the 3-lane runner flanked by the L and R meter bars.
-- **Side rail** — Library, Favorites, History, Racer Select, **Moods**, Settings.
+- **Side rail** — Library, Favorites, History, Racer Select, **Spotify**, **Moods**, Settings.
 - **Presentation Mode** (function key) — see §7.
 
 ### As built (2026-08-13, M8)
@@ -565,6 +575,8 @@ com.eia.superdwarfkart
 │                 BeatmapIndex
 ├── game/         RunnerGame, RunnerListener, Course, Lane, Entity (sealed), Obstacle, Coin,
 │                 Star, EntityState, ScoreKeeper, Rank, ScoreEntry, SpeedClass
+├── spotify/      SpotifyBinary, SpotifyConfig, SpotifyDaemon, SpotifyApi,      ← M10
+│                 SpotifyEvents, SpotifyTrack, SpotifySession
 ├── persistence/  Repository<T> (interface), LibraryRepository, ScoreRepository
 ├── assets/       AssetRegistry, SpriteSheet, SpriteAnimation, RacerFrame
 ├── mood/         Palette, PaletteRole (enum), GbaColor            ← built in M4
@@ -1837,7 +1849,13 @@ that reads `Crystal Castles`. Compare `docs/screenshots/sdmk-alphabetical.png` w
 | M8 | ⭐ Mini companion mode: transparent stage, disk + racer, expand/hide/quit | ✅ done |
 | M9 | Sweep: side rail, favorites, history, statistics, keyboard reference, **`DARK` + `LIGHT` moods and a switcher** — the dark-mode bonus ships as moods, not a boolean | ✅ done |
 | M11 | ⭐ **Mood system** — 16-color GBA palettes, gradient/image/procedural overlay layers, live customizer, 16×16 / 32×32 pixel editor, `.gpl` + `.hex` import, `MoodValidator`, presets | ⬜ |
-| M10 | *Optional:* `go-librespot` child process. Strictly additive — nothing in M0–M9 or M11 may import it | ⬜ |
+| M10 | *Optional:* `go-librespot` child process, Spotify search, streamed songs in the library | ✅ built; search runs on the user's own Spotify application and needs only a released daemon. Streamed tracks generate courses, built from the playback tap on first play — verified against the file analyser on real music, byte for byte. **Playback and pause/resume confirmed working on a live Premium account (2026-08-15)**, once the pipe deadlock was fixed |
+
+**M10 was built before M11 at the user's request**, against this file's own advice. The advice
+still stands for anyone reading it cold: M11 is visible in the first two seconds of the demo and
+depends on nothing external, and if only one of the two gets finished it should be that one. M10 is
+**strictly additive** and stayed that way — nothing in M0–M9 imports `spotify/`, the three graded
+structures are untouched, and the application runs identically with the daemon absent.
 
 **M11 is listed before M10 on purpose — build it first.** It is visible in the first two seconds
 of the demo, depends on nothing external, and cannot fail in a way that breaks the app. M10
@@ -1853,8 +1871,44 @@ recorded in ground rule 7 before starting it.
 ## 10. Pending experiments — carry forward across sessions
 
 ### EXP-1 — Does the go-librespot FIFO pace to realtime?
-**Status: OPEN.** Blocks whether the rhythm game works on a Spotify track's **first** play.
-**Not on the critical path** — M0–M9 are unaffected. Do not guess the answer; run it.
+**Status: ANSWERED (2026-08-13), from the source rather than the stopwatch. It does not pace.**
+
+`output/driver-pipe.go` settles it without needing an account, a network or a track. The output
+loop has **no sleep, no timer and no rate limiter**: it reads decoded float32 from the session,
+applies volume, transforms to `s16le` and calls `file.Write`, forever. The *only* thing that can
+block it is that write. So a FIFO reader sets the pace, and the pipe's own kernel buffer — tens of
+kilobytes, a fraction of a second — is the entire slack.
+
+Two consequences, and the first is why nothing had to be built for it:
+
+- **The model-independent path is the one that was built, and it is correct either way.**
+  `SpotifyAudioSource` writes to a `SourceDataLine`, which blocks when the card's buffer is full.
+  That backpressure propagates down the pipe and stops the daemon decoding. The sound card is the
+  clock, exactly as it is for a local file, and no ring buffer or countdown is involved.
+- **The daemon's own idea of the position is therefore wrong**, and must never be read. It assumes
+  its output consumes audio at the speed it is heard; a pipe does not. `/status` runs ahead by
+  however far the pipe is buffered. The clock is `SourceDataLine.getLongFramePosition()`, as
+  documented in §6, and `SpotifyAudioSource.position()` says so.
+
+**The ring-buffer-ahead model in the table below was not built**, and the reason is worth keeping:
+it is *possible* — draining the pipe faster than realtime into a buffer would work, since nothing
+upstream is pacing — but how far ahead it could actually get is bounded by Spotify's CDN and the
+Vorbis decode, which is a network measurement rather than a design fact. Analysing from the tap as
+the track plays and caching at the end gives a full course on the second play, and that is the
+shipped behaviour — **as of 2026-08-15, and not before.** This paragraph previously said so while
+the code did nothing of the kind: the whole beatmap pipeline was keyed on `java.nio.file.Path`, a
+streamed song's is `null`, and every Spotify track therefore reached the runner as `NO COURSE`
+forever. See "Streamed tracks generate courses" below. **"Needs no new machinery" was the wrong
+part** — it needed a second analyser, a locator-keyed cache and two new engine callbacks.
+
+| Elapsed | Meaning | Model to build |
+|---|---|---|
+| ~10 s | Realtime-paced | Analyze on first play; course unlocks on replay |
+| **~1–2 s** | **Decodes ahead — this is the answer** | Ring-buffer inside the track, play ~10 s behind the read head → full game on first play behind a `READY… SET…` countdown |
+| Blocks forever | Misconfigured | Confirm backend is `pipe` and a track is playing |
+
+The original experiment still works and is worth running once against a real account, if only to
+put a number on how many times realtime the decode actually manages:
 
 ```bash
 mkfifo /tmp/sdmk-pcm
@@ -1863,15 +1917,484 @@ mkfifo /tmp/sdmk-pcm
 time dd if=/tmp/sdmk-pcm of=/dev/null bs=176400 count=10
 ```
 
-| Elapsed | Meaning | Model to build |
-|---|---|---|
-| ~10 s | Realtime-paced | Analyze on first play; course unlocks on replay |
-| ~1–2 s | Decodes ahead | Ring-buffer inside the track, play ~10 s behind the read head → full game on first play behind a `READY… SET…` countdown |
-| Blocks forever | Misconfigured | Confirm backend is `pipe` and a track is playing |
+### As built (2026-08-13, M10)
 
-Report the measured time and which model applies **before** implementing either.
+**Spotify is a second `AudioSource` and a second kind of `Song`, and that is the whole of it.** The
+three graded structures, the playback modes, the analyser, the runner and the visualiser were not
+touched: they navigate `Song` objects and are written against `AudioSource`, and neither has ever
+had an opinion about where bytes come from. `LayeringTest` now enforces that rather than trusting
+it — it fails the build if anything in `ds/`, `model/`, `playback/`, `analysis/`, `game/`, `mood/`,
+`assets/` or `persistence/` so much as imports `spotify/`.
 
-### M10 notes (only if M0–M9 and M11 are complete and working on local files)
+- **`AudioSource.load` takes a `String` locator now, not a `Path`.** A streamed song has no file, so
+  `Song.locator()` answers with a path for one kind and a `spotify:track:...` URI for the other, and
+  `PlaybackEngine` passes it straight through. `RoutingAudioSource` is the only class in the
+  application that reads the difference. The alternative — teaching the engine to branch, or giving
+  `audio/` a dependency on `model/` — would have put the knowledge in several places instead of one.
+  `load(Path)` survives as a default that delegates, because plenty of callers genuinely do have a
+  path.
+- **`Song.getFilePath()` can return `null` now, and the compiler will not tell you.** That was the
+  whole risk of this milestone: it compiled clean on the first try and had three live
+  `NullPointerException`s in it — the library's details panel, the beatmap index request, and the
+  edit dialog. The beatmap paths turned out to be null-safe already (`isReady`, `recheck` and
+  `request` all take `null` and mean "nothing"), which is luck rather than design. Go through
+  `locator()`, or check `isSpotify()`.
+- **Search needs no OAuth application of its own — but it needs a daemon newer than any release.**
+  The daemon exposes `POST /token` and proxies `GET|POST|PUT|DELETE /web-api/{path}` verbatim to
+  `api.spotify.com` with the session's bearer token attached, so `v1/search`, `v1/me/tracks` and
+  `v1/me/playlists` work with no client id, no redirect URI and no secret in this repository. The
+  interactive login already requests `user-library-read`, `user-read-private` and twenty-odd more
+  scopes (`session/session.go`), so nothing had to be added for the search to be allowed.
+
+  **Both endpoints are `master`-only and appear in no tagged release.** Verified against v0.8.0's
+  own `api-spec.yml`, which contains *zero* occurrences of `token` or `web-api`; v0.8.0 is what
+  Homebrew installs and what every GitHub release carries. So on a stock install today, **playback
+  works and search does not** — every `/player/*` endpoint has been there for releases.
+
+  **This was a ground-rule-6 failure and it is worth naming.** The API was read off `master` rather
+  than off the version that actually resolves, which is exactly the mistake that rule exists to
+  prevent, and it was caught by running the real binary rather than by any amount of re-reading.
+  `SpotifyApi.hasWebApiProxy()` now probes for the endpoint once per connection, and the view says
+  so plainly instead of showing a search box that returns nothing however it is used — a 404 and
+  "Spotify matched nothing" are the same empty list to every caller above, and the silent version
+  reads as a bug in this application rather than a missing endpoint in the daemon.
+- **There is no `--version` flag.** `go-librespot --help` lists exactly two options, `--conf` and
+  `--config_dir`; anything else exits with `error="unknown flag: --version"`. The first version of
+  `SpotifyBinary.version()` ran `--version` and returned *that error message* as the version, which
+  is worse than not knowing because it would have been shown to the user as the answer. The version
+  is read from the daemon's own first log line, `running go-librespot 0.8.0`.
+- **The daemon does not answer any HTTP request until it has a session.** Measured: with no login,
+  `GET /`, `GET /status` and `POST /token` all accept the connection and then never reply, while the
+  `/events` websocket upgrades immediately. So `awaitReady()` is polling something that hangs rather
+  than something that answers "not yet", and its timeout has to span a human completing an OAuth
+  flow in a browser.
+
+  **A hung endpoint does not prove there is no session, and reading it that way cost a whole
+  investigation.** A wedged *pipe* produces byte-for-byte the same symptom — see "the pipe must
+  never be left unread" below. The two are told apart in seconds: a daemon with a session holds an
+  established TCP connection to Spotify's access point on **port 4070** (`lsof -nP -p <pid> -i`),
+  and a wedged pipe shows the daemon's write offset and the app's read offset frozen a single block
+  apart (`lsof -nP -p <pid> | grep pcm.fifo`). Check both before concluding anything about a login.
+- **go-librespot publishes Linux binaries only, and always has.** Every release from v0.5.2 to
+  v0.8.0 carries exactly four assets — `linux_x86_64`, `linux_arm64`, `linux_armv6`,
+  `linux_armv6_rpi` — and there has never been a darwin one, despite the source carrying a macOS
+  AudioToolbox backend. So "fetch the binary at startup" is real on Linux and impossible on the
+  machine this was written on. macOS gets the Homebrew formula (bottled, `arm64_tahoe`), offered as
+  a button with the command printed beside it rather than run unasked: installing four packages on
+  somebody's machine is not a startup task. Downloads go through
+  `releases/latest/download/<asset>`, which GitHub redirects to the newest release — no API call to
+  be rate limited, and no version number written down here to go stale.
+- **The pipe is opened at *both* ends and held open, and this is the detail the whole audio path
+  rests on.** A FIFO's reader reports end of file the moment the last writer leaves, so a reader
+  holding only the read end would see EOF at every track boundary and could not tell that from the
+  daemon dying. Holding our own write end — and never writing a byte to it — keeps the pipe alive
+  across every gap. It also fixes the other half: go-librespot opens `O_WRONLY|O_NONBLOCK` and
+  **errors outright if no reader is present**, so a reader that came and went would produce a
+  failure inside the daemon at the exact moment the user pressed play. Measured before it was
+  written: with our writer held, a read after the daemon closes its end blocks rather than
+  returning `-1`.
+- **The end of a track cannot be detected from the pipe**, and this is not a detail that can be
+  worked around. When a track finishes the daemon's pipe output goes *quiet* — it does not close
+  the pipe — and a quiet pipe is indistinguishable from a quiet passage. So end-of-track arrives
+  out of band, from the `/events` websocket, as `stopped` or `not_playing`. Without that socket the
+  running order stops dead after one song, which is precisely the failure `PlaybackEngine` was
+  already built to avoid for local files.
+- **The `stopped` event is a flag for the pump, not an instruction to stop.** The daemon is ahead of
+  the speakers by whatever the pipe holds, so acting on that event where it arrives would cut the
+  end off every streamed track — up to a pipe buffer plus a card buffer, getting on for half a
+  second, and plainly audible. `trackEnded()` sets `finishing` and returns; the pump plays the pipe
+  out, drains the line and only then announces. It also keeps every read of the pipe on one thread,
+  so the event socket can never race the pump. The flag is cleared by `retirePump`, or a pending
+  end would fire on the next track the instant its pipe was briefly empty — which is immediately.
+- **`WebSocket.Listener.onText` must call `request(1)` itself.** Overriding it takes over the demand
+  management, and without that call the socket delivers exactly one message and then goes silent
+  forever — which looks identical to a daemon that stopped sending. Text frames are also fragmented,
+  so they are accumulated until `last`; a JSON parse of a fragment fails and the event is lost.
+- **A pipe holds stale audio and a file does not.** After a seek or a track change the pipe still
+  contains up to a bufferful of the previous moment. Left there it puts a fraction of a second of
+  the wrong music at the front of every track, which sounds like a glitch rather than like a bug.
+  `drainPipe()` throws it away, and the ordering matters: after the daemon has been told to move,
+  before the pump is let go.
+- **Four configuration values decide whether this application or Spotify owns the running order,
+  and every one of them fails silently.** `disable_autoplay: true`, `zeroconf_enabled: false`,
+  `crossfade_duration: 0` and `audio_backend: pipe`. Get one wrong and playback carries on sounding
+  completely normal while the circular list, the queue and the tree stop being consulted — no
+  exception, no log line, nothing in a screenshot. `SpotifyConfigTest` asserts them one at a time
+  and the smoke test prints them, because a test is the only thing that would ever notice.
+- **`external_volume: true` is the fifth, and it is subtler than the four.** Left false, the pipe
+  driver multiplies every sample by the *square* of its own volume setting before writing — so the
+  meters would follow a slider rather than the music, and the generated courses with them. Volume
+  belongs to the `SourceDataLine`, in one place, exactly as it does for a local file.
+- **Normalisation is deliberately left on**, for the reason the M10 notes already gave: Spotify's
+  −14 LUFS target is what keeps the meter range, and therefore the difficulty of a generated
+  course, consistent between tracks.
+- **Taps have to be replayed onto a source built later.** The Spotify source is constructed the
+  first time a streamed song is loaded, which is long after the meters and the beat analyser
+  registered themselves at startup. `RoutingAudioSource` keeps its own tap list and seeds the new
+  source from it — without which every streamed song plays with dead meters and no analysis, and
+  nothing anywhere says so. This was written wrong first and caught by
+  `RoutingAudioSourceTest.tapsReachASourceBuiltLater`.
+- **Nothing starts by itself.** Constructing the session looks at the filesystem and does nothing
+  else — no process, no socket, no network. The daemon, the event socket and the login all wait for
+  a button. The one thing that does happen unasked is the background *download* into
+  `~/.superdwarfkart/spotify/bin`, which the user asked for and which can be turned off in
+  `settings.json`; it is skipped entirely during a smoke test, so the build never depends on the
+  network.
+
+  **Superseded in one place as of 2026-08-15: pressing play on a streamed song now connects.** The
+  rule stands for everything else — the daemon still waits for a button *unless the user has asked
+  for the one thing that requires it*, which is a clearer statement of intent than pressing CONNECT
+  and is a step whose necessity nothing on screen explains. Before this, playing a Spotify track
+  with the daemon down **did nothing at all and said nothing anywhere**: `PlaybackEngine` has always
+  had `setOnFailure` and `App` had never registered one.
+  - `App.songWouldNotOpen` splits on the only question that matters. **Installed → connect and carry
+    on**, holding the song in `awaitingSpotify` and starting it when the session reaches
+    `CONNECTED`. **Not installed → say so**, once per session, with the install command for this
+    platform: no amount of waiting fixes that, and the search that put the track in the library gave
+    no hint that playing it needs anything else.
+  - **The waiting song is re-checked against `player.current()` before it starts.** Connecting can
+    take as long as a person takes to finish a login in a browser, and starting a track the user has
+    since navigated away from is worse than doing nothing.
+  - **Suppressed entirely under `sdmk.smokeTest`**, which must never launch a subprocess, take a port
+    or wait on a login — and the smoke line says so out loud rather than being silently skipped.
+  - **`SpotifySession` took a list of change listeners for this.** The Spotify page claims a slot in
+    its own constructor and playback registers later; with the old single-handler `setOnChanged` the
+    second silently displaced the first, and the symptom would have been a page that stopped
+    redrawing — which reads as a frozen interface rather than as a lost listener. `addOnChanged` is
+    the one to use after startup, one listener throwing cannot take down the rest, and
+    `listenersAccumulate` pins it.
+- **The child is killed on every exit path** — `stop()` on the ordinary one and a shutdown hook for
+  the rest, `destroyForcibly()` after a grace period. An orphaned daemon holds a Spotify session and
+  keeps port 3678 bound, so the next launch finds the port taken and Spotify silently does not work
+  with nothing on screen to say why.
+- **logrus quotes its message, and `\S+` eats the closing quote.** The daemon logs
+  `msg="to complete authentication visit the following link: https://...user-top-read"`, so a
+  pattern that runs to the next whitespace takes that final `"` as part of the URL. The link is then
+  correct for 766 characters and wrong at the 767th, `URI.create` throws
+  `Illegal character in query at index 766`, and **the browser never opens** - while everything else
+  looks perfect: the link is found, the state moves to "waiting for login", and the button just does
+  nothing. The pattern excludes quotes.
+
+  **The test that should have caught it was the thing that hid it.** The stub wrote the line with
+  `echo "..."`, and the shell strips those quotes - so the line under test was not the line the
+  daemon prints, and the bug passed. It now uses `echo '...'` so the quotes survive, and asserts
+  that the extracted link both lacks a trailing quote and survives `URI.create`. Verified by
+  reverting the pattern and watching the test fail.
+
+  **And the live check called it verified.** It printed `auth link: DETECTED (767 chars)`, which was
+  read as "the whole link came through" when 767 was the length *with the quote on the end*. A
+  measurement that cannot fail is not a check - the number needed something to be right *against*,
+  which is why it now parses the URL rather than counting it.
+- **`go install .../cmd/daemon@master` produces a binary called `daemon`, not `go-librespot`.** Go
+  names a main package's executable after its directory. Printed as a suggestion on the page it was
+  advice that could not work: the build would succeed and put a perfectly good daemon somewhere
+  `resolve()` never looks, because that searches for the name `go-librespot`. The build button sets
+  `GOBIN` to `~/.superdwarfkart/spotify/bin` so the output lands in the folder resolution already
+  searches - no `go env` to parse - and then renames it. `SpotifyBinaryTest` pins both names and
+  asserts they differ, so the rename cannot quietly become dead code.
+- **The build button checks every prerequisite up front, because the build's own failure is
+  useless.** A source build needs Go 1.25+, `pkg-config`, and `ogg`/`vorbis`/`flac`/`mpg123` (plus
+  `libasound2` on Linux). With pkg-config absent, `go install` compiles for a while and then prints
+  `github.com/devgianlu/go-librespot/mp3: exec: "pkg-config": executable file not found in $PATH`
+  once per cgo package - three near-identical lines naming what *Go* could not run rather than what
+  the user has to install.
+
+  **And fixing that one leads straight into the next.** On macOS `ogg`, `vorbis` and `flac` arrive
+  as Homebrew dependencies of go-librespot itself, but **`mpg123` does not** - so a second attempt
+  fails too, on a different line, after another wait. `checkBuildPrerequisites()` therefore asks
+  about all of them at once and produces a single command
+  (`brew install pkg-config mpg123` on the machine this was written on). Libraries are checked with
+  `pkg-config --exists`, which is the same question cgo asks; when pkg-config itself is missing it
+  falls back to looking for the `.pc` file across the standard directories, so the *first* answer
+  still names everything rather than only the tool that would have found the rest.
+
+  **A pkg-config module name is not a package name, and for mpg123 they differ.** The check first
+  asked for a module called `mpg123` and reported it missing on a machine where it was installed and
+  working - because the module is `libmpg123` and `mpg123` is only the Homebrew *formula*. Every
+  other library here happens to spell both the same, which is exactly why the mistake looked right.
+  The authority is go-librespot's own cgo directive (`// #cgo pkg-config: libmpg123` in
+  `mp3/decoder.go`), since that is literally the question the build asks; `SpotifyBinaryTest` pins
+  it, along with the module-to-formula mapping.
+
+  On Linux the equivalent needs root. The command is shown to be copied and is never run: this
+  application does not ask for a password.
+- **The lockfile is an advisory `flock`, not a stale PID file** — `cli_config.go` calls
+  `flock.New(configDir/lockfile).TryLock()`. The kernel drops the lock when the process dies, even
+  under `SIGKILL`, so the leftover empty file is harmless and heals itself. **Do not "clean it up"
+  on startup**: deleting it would defeat the only thing stopping two daemons sharing one config
+  directory. A `go-librespot is already running (lockfile: ...)` message means a daemon genuinely is
+  running, which during development is usually one this application orphaned.
+- **The Spotify view added no CSS**, so it added no hex literal (ground rule 7). It reuses the
+  classes the history and settings pages already define and therefore follows the palette for free.
+
+**What has actually been verified, and what has not.** Against the real go-librespot 0.8.0 from
+Homebrew: the binary is found on `PATH`, the generated `config.yml` is accepted without complaint,
+the API server binds to 127.0.0.1:3678, the authorisation link is printed in the exact wording
+`SpotifyDaemon.AUTH_LINK` matches and is extracted at its true length of 766 characters and parses
+through `URI.create`, the `/events` websocket connects, and the child process is killed with no
+orphan left behind.
+**Superseded on 2026-08-15: audio through the pipe has now been heard on a live Premium account and
+works.** This paragraph previously read "everything past the login is unverified — no Spotify
+Premium account was available", and for the whole of M10 that was true. What unblocked it was not a
+missing feature but the pipe deadlock recorded below: the reader parked whenever playback stopped,
+which wedged go-librespot's entire HTTP API, so `/player/resume` timed out and nothing was ever
+audible. With the reader draining in every state, **streamed playback and pause/resume are confirmed
+working against a real account**.
+
+The rest of the path is still unverified by ear rather than by reasoning: the seek path, the
+drain-on-track-end and the running order advancing from a `stopped` event are unit-tested and
+argued for but have not been separately exercised on a live account. Do not promote them to
+"verified" without hearing them.
+
+### As built (2026-08-15) — search moved off the daemon, and the source build stopped being needed
+
+**Search runs as a Spotify application of the user's own now, and playback still goes through
+go-librespot.** The two halves of this feature reach Spotify by completely separate routes, which is
+what the previous arrangement obscured: `spotify/SpotifyCatalog` calls `api.spotify.com` directly
+over the Client Credentials flow, and `/player/*` goes on driving the daemon over librespot's own
+session protocol. Only the search half was ever rate-limited, and playback was never affected by
+any of it.
+
+- **librespot's quota is not ours and never was, and this is the measurement that settles it.**
+  `client_id.go:5` hardcodes Spotify's own desktop client id,
+  `65b708073fc0480ea92a077233ca87bd` — as a **byte array, not a hex string**, which is why grepping
+  the binary for the hex finds nothing and why this took a source clone to establish. Every
+  librespot and go-librespot instance in the world authenticates as that one application, and
+  Spotify rate-limits per client id.
+
+  Measured against the live service, a day after the account had been touched at all: the first
+  call answered `retry-after: 31`, and a single call after **forty seconds of complete idleness**
+  answered `retry-after: 33`. A rolling window nobody is spending drains to zero; this one went
+  **up**. That is a bucket contended by strangers, and no amount of waiting empties it —
+  which is exactly the advice that had been given and was wrong.
+- **The daemon's proxy strips the header that would have explained any of this.** A 429 through
+  `/web-api` carries `Vary: Origin`, `Date` and `Content-Length: 0` and nothing else; the identical
+  call made directly carries `retry-after: 31` and a JSON body naming the problem. So reading
+  `Retry-After` was worthless while search went through the proxy and is worth having now that it
+  does not — `SpotifyCatalog.retryAfterSeconds()` is what lets the interface say *how long*.
+- **This removed the master-only dependency entirely, which is the part worth the most.** `/token`
+  and `/web-api/{path}` are both `master`-only — the ground-rule-6 failure recorded above — and
+  catalogue search uses **neither**. Verified against v0.8.0's own `api-spec.yml`: it declares
+  **17 endpoints, every `/player/*` route this application calls among them, and zero occurrences
+  of `token` or `web-api`**. So a stock `brew install go-librespot` is now enough, and the Go
+  toolchain, `pkg-config`, `mpg123`, the `libmpg123`-versus-`mpg123` module-name trap,
+  `buildFromSource()` and `checkBuildPrerequisites()` all came off the critical path. They are kept,
+  because they are still the only route to the *user's own* library — see below — but nothing
+  ordinary needs them.
+- **The Client Credentials flow deliberately cannot see the user, and that is a real boundary rather
+  than a limitation to work around.** An application token identifies the application; `v1/me/tracks`
+  and `v1/me/playlists` answer 401 through it however the request is shaped. Saved tracks and
+  playlists stay on the daemon's proxy, and `SpotifyView` **only draws those two buttons when the
+  proxy exists** — a button that cannot work is worse than no button.
+- **The request shape was verified against the real endpoint before trusting it**, with deliberately
+  fake credentials so it cost no quota: `POST accounts.spotify.com/api/token` with the pair as HTTP
+  Basic and `grant_type=client_credentials` as a form body answers
+  `400 {"error":"invalid_client","error_description":"Invalid client"}`. Spotify parsed the grant and
+  rejected only the credentials, which is the answer that proves the shape. Putting the id and secret
+  in the *body* is the arrangement people reach for first and it is refused with a different error.
+- **The token is cached for its full hour, and dropped in the two cases where keeping it is wrong.**
+  Minting one per search would spend the very allowance this class exists to protect. It is discarded
+  on a 401 — otherwise a token revoked early leaves the feature dead until the application restarts —
+  and on a credential change, or a token minted for the old application would keep working until it
+  expired, so a corrected secret would appear to change nothing and a wrong one would appear to work.
+- **Credentials are verified when saved, not merely stored.** Stored blindly, a typo in the secret
+  shows up as an empty search result — which sends the user looking for a better search term for a
+  problem that is in a text field on the same page.
+- **A refused attempt rolls back to whatever was working, and getting this wrong looked exactly like
+  a broken feature.** The first version replaced the pair and then *cleared* it on refusal. But
+  search comes up **already configured** from `settings.json`, so the button is only ever pressed
+  against a working configuration — and one press with a typo in the field turned a working search
+  **off**, while the message on screen talked about the credentials being wrong rather than about
+  the setting it had just destroyed. Reported as "it still says the client or the secret are wrong"
+  after the credentials had been proven good three separate ways, which is precisely how it reads
+  from the other side. `SpotifyCatalog.applyCredentials` keeps the previous pair and says so;
+  `aRefusedAttemptDoesNotDestroyWorkingCredentials` is the test.
+- **The corollary is that nobody needs to press it.** `restoreCredentials` loads the stored pair at
+  launch and search is on before the page is opened. The button is for *changing* the application,
+  not for arming it.
+- **The secret is stored in clear in `settings.json`, deliberately.** The file is already in the
+  user's own home directory under their own account, the credential grants nothing but catalogue
+  search against a free application they registered themselves, and there is no key store on this
+  project's dependency list. Obscuring it would buy nothing and would imply a protection that was not
+  there. What matters is that it goes nowhere else: not logged, not printed by the smoke test, not
+  carried in the library or mood exports.
+- **`v1/search` accepts a `limit` of ten, and its own documentation says fifty.** The reference
+  states "Minimum: 1. Maximum: 50"; measured against the live service, **11 and above answer
+  `400 {"error":{"status":400,"message":"Invalid limit"}}`** — 11, 12, 15, 18, 19, 20, 25, 30, 40 and
+  50 were all refused, and 10 returned ten items. `SpotifyCatalog.MAX_SEARCH_LIMIT` is 10 and the
+  clamp lives **in the client rather than at the call site**, so no caller can reintroduce it.
+
+  **This is ground rule 6 with the documentation as the thing that could not be trusted, and it cost
+  most of a session.** The interface asked for `PAGE_SIZE` = 50 and failed; every probe written to
+  diagnose it asked for a handful and passed. So the class was correct everywhere it was tested and
+  broken everywhere it was used, and the evidence kept saying the credentials were fine — which they
+  were. Two changes exist so this shape of fault reports itself next time: **the smoke test now runs
+  one real search with the same limit the interface uses** (a harness that asks for something
+  different is not testing the application), and a refused *search* no longer borrows the *token*
+  failure's message — "The credentials were accepted but Spotify refused the search itself (HTTP
+  400)" is what finally located it, out of a user's screenshot.
+- **A streamed song's cover is a URL, and for a while nothing drew it.** `coverUrl` was parsed,
+  stored and persisted, and both views that show artwork read `getCoverPath()` alone — so every
+  Spotify track sat on the "no artwork" placeholder, which is indistinguishable from a song that
+  genuinely has none. `ui/CoverArt` is now the one place that knows about both kinds, and
+  `LibraryView` and `MiniPlayerView` go through it.
+  - **Remote artwork is background-loaded, never fetched on the interface thread.** `new Image(url)`
+    will happily block until the network answers, and a slow server then looks like an application
+    that has hung. The consequence is that the image has no dimensions when it is handed back, so
+    the centre-crop has to be applied on completion — cropping against a zero width yields an empty
+    viewport, which is a frame that stays blank forever with nothing logged.
+  - **Decoded covers are cached, bounded at 64.** The details panel repopulates on every selection
+    change, so without it holding an arrow key down re-fetches the same artwork once per row.
+  - **The cover is chosen by width, not by position.** Spotify offers roughly 640, 300 and 64, and
+    the first version took the *last* entry — right for the companion card at 124px and **four times
+    too small for the library's ~250px panel**, where it arrived visibly blurred. `PREFERRED_COVER_WIDTH`
+    is 300 and the choice is the smallest image that covers it. The array does arrive widest-first,
+    but nothing promises that, and an ordering assumption fails by silently picking the wrong size.
+- **`[smoke] covers` cannot wait for a background load, and the reason is a trap worth remembering.**
+  JavaFX decodes off-thread but publishes progress *on the interface thread*, which the smoke test is
+  holding — so polling `getProgress()` in a sleep loop guarantees it never advances. Measured: five
+  seconds of waiting reported neither decoded nor failed. The check therefore decodes one
+  synchronously to prove the artwork is real, and **selects a song with remote artwork so the
+  screenshots taken afterwards show it** — by then the thread has been free for two seconds. The
+  running application never has this problem.
+- **There is one track parser.** A track object is shaped identically whichever route fetched it, so
+  `SpotifyTrack.fromJson` / `listFrom` is now the single implementation and `SpotifyApi` delegates to
+  it. Two copies of that method would have been free to drift in ways nothing would report.
+- **Configuring credentials changes what the page shows without the session's state moving at all**,
+  so `SpotifySession` grew a `changed()` notification separate from `set(State, String)`. A view
+  listening only for state transitions would not have redrawn, and the search box would not have
+  appeared until something unrelated happened to move the session.
+- **Searching no longer needs a connection**, since it does not involve the daemon. Adding a result
+  to the library while disconnected is a perfectly ordinary thing to do — it plays when the daemon is
+  connected — and the panel says so rather than leaving the user to wonder.
+- 660 tests, up from 637. `SpotifyCatalogTest` drives the whole thing against a stub Spotify over a
+  real socket, for the reason `SpotifyApiTest` already does: what breaks here is the shape of the
+  wire traffic, and a mock would agree with whatever the code did.
+
+### As built (2026-08-15) — streamed tracks generate courses
+
+**Reported as "the loaded go-librespot tracks don't generate a track (circuit for the game)", and it
+was exactly that: every Spotify song reached the runner as an empty course, permanently.** The
+milestone notes above claimed the opposite — see the correction in EXP-1 — which is worth stating
+plainly, because a note describing a feature that was never written is worse than no note at all.
+
+**The cause was one type.** The whole beatmap pipeline was keyed on `java.nio.file.Path`:
+`App.fileOf(song)` handed `BeatmapService.request` a `getFilePath()`, which for a streamed song is
+`null`, so the service went idle, `RunnerView.syncCourse` found no beatmap, and
+`Course.generate(id, Beatmap.EMPTY, class)` produced nothing. **Nothing threw and nothing was
+logged** — this is the `getFilePath()` trap in §11 for a fourth time, and the most expensive one,
+because the symptom was a whole feature quietly not working rather than a stack trace.
+
+- **The pipeline is keyed by locator now, not by path**, so `Song.locator()` is the one thing passed
+  around and `BeatmapService.Status.file` became `.source`. `BeatmapCache.keyFor(String)` is the
+  single place that decides what identifies a track: **a locator naming a readable file is hashed by
+  its contents exactly as before, and anything else is hashed as text.** The test is "does this
+  resolve to a file", never a `spotify:` prefix — `analysis/` has no business having an opinion
+  about who can open what, and a URI is already a stable identity with no bytes to read.
+- **There is nothing to analyse ahead of time, so the track is analysed as it is heard.**
+  `analysis/StreamBeatmapBuilder` is a `PcmListener` on the routing source: it sums each block to
+  mono on the playback thread and hands it to one background thread that runs the transforms. So the
+  first play of a streamed track builds its course and every play after that has it — the road, the
+  meters and the beat flash all work on that first play, and the banner says
+  `LEARNING TRACK - COURSE NEXT PLAY` rather than `GENERATING COURSE`, which would be a lie about
+  what the wait is for. That is `Stage.LISTENING`, the one new state a caller can see.
+- **The two routes share `BeatmapAnalyzer.fromNovelty`, and that is not tidiness.** A streamed track
+  and a local copy of the same recording must generate the *identical* course or a score earned on
+  one means nothing on the other. Two near-identical copies of the tempo fit is exactly how that
+  drift would start. **Measured on `Crimewave`: 120.0 BPM, 826 onsets, 461 on the beat by both
+  routes, arrays equal element for element** — `[smoke] stream vs file` prints it every launch, and
+  it listens to the whole 4:18 track at 191x realtime in 1.4 seconds.
+- **The tap copies and returns; it never transforms.** A 1024-point FFT is tens of microseconds and
+  would very probably fit inside a 23 ms block — "very probably fits" is how audio acquires a stutter
+  nobody can reproduce (ground rule 4). `theTapReturnsImmediately` is the check.
+- **A run is thrown away rather than trusted in three cases**, all ordinary user actions: a seek
+  (`PlaybackEngine.setOnSeek`), a track skipped before `COMPLETE_FRACTION` of its length, and the
+  handover queue overflowing. **A partial curve is not a short beatmap, it is a wrong one** — it
+  would claim the song ends where the listener stopped listening, and it would be cached and
+  believed for good.
+- **`PlaybackEngine.setOnTrackEnded` fires before the running order moves**, and the ordering is
+  load-bearing: a moment later the beatmap would be filed against whatever came next. It is also why
+  it is distinct from a song change — skipping and finishing look identical from there, and one of
+  them has produced a usable beatmap.
+- **The one bug in this that cost real time: `abandon()` bumped the run counter.** `finishStream()`
+  queues the derivation and then abandons, but handing blocks over is asynchronous — so at that
+  instant almost the whole track is still queued, and invalidating queued work left the derivation
+  with a third of a second of audio. Every streamed course came back empty, with nothing thrown and
+  nothing logged, which is the same shape of failure as the original report. Only `arm()` bumps it
+  now; ordering on the single worker does the rest, and it is exact where a counter was a guess
+  about timing. `abandoningAfterFinishingKeepsWhatWasHeard` pins it.
+- **`BeatmapIndex` is locator-keyed too**, so a streamed track earns the library's course-ready badge
+  the same way a file does. A badge that could only ever say "no course" for half the library reads
+  as the feature being broken rather than as the analysis not having happened yet.
+- **Verified on a live Premium account as of 2026-08-15**, once the pipe deadlock below was fixed —
+  which is what had been keeping every streamed track silent. The stream path was already proven on
+  real music through the file decode, byte for byte; what was missing was audio ever leaving the
+  pipe at all.
+- 696 tests, up from 660.
+
+### As built (2026-08-15) — the pipe reader never parks
+
+**Reported as "go-librespot would not resume playback", and it was a deadlock between this
+application and the daemon rather than anything Spotify refused.** Diagnosed against the live wedged
+daemon, which is the only place it exists: no unit test reached it and no screenshot shows it.
+
+**This is the fix that made M10 audible.** For the whole milestone the Spotify path had been written,
+reasoned about, unit-tested and never heard, and the standing note said no Premium account was
+available. It turned out the account was not the blocker: the reader parked the moment playback
+stopped, which wedged the daemon's entire API, so `/player/resume` could never be answered and no
+streamed track ever reached the speakers. **Streamed playback and pause/resume were confirmed
+working on a live Premium account the same day.**
+
+- **The measurements that located it.** `GET /player/resume` answered **405 instantly** — the route
+  is registered and the HTTP server is alive — while `GET /` and `/status` did not answer in 4, 15,
+  20 or 25 seconds. The daemon meanwhile held an **established connection to Spotify's access point
+  on port 4070**, so it was fully logged in. Draining the FIFO by hand returned `/status` to **200
+  immediately** and pulled **25 MB in 6 s, about 24x realtime** — which is what a writer blocked on a
+  full pipe does the moment a reader appears. That last one is the proof; everything before it is
+  circumstantial.
+- **The cycle.** `pause()` cleared `playing` first, which parked the reader, and only then commanded
+  the daemon. With nothing reading, the 4 KB FIFO filled in about 23 ms and go-librespot's output
+  goroutine blocked inside `write`. Because v0.8.0 serves every HTTP request from that same single
+  goroutine over an unbuffered channel with no timeout, the whole API went with it. Then `play()`
+  called `api.resume()` **before** `setPlaying(true)`/`startPump()` — so the reader could only
+  restart after the daemon answered, and the daemon could only answer after the reader restarted.
+  Permanent: every later press threw the same exception.
+- **All four transport paths had the shape** (`load`, `pause`, `seek`, `stop`), so track transitions
+  were equally exposed — those surface as `"would not load"` instead. And `drainPipe()` could never
+  help, because it was called *after* the API call that had already hung.
+- **The fix is one persistent reader that consumes the pipe in every state.** A per-track pump that
+  never parks is not enough and is worse: `retirePump()` cannot join a thread blocked in `read()`,
+  so the old and new pumps would take blocks from one FIFO at random — a hole in the audio, which is
+  exactly what a streamed beatmap cannot survive. One thread for the life of the source removes the
+  race outright.
+- **Three states, all of which still read.** *Stale* (the daemon has just been repositioned) drops
+  blocks without publishing them, which is what `drainPipe()` used to do; `settle()` now only
+  *watches* `available()` rather than reading, because a second reader on one FIFO is the same hole.
+  *Paused* publishes to the taps but does not write to the card. *Playing* does both, and
+  `SourceDataLine.write` still paces the daemon exactly as before.
+- **Paused audio reaches the taps deliberately, and that is what protects the streamed beatmaps.**
+  `StreamBeatmapBuilder`'s novelty curve is a position in the track measured in samples, and
+  `abandonStream` is wired to seeks only — pausing has never spoilt a run. Dropping the blocks the
+  daemon emits before it notices the pause would have put a hole in the curve instead, which is the
+  one failure that class documents as worse than no curve at all because nothing downstream can
+  detect it. So pausing a streamed track still yields a course.
+- **What is dropped is banked onto the clock.** The daemon resumes from after whatever it emitted,
+  so frames discarded while paused are time the track genuinely advanced by. `advanceBase` adds
+  them, or `position()` — which the runner's whole lookahead reads off — falls behind the music by
+  that much at every pause.
+- **`SpotifyAudioSourceTest` is the first test this class has ever had**, and it drives a real FIFO
+  and a real socket for the reason `SpotifyApiTest` already does. It writes 256 KB while the source
+  is stopped and fails by hanging if the reader parks. **Verified to fail against the old
+  behaviour**: `Consumed 4 of 262144 bytes` — the 4 being `publishSilence()`, so not one byte of
+  audio moved.
+- 698 tests, up from 696.
+
+### M10 notes — kept as the record of *why*, now that it is built
+
+*Superseded where it disagrees with "As built (M10)" above: the binary resolution order gained a
+download step and lost the bundled-resource one (there is no binary to bundle for macOS, and
+shipping a Linux one in the jar would bloat it for every user who never touches Spotify), and
+`peekNext()` needed no change because the modes already had it. Everything else below still holds.*
 - Use **`devgianlu/go-librespot`**. `librespot-java` was tested and **does not work** — do not
   attempt it. `librespot-org/librespot-golang` is a different, archived project.
 - `zeroconf_enabled: false` and `disable_autoplay: true` are **correctness requirements, not
@@ -1938,6 +2461,54 @@ Report the measured time and which model applies **before** implementing either.
   is formatting `m:ss`. This cost a milestone's worth of "the game feels laggy" — see §7, M7.
 - **Measuring a `Canvas` by timing `redraw()` measures nothing but the command recording.** The
   frame-to-frame interval is the honest number; `-Dsdmk.diag` prints it.
+- **`Song.getFilePath()` returns `null` for a streamed song.** Nothing in the type system says so.
+  Go through `Song.locator()`, or ask `isSpotify()` first — the places this was got wrong were a
+  details panel, an index request, an edit dialog and **the whole beatmap pipeline**, all of which
+  compiled perfectly. The first three threw a `NullPointerException` and were found in minutes; the
+  fourth threw nothing, silently gave every Spotify track an empty course, and survived a milestone
+  behind a note in this file claiming it worked. **A `null` that is quietly accepted as "nothing
+  asked for" is far more dangerous here than one that is dereferenced.**
+- **logrus wraps its message in double quotes**, so any pattern scraping a URL out of a
+  go-librespot log line must exclude `"` rather than stop at whitespace. One trailing character is
+  enough for `URI.create` to reject the whole link, and the only symptom is a button that does
+  nothing.
+- **A FIFO reader sees end of file the instant its last writer leaves**, so anything reading one
+  across track boundaries must hold a write end open too. And go-librespot refuses to open its end
+  at all if no reader is there, so the reader has to be first and has to stay.
+- **The pipe must never be left unread — not merely left open — and a full pipe kills the daemon's
+  entire HTTP API, not just the audio.** The pipe driver has no pacing and blocks inside `write`
+  once the FIFO's 4 KB kernel buffer fills; v0.8.0 then serves *every* request from the one
+  goroutine that is blocked (`AppPlayer.Run`, handler called inline, unbuffered channel, no
+  timeout). Pausing by parking the reader therefore wedged `/status`, `/player/pause` and
+  `/player/resume` alike, permanently — and since `play()` asked `/player/resume` *before*
+  restarting the reader, the two waited on each other for good. The symptom was
+  `"go-librespot would not resume playback"`, which is a 5 s `COMMAND_TIMEOUT` being reported as a
+  refusal. `SpotifyAudioSource` now reads in every state; `SpotifyAudioSourceTest` pins it.
+- **The daemon's `/status` position is not the clock.** It assumes the output consumes audio at the
+  speed it is heard, which a pipe does not; it runs ahead by however far the pipe is buffered. Read
+  `SourceDataLine.getLongFramePosition()`, as everywhere else.
+- **Anything reached through the daemon's `/web-api` proxy is rate-limited by strangers.** librespot
+  hardcodes Spotify's own desktop client id and every instance in the world shares it, so the quota
+  is contended globally and does not drain when you stop using it — measured, a `retry-after` that
+  rose from 31 to 33 over forty seconds of idleness. Catalogue search goes through `SpotifyCatalog`
+  and the user's own registered application for this reason. Only `v1/me/*` still needs the proxy,
+  because an application token is not a user.
+- **The proxy strips `Retry-After` and the response body**, so a 429 through it is indistinguishable
+  from any other empty result. Read the header on a direct call, where it is present.
+- **`v1/search` refuses a `limit` above 10, and Spotify's reference says the maximum is 50.** It is a
+  flat `400 Invalid limit`, not a trim, so a page size copied from the documentation fails every
+  search. `SpotifyCatalog.MAX_SEARCH_LIMIT` clamps it inside the client. **A diagnostic that asks
+  for a different limit than the interface does is not testing the interface** — that is what hid
+  this for a whole session.
+- **A credential arrives by copy and paste, so it must be stripped before it is used.** A trailing
+  newline off a web page is invisible in the field, survives into the `id:secret` Base64 blob, and
+  comes back as `invalid_client` — the identical answer Spotify gives for a genuinely wrong secret,
+  with nothing anywhere to tell the two apart. This was shipped once and reported immediately.
+  `SpotifyCatalog` and `SettingsRepository` both `strip()`, and the refusal message now names the
+  observed **lengths** (never the values) because "Invalid client" is also what a client id pasted
+  into both fields produces.
+- **The four Spotify configuration values in §10 fail silently**, every one of them by letting
+  Spotify choose the running order while the music goes on sounding fine.
 - **Dequeuing in mode 2 must not delete songs from the library.**
 - **BST deletion with two children, and duplicate song titles** — the two places this breaks.
   Both are covered by tests; keep them passing.

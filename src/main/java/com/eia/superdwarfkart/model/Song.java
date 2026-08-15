@@ -33,6 +33,15 @@ public class Song {
     public static final int UNKNOWN_YEAR = 0;
 
     /**
+     * The only Spotify URI shape a song may hold.
+     *
+     * <p>Deliberately narrow: an album or playlist URI handed to the daemon starts a whole context
+     * playing, which would leave Spotify choosing the running order instead of the active
+     * {@code PlaybackMode} - the exact silent failure the daemon is configured against.
+     */
+    public static final String SPOTIFY_TRACK_PREFIX = "spotify:track:";
+
+    /**
      * Playback ordering used by the alphabetical mode: title, then artist, then identifier,
      * all case-insensitive for the text parts.
      *
@@ -54,7 +63,9 @@ public class Song {
     private int year = UNKNOWN_YEAR;
     private int rating = MIN_RATING;
     private Path filePath;
+    private String spotifyUri;
     private Path coverPath;
+    private String coverUrl;
     private boolean favorite;
     private int playCount;
 
@@ -89,6 +100,53 @@ public class Song {
             throw new IllegalArgumentException("Song id must not be blank");
         }
         this.id = id;
+    }
+
+    /**
+     * Private constructor for a streamed song, which has a Spotify URI where a local song has a
+     * file. Reached through {@link #spotify(String, String, String)}.
+     */
+    private Song(String spotifyUri, String title, String artist) {
+        this.id = UUID.randomUUID().toString();
+        setTitle(title);
+        setArtist(artist);
+        setSpotifyUri(spotifyUri);
+    }
+
+    /**
+     * Creates a song streamed from Spotify.
+     *
+     * <p>A streamed song carries no {@link #getFilePath() file}: the audio arrives through the
+     * go-librespot daemon rather than off the disk, and {@link #locator()} answers with the URI
+     * instead. Everything else about it is an ordinary song - it is rated, favourited, counted,
+     * placed in the running order and navigated by all three structures exactly like any other.
+     *
+     * @param spotifyUri the track URI, {@code spotify:track:...}; must not be blank
+     * @param title      song title; must not be blank
+     * @param artist     performing artist; must not be blank
+     * @return the new song
+     * @throws IllegalArgumentException if any argument is blank, or the URI is not a track URI
+     */
+    public static Song spotify(String spotifyUri, String title, String artist) {
+        return new Song(spotifyUri, title, artist);
+    }
+
+    /**
+     * Creates a streamed song with an explicit identifier, used when reloading a stored library.
+     *
+     * @param id         stable identifier; must not be blank
+     * @param spotifyUri the track URI, {@code spotify:track:...}; must not be blank
+     * @param title      song title; must not be blank
+     * @param artist     performing artist; must not be blank
+     * @return the new song
+     */
+    public static Song spotify(String id, String spotifyUri, String title, String artist) {
+        if (id == null || id.isBlank()) {
+            throw new IllegalArgumentException("Song id must not be blank");
+        }
+        Song song = new Song(spotifyUri, title, artist);
+        song.id = id;
+        return song;
     }
 
     // ------------------------------------------------------------------
@@ -223,7 +281,15 @@ public class Song {
     // Files
     // ------------------------------------------------------------------
 
-    /** @return the audio file backing this song */
+    /**
+     * Returns the audio file backing this song.
+     *
+     * <p><strong>{@code null} for a streamed song</strong>, which has a {@link #getSpotifyUri()
+     * URI} instead. Ask {@link #isSpotify()} before dereferencing this, or go through
+     * {@link #locator()}, which always answers.
+     *
+     * @return the file on disk, or {@code null} when this song is streamed
+     */
     public Path getFilePath() {
         return filePath;
     }
@@ -234,6 +300,63 @@ public class Song {
      */
     public final void setFilePath(Path filePath) {
         this.filePath = Objects.requireNonNull(filePath, "Song file path is required");
+        this.spotifyUri = null;
+    }
+
+    /**
+     * @return the Spotify track URI backing this song, or {@code null} when it is a local file
+     */
+    public String getSpotifyUri() {
+        return spotifyUri;
+    }
+
+    /**
+     * Points this song at a Spotify track, clearing any file path.
+     *
+     * <p>The prefix is checked rather than assumed. A playlist or album URI here would be handed
+     * to the daemon as though it were a track, and go-librespot would happily start playing a
+     * whole context - so the running order would advance while the structure sat still, which is
+     * the one failure mode the Spotify integration must not have.
+     *
+     * @param uri the track URI, {@code spotify:track:...}; must not be blank
+     * @throws IllegalArgumentException if the URI is blank or is not a track URI
+     */
+    public final void setSpotifyUri(String uri) {
+        if (uri == null || uri.isBlank()) {
+            throw new IllegalArgumentException("Song Spotify URI is required and must not be blank");
+        }
+        String trimmed = uri.trim();
+        if (!trimmed.startsWith(SPOTIFY_TRACK_PREFIX)) {
+            throw new IllegalArgumentException(
+                    "Song Spotify URI must be a track URI starting \"" + SPOTIFY_TRACK_PREFIX
+                            + "\", got: " + trimmed);
+        }
+        this.spotifyUri = trimmed;
+        this.filePath = null;
+    }
+
+    /** @return where this song's audio comes from, never {@code null} */
+    public SongSource getSource() {
+        return spotifyUri == null ? SongSource.LOCAL : SongSource.SPOTIFY;
+    }
+
+    /** @return whether this song is streamed rather than read from a file */
+    public boolean isSpotify() {
+        return spotifyUri != null;
+    }
+
+    /**
+     * Returns the string an {@code AudioSource} is opened with.
+     *
+     * <p>One accessor rather than a branch at every call site: a file path for a local song, a
+     * {@code spotify:track:...} URI for a streamed one. {@code PlaybackEngine} passes this straight
+     * to {@code AudioSource.load(String)}, which is what lets the engine stay ignorant of which
+     * kind of song it is driving.
+     *
+     * @return the locator, never {@code null}
+     */
+    public String locator() {
+        return spotifyUri != null ? spotifyUri : filePath.toString();
     }
 
     /** @return the cover image, or {@code null} when the default cover should be used */
@@ -246,9 +369,28 @@ public class Song {
         this.coverPath = coverPath;
     }
 
-    /** @return whether a cover image has been set for this song */
+    /**
+     * Returns the remote cover image address, which a streamed song has instead of a file.
+     *
+     * <p>Spotify supplies album art as a URL. It is kept as a plain string rather than downloaded
+     * on import, so adding fifty tracks from a playlist costs fifty rows and no network at all; the
+     * interface loads it lazily and falls back to the same magenta placeholder a missing local
+     * cover gets.
+     *
+     * @return the cover URL, or {@code null} when there is none
+     */
+    public String getCoverUrl() {
+        return coverUrl;
+    }
+
+    /** @param coverUrl remote cover address; blank is stored as {@code null} */
+    public void setCoverUrl(String coverUrl) {
+        this.coverUrl = coverUrl == null || coverUrl.isBlank() ? null : coverUrl.trim();
+    }
+
+    /** @return whether a cover image, local or remote, has been set for this song */
     public boolean hasCover() {
-        return coverPath != null;
+        return coverPath != null || coverUrl != null;
     }
 
     // ------------------------------------------------------------------

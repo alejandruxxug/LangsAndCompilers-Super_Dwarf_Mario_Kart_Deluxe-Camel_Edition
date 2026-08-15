@@ -46,7 +46,6 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.paint.Color;
 
-import java.nio.file.Path;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.Objects;
@@ -921,7 +920,7 @@ public class RunnerView extends BorderPane {
         selectButtonFor(speedClass);
 
         BeatmapService.Status status = beatmaps.status();
-        boolean matches = song != null && sameFile(status.file(), song.getFilePath());
+        boolean matches = song != null && status.isAbout(song.locator());
         Beatmap beatmap = matches && status.isReady() ? status.beatmap() : Beatmap.EMPTY;
         String hash = beatmap.isEmpty() ? null : beatmap.sourceHash();
 
@@ -954,15 +953,6 @@ public class RunnerView extends BorderPane {
                 ? "NO COURSE"
                 : course.coinsAvailable() + " COINS  " + course.obstacleCount() + " BUMPS  "
                         + course.starCount() + " STARS");
-    }
-
-    /**
-     * @param analysed the file the analysis is about, or {@code null}
-     * @param playing  the file the current song plays from
-     * @return whether they are the same file
-     */
-    private static boolean sameFile(Path analysed, Path playing) {
-        return analysed != null && analysed.equals(playing);
     }
 
     /**
@@ -2352,6 +2342,15 @@ public class RunnerView extends BorderPane {
             message = "NO SONG LOADED";
         } else if (status.stage() == BeatmapService.Stage.FAILED) {
             message = "NO COURSE FOR THIS TRACK";
+        } else if (status.stage() == BeatmapService.Stage.LISTENING && game.course().isEmpty()) {
+            // A streamed track has no file to read ahead of time, so the course is built out of
+            // this play and is there for the next one. Said in those words rather than as
+            // "generating": the user is being told what the wait is for and that it ends.
+            message = "LEARNING TRACK - COURSE NEXT PLAY";
+            // Polled rather than taken from the status, for the same reason the meters are polled:
+            // it advances with every block of audio, and republishing an immutable snapshot eighty
+            // times a second to move a bar sixty would be work done for nobody.
+            progress = beatmaps.listeningProgress();
         } else if (game.course().isEmpty()) {
             message = "GENERATING COURSE";
             progress = status.progress();

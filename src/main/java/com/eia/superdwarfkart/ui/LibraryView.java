@@ -420,13 +420,26 @@ public class LibraryView extends BorderPane {
                 return best.get().rank().name();
             }
         }
-        return courses != null && courses.isReady(song.getFilePath()) ? COURSE_READY_MARK : "";
+        return courses != null && courses.isReady(song.locator()) ? COURSE_READY_MARK : "";
     }
 
     /**
      * @param song the song, or {@code null}
      * @return what the race column's badge means for it
      */
+    /**
+     * Names where a song plays from, for the details panel's last line.
+     *
+     * @param song the song, which may be local or streamed
+     * @return the file's own name, or the streaming service
+     */
+    private static String sourceLine(Song song) {
+        java.nio.file.Path file = song.getFilePath();
+        return file == null
+                ? song.getSource().label()
+                : file.getFileName().toString();
+    }
+
     private String raceTooltip(Song song) {
         if (song == null) {
             return "";
@@ -717,7 +730,10 @@ public class LibraryView extends BorderPane {
         // Look up anything new in the background. Already-known files are skipped inside, so this
         // costs nothing on a refresh that only changed a rating.
         if (courses != null) {
-            courses.request(masterList.stream().map(Song::getFilePath).toList());
+            // Locators, so streamed songs are included. A Spotify track's course is built while it
+            // plays and cached under its URI, so it earns the badge exactly as a file does - and
+            // the index is what stops the table asking the cache once per row per repaint.
+            courses.request(masterList.stream().map(Song::locator).toList());
         }
 
         if (previouslySelected != null) {
@@ -812,15 +828,17 @@ public class LibraryView extends BorderPane {
                     "LENGTH " + formatDuration(song.getDuration()),
                     "PLAYS  " + song.getPlayCount(),
                     // Downloaded files often carry very long names, which in a fixed-width pixel
-                    // font would push the panel to a dozen lines.
-                    ellipsize(song.getFilePath().getFileName().toString(), 34)));
+                    // font would push the panel to a dozen lines. A streamed song has no file at
+                    // all, so it names its origin instead - an empty line here reads as metadata
+                    // that failed to load.
+                    ellipsize(sourceLine(song), 34)));
             ratingSlider.setDisable(false);
             ratingSlider.setValue(song.getRating());
             detailRating.setRating(song.getRating());
             ratingValue.setText(String.valueOf(song.getRating()));
             favoriteToggle.setDisable(false);
             favoriteToggle.setSelected(song.isFavorite());
-            showCover(song.getCoverPath());
+            showCover(song);
         } finally {
             populatingDetails = false;
         }
@@ -836,23 +854,30 @@ public class LibraryView extends BorderPane {
      * <p>A missing or unreadable cover is never an error: the application must stay usable with
      * no artwork present at all.
      *
-     * @param coverPath the cover image, or {@code null}
+     * <p>Goes through {@link CoverArt} rather than reading the path directly, because a streamed
+     * song has no file - it carries the artwork's address instead, and reading only the path showed
+     * the placeholder for every Spotify track in the library.
+     *
+     * @param song the song whose cover to show, or {@code null}
      */
-    private void showCover(Path coverPath) {
+    private void showCover(Song song) {
         coverHolder.getChildren().clear();
 
-        if (coverPath != null && Files.isReadable(coverPath)) {
-            Image image = new Image(coverPath.toUri().toString(),
-                    COVER_DECODE_SIZE, COVER_DECODE_SIZE, true, true);
-            if (!image.isError() && image.getWidth() > 0 && image.getHeight() > 0) {
-                coverImage.setImage(image);
-                coverImage.setViewport(centeredSquare(image.getWidth(), image.getHeight()));
-                coverHolder.getChildren().add(coverImage);
-                return;
-            }
-            LOG.warning("Could not read the cover image at " + coverPath + " - using a placeholder");
+        Image image = CoverArt.of(song, COVER_DECODE_SIZE);
+        if (image != null) {
+            coverImage.setImage(image);
+            coverHolder.getChildren().add(coverImage);
+            // May still be arriving over the network, in which case the crop is applied when it
+            // lands and the placeholder goes up instead if it never does.
+            CoverArt.fit(image, coverImage, this::showCoverPlaceholder);
+            return;
         }
+        showCoverPlaceholder();
+    }
 
+    /** Puts the labelled placeholder in the cover frame, replacing whatever is there. */
+    private void showCoverPlaceholder() {
+        coverHolder.getChildren().clear();
         Label placeholder = new Label("NO COVER");
         placeholder.getStyleClass().add("cover-placeholder-label");
         StackPane placeholderPane = new StackPane(placeholder);
@@ -926,6 +951,18 @@ public class LibraryView extends BorderPane {
     private void select(Song song) {
         table.getSelectionModel().select(song);
         table.scrollTo(song);
+    }
+
+    /**
+     * Selects a song from outside, so the details panel shows it.
+     *
+     * <p>Exists for the smoke test: remote artwork is the one thing in this panel that cannot be
+     * checked without both a song that has some and a screenshot taken after it has arrived.
+     *
+     * @param song the song to select
+     */
+    public void showInDetails(Song song) {
+        select(song);
     }
 
     private Window window() {

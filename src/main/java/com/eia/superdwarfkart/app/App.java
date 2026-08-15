@@ -9,6 +9,8 @@ import com.eia.superdwarfkart.audio.AudioSource;
 import com.eia.superdwarfkart.audio.LevelAnalyzer;
 import com.eia.superdwarfkart.audio.Levels;
 import com.eia.superdwarfkart.audio.LocalFileAudioSource;
+import com.eia.superdwarfkart.audio.PcmFormat;
+import com.eia.superdwarfkart.audio.RoutingAudioSource;
 import com.eia.superdwarfkart.game.Course;
 import com.eia.superdwarfkart.game.Entity;
 import com.eia.superdwarfkart.game.Lane;
@@ -30,12 +32,17 @@ import com.eia.superdwarfkart.persistence.SettingsRepository;
 import com.eia.superdwarfkart.playback.AlphabeticalMode;
 import com.eia.superdwarfkart.playback.ArrivalOrderMode;
 import com.eia.superdwarfkart.playback.PlaybackEngine;
+import com.eia.superdwarfkart.spotify.SpotifyBinary;
+import com.eia.superdwarfkart.spotify.SpotifyConfig;
+import com.eia.superdwarfkart.spotify.SpotifySession;
 import com.eia.superdwarfkart.playback.PlaybackListener;
 import com.eia.superdwarfkart.playback.PlaybackMode;
 import com.eia.superdwarfkart.playback.Player;
 import com.eia.superdwarfkart.playback.ShuffleMode;
 import com.eia.superdwarfkart.ui.BeatmapTimeline;
 import com.eia.superdwarfkart.ui.ComplexityPanel;
+import com.eia.superdwarfkart.ui.CoverArt;
+import com.eia.superdwarfkart.ui.SpotifyView;
 import com.eia.superdwarfkart.ui.Destination;
 import com.eia.superdwarfkart.ui.Fonts;
 import com.eia.superdwarfkart.ui.HistoryView;
@@ -202,6 +209,8 @@ public class App extends Application {
     private RacerSelectView racerSelect;
     private MoodSelectView moodSelect;
     private SettingsView settingsView;
+    private SpotifyView spotifyView;
+    private SpotifySession spotify;
     private PlayHistory history;
     private Button viewToggle;
     private boolean racing;
@@ -261,7 +270,18 @@ public class App extends Application {
         // The tap is composed in here rather than owned by the audio source, so the same meters
         // work unchanged over any implementation of AudioSource.
         levels = new Levels();
-        audio = new LocalFileAudioSource();
+
+        // Spotify is built but not started. Constructing the session looks at the filesystem for
+        // the daemon and nothing else - no process, no socket, no network - so a user who never
+        // opens that page never learns the feature is here.
+        spotify = new SpotifySession(Platform::runLater);
+        spotify.setConfiguredPath(settings.spotifyBinaryPath());
+        maybeFetchSpotifyBinary();
+
+        // One output that opens files and Spotify tracks alike, choosing by locator. Everything
+        // above this line - meters, analyser, game, transport - is written against AudioSource and
+        // cannot tell which one answered.
+        audio = new RoutingAudioSource(new LocalFileAudioSource(), spotify::audioSource);
         audio.addPcmListener(new LevelAnalyzer(levels));
         // End of track arrives on the playback thread; runLater is the hop back, and it happens
         // once per song rather than once per audio block.
@@ -271,14 +291,33 @@ public class App extends Application {
         // library does not appear in the history as though it had been listened to.
         history = new PlayHistory();
         engine.setOnPlayCounted(history::record);
+        // A streamed song that cannot open is nearly always the daemon not being up yet. Handled
+        // rather than logged: before this, playing one with Spotify unconnected did nothing at all
+        // and said nothing anywhere.
+        engine.setOnFailure(this::songWouldNotOpen);
 
         // Analysis follows the running order rather than the play button: whatever becomes current
         // gets a beatmap prepared for it on a background thread, so by the time the rhythm game
         // wants a course it is already there. Reading the file for analysis is a separate decode
         // and never touches the one being played.
+        //
+        // A streamed song has no file to open, so the only copy of its audio is the one going past
+        // on the way to the sound card. The tap below is what turns that into a course: the track
+        // is listened to as it plays, the beatmap lands in the cache when it finishes, and every
+        // play after the first has full entities. Registered on the routing source, so it reaches
+        // the Spotify source whenever that gets built.
         beatmaps = new BeatmapService();
-        player.addListener((mode, current) -> beatmaps.request(fileOf(current)));
-        beatmaps.request(fileOf(player.current()));
+        audio.addPcmListener(beatmaps.streamTap());
+        // Everything collected so far is at a known offset into the song; everything after a seek
+        // is not. Given up rather than believed - a beatmap built across a seek is wrong, cached,
+        // and indistinguishable from a right one.
+        engine.setOnSeek(beatmaps::abandonStream);
+        // A track that played out has been heard in full, which is the only condition under which
+        // what was collected is a beatmap rather than a fragment. Fired before the running order
+        // moves, so the result is filed against the track it came from.
+        engine.setOnTrackEnded(beatmaps::finishStream);
+        player.addListener((mode, current) -> beatmaps.request(locatorOf(current), lengthOf(current)));
+        beatmaps.request(locatorOf(player.current()), lengthOf(player.current()));
 
         // Read before the library view is built: the table shows a rank badge per song, and a board
         // that failed to load has to leave the column empty rather than stop the window opening.
@@ -300,7 +339,7 @@ public class App extends Application {
             @Override
             public void playbackChanged(PlaybackMode mode, Song current) {
                 if (previous != null && !previous.equals(current)) {
-                    courseIndex.recheck(previous.getFilePath());
+                    courseIndex.recheck(previous.locator());
                 }
                 previous = current;
             }
@@ -344,12 +383,32 @@ public class App extends Application {
         moodSelect = new MoodSelectView(state);
         settingsView = new SettingsView();
 
+        spotifyView = new SpotifyView(library, spotify);
+        // A track added from Spotify joins the library like anything else, so the running order
+        // rebuilds around it - the ring, the queue and the tree do not care where it came from.
+        spotifyView.setOnSongAdded(song -> libraryView.refreshBadges());
+        spotifyView.setOnCredentialsSaved(
+                credentials -> settings.setSpotifyCredentials(credentials[0], credentials[1]));
+        // Added rather than set: the view claimed the single slot in its own constructor, and a
+        // second set() would have stopped the page redrawing with nothing to say so.
+        spotify.addOnChanged(this::spotifyStateChanged);
+        // Restored rather than verified: checking them is a network round trip, and this runs for
+        // every launch including the ones where nobody opens the Spotify page at all.
+        spotifyView.restoreCredentials(
+                settings.spotifyClientId(), settings.spotifyClientSecret());
+
         sideRail = new SideRail();
         sideRail.destinationProperty().addListener((observable, was, now) -> {
             // Both halves of this page are derived from a library that is edited by hand, so they
             // are recomputed on arrival rather than kept live by a listener per song.
             if (now == Destination.HISTORY) {
                 historyView.refresh();
+            }
+            if (now == Destination.SPOTIFY) {
+                // Looks at the filesystem again on arrival, which is what picks up a daemon the
+                // user installed by hand while the application was already running.
+                spotify.refreshBinary();
+                spotifyView.refresh();
             }
             showDestination(now);
         });
@@ -376,6 +435,33 @@ public class App extends Application {
         // After the window is on screen, so the dialog has something to centre on and the user can
         // see what they are being asked about.
         Platform.runLater(() -> offerToStart(stage));
+    }
+
+    /**
+     * Fetches the go-librespot binary in the background, where this platform has a published one.
+     *
+     * <p>The daemon is bundled in the sense that matters: the user installs nothing and configures
+     * nothing, and by the time they open the Spotify page the executable is already in
+     * {@code ~/.superdwarfkart/spotify/bin}. It is a download into this application's own folder
+     * on a background thread - <strong>not</strong> a process, a socket or a login, all of which
+     * still wait for the user to ask.
+     *
+     * <p>Does nothing at all when the daemon is already present, when the user pointed the
+     * application at their own build, or on a platform with no published asset - which is every
+     * Mac, where {@code brew install go-librespot} is offered on the page instead. Failure is
+     * silent by design: a music player must open and play local files whatever the network is
+     * doing (ground rule 5).
+     */
+    private void maybeFetchSpotifyBinary() {
+        if (Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
+            // A smoke test must not depend on the network, and must not leave a 6 MB download
+            // behind in a scratch profile.
+            return;
+        }
+        if (!settings.spotifyAutoFetch() || spotify.binary().isFound()) {
+            return;
+        }
+        spotify.prefetchBinary();
     }
 
     /**
@@ -533,10 +619,19 @@ public class App extends Application {
 
     /**
      * @param song a song, or {@code null}
-     * @return the file it plays from, or {@code null}
+     * @return what it plays from - a file path or a Spotify URI - or {@code null}
      */
-    private static java.nio.file.Path fileOf(Song song) {
-        return song == null ? null : song.getFilePath();
+    private static String locatorOf(Song song) {
+        return song == null ? null : song.locator();
+    }
+
+    /**
+     * @param song a song, or {@code null}
+     * @return how long it runs in seconds, or 0 when that is not recorded
+     */
+    private static double lengthOf(Song song) {
+        java.time.Duration length = song == null ? null : song.getDuration();
+        return length == null ? 0 : length.toNanos() / 1e9;
     }
 
     /**
@@ -738,6 +833,7 @@ public class App extends Application {
             case LIBRARY, FAVORITES -> libraryView;
             case HISTORY -> historyView;
             case RACERS -> racerSelect;
+            case SPOTIFY -> spotifyView;
             case MOODS -> moodSelect;
             case SETTINGS -> settingsView;
         };
@@ -1030,6 +1126,7 @@ public class App extends Application {
 
         reportAudio();
         reportBeatmap();
+        reportStreamedBeatmap();
         reportCourse();
         reportRunner(scene);
         boolean companionOk = reportCompanion();
@@ -1049,6 +1146,8 @@ public class App extends Application {
             System.out.printf("[smoke]   %-11s     : %s%n", kind.name().toLowerCase(), found);
         }
 
+        boolean spotifyOk = reportSpotify();
+
         boolean ok = stage.isShowing()
                 && AppConfig.APP_NAME.equals(stage.getTitle())
                 && !scene.getStylesheets().isEmpty()
@@ -1060,7 +1159,8 @@ public class App extends Application {
                 && arrowWorks
                 && tabWorks
                 && foldOk
-                && companionOk;
+                && companionOk
+                && spotifyOk;
         System.out.println("[smoke] RESULT            : " + (ok ? "PASS" : "FAIL"));
 
         PauseTransition close = new PauseTransition(Duration.seconds(2));
@@ -1113,6 +1213,287 @@ public class App extends Application {
                 stopped ? "  (view stopped)" : "  VIEW STILL DRAWING WHILE HIDDEN",
                 cameBack && drawingAgain ? "" : "  DID NOT COME BACK");
         return widthGiven && stopped && cameBack && drawingAgain;
+    }
+
+    /**
+     * Reports what the Spotify integration found, without connecting to anything.
+     *
+     * <p>Deliberately passive. Starting the daemon during a smoke test would launch a subprocess,
+     * bind a port and - on a machine that has never logged in - sit waiting for somebody to finish
+     * an OAuth flow in a browser, on a run whose whole purpose is to close itself after two
+     * seconds. What is checked here is everything that can be checked without a Spotify account:
+     * that the platform is understood, that the binary lookup answers, and that the generated
+     * configuration still carries the four values which decide whether this application or Spotify
+     * owns the running order.
+     *
+     * <p>Those four are the reason this prints at all. Every one of them fails <em>silently</em>:
+     * playback goes on sounding perfectly normal while the hand-written structures stop being
+     * consulted, and no exception, log line or screenshot would ever show it.
+     *
+     * @return whether the configuration is safe to hand to the daemon
+     */
+    private boolean reportSpotify() {
+        var binary = spotify.binary();
+        System.out.println("[smoke] spotify platform  : "
+                + (SpotifyBinary.isSupportedPlatform()
+                        ? "supported (POSIX named pipe)"
+                        : "UNSUPPORTED - no named pipe on this platform"));
+        System.out.println("[smoke] spotify daemon    : " + binary.origin().label()
+                + (binary.path() == null ? "" : " - " + binary.path()));
+        if (!binary.isFound()) {
+            // Not a failure. A machine with no daemon runs everything else exactly as before,
+            // which is the whole point of the feature disabling itself rather than breaking.
+            System.out.println("[smoke] spotify install   : " + binary.detail());
+        }
+
+        String yaml = SpotifyConfig.render();
+        boolean autoplayOff = yaml.contains("disable_autoplay: true");
+        boolean zeroconfOff = yaml.contains("zeroconf_enabled: false");
+        boolean noCrossfade = yaml.contains("crossfade_duration: 0");
+        boolean pipeBackend = yaml.contains("audio_backend: pipe")
+                && yaml.contains("audio_output_pipe_format: s16le");
+        boolean configOk = autoplayOff && zeroconfOff && noCrossfade && pipeBackend;
+
+        System.out.println("[smoke] spotify config    : "
+                + (configOk
+                        ? "running order stays with the PlaybackMode"
+                        : "BROKEN"
+                                + (autoplayOff ? "" : "  AUTOPLAY ON")
+                                + (zeroconfOff ? "" : "  ZEROCONF ON")
+                                + (noCrossfade ? "" : "  CROSSFADE ON")
+                                + (pipeBackend ? "" : "  NOT THE PIPE BACKEND")));
+        String detail = spotify.detail();
+        System.out.println("[smoke] spotify state     : " + spotify.state().label()
+                + (detail.isBlank() || detail.equals(spotify.binary().detail())
+                        ? "" : " - " + detail));
+        reportCatalogueSearch();
+        reportCovers();
+        return configOk;
+    }
+
+    /**
+     * The streamed song that is waiting for the daemon to finish coming up, or {@code null}.
+     *
+     * <p>Held rather than retried in a loop, because connecting is asynchronous and may include a
+     * person completing a login in a browser.
+     */
+    private Song awaitingSpotify;
+
+    /**
+     * Whether the user has already been told the daemon is not installed.
+     *
+     * <p>Once per session. Skipping through a running order of streamed songs would otherwise raise
+     * one dialog per song, which is the failure the playback engine already avoids for missing
+     * files.
+     */
+    private boolean toldSpotifyMissing;
+
+    /**
+     * A song would not open.
+     *
+     * <p>For a streamed song this is nearly always "the daemon is not running", which is an
+     * ordinary state - nothing starts it until it is needed, and until now that meant pressing play
+     * on a Spotify track did nothing whatsoever and said nothing anywhere. Two outcomes are
+     * possible and they need opposite responses: <strong>if the daemon is installed, connect and
+     * carry on</strong>, because the user has expressed exactly the intent that would have made
+     * them press CONNECT; <strong>if it is not, say so</strong>, because no amount of waiting will
+     * fix it and the search that put the track in the library gave no hint that playing it needs
+     * anything else.
+     *
+     * @param song   the song that would not open
+     * @param reason what the audio layer said
+     */
+    private void songWouldNotOpen(Song song, String reason) {
+        if (song == null || !song.isSpotify() || spotify.isConnected()) {
+            // A local file that has moved. The engine has logged it and the bar shows the failure;
+            // a dialog per song while skipping through a stale library would be worse than useless.
+            return;
+        }
+
+        if (Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
+            // A smoke test must not launch a subprocess, take a network port or wait on a login.
+            // The whole point of it is that a build never depends on any of those.
+            System.out.println("[smoke] spotify autoconnect: suppressed for \""
+                    + song.getTitle() + "\"");
+            return;
+        }
+
+        if (!spotify.isAvailable()) {
+            tellSpotifyIsNotInstalled(song);
+            return;
+        }
+
+        // Already on its way up: the next state change will pick this song up.
+        awaitingSpotify = song;
+        if (spotify.state() == SpotifySession.State.STARTING
+                || spotify.state() == SpotifySession.State.AWAITING_LOGIN) {
+            return;
+        }
+        LOG.info("Connecting to Spotify to play \"" + song.getTitle() + "\"");
+        spotify.connect();
+    }
+
+    /**
+     * Explains that a streamed song needs go-librespot, and how to get it.
+     *
+     * @param song the song that could not be played
+     */
+    private void tellSpotifyIsNotInstalled(Song song) {
+        awaitingSpotify = null;
+        if (toldSpotifyMissing) {
+            return;
+        }
+        toldSpotifyMissing = true;
+
+        String command = SpotifyBinary.installCommand();
+        String how;
+        if (!SpotifyBinary.isSupportedPlatform()) {
+            how = "This platform has no named pipe, which Spotify playback needs.";
+        } else if (command != null) {
+            how = "Install it with:\n" + command + "\n\nThen open SPOTIFY on the side rail.";
+        } else if (SpotifyBinary.isDownloadable()) {
+            how = "Open SPOTIFY on the side rail and press DOWNLOAD.";
+        } else {
+            how = "No go-librespot build is published for this platform.";
+        }
+
+        PixelDialog.warn(mainStage, "SPOTIFY NOT INSTALLED",
+                song.getTitle() + "\nby " + song.getArtist()
+                        + "\n\nThis track streams from Spotify, which needs go-librespot."
+                        + "\n\n" + how
+                        + "\n\nSearching still works; only playing needs the daemon.");
+    }
+
+    /**
+     * Picks up a song that was waiting for the daemon.
+     *
+     * <p>Runs on every state change, and does nothing unless a song is actually waiting - which is
+     * why it is cheap enough to hang off the session's own notification rather than polling.
+     */
+    private void spotifyStateChanged() {
+        Song waiting = awaitingSpotify;
+        if (waiting == null) {
+            return;
+        }
+        switch (spotify.state()) {
+            case CONNECTED -> {
+                awaitingSpotify = null;
+                // Still the song the user asked for? They may have moved on while the daemon came
+                // up, and starting a track they have navigated away from would be worse than doing
+                // nothing at all.
+                if (waiting.equals(player.current())) {
+                    LOG.info("Spotify is connected - starting \"" + waiting.getTitle() + "\"");
+                    engine.play();
+                    playbackBar.refresh();
+                }
+            }
+            case FAILED, UNAVAILABLE -> {
+                awaitingSpotify = null;
+                PixelDialog.warn(mainStage, "SPOTIFY DID NOT CONNECT",
+                        waiting.getTitle()
+                                + "\n\n" + spotify.detail()
+                                + "\n\nOpen SPOTIFY on the side rail to try again.");
+            }
+            default -> {
+                // STARTING or AWAITING_LOGIN: still working, keep waiting.
+            }
+        }
+    }
+
+    /**
+     * Reports whether the library's artwork can actually be resolved and decoded.
+     *
+     * <p><strong>A cover that fails to load leaves a placeholder, which is exactly what a song with
+     * no artwork looks like.</strong> Nothing throws and nothing is logged at a level anybody
+     * reads, so the two are indistinguishable on screen — and a streamed song carries its artwork
+     * as a URL rather than a file, which is a whole second way for it to be missing that no
+     * screenshot of a local library would ever exercise. This counts both kinds and waits for the
+     * remote ones, because "it resolved to an address" is not the same claim as "it decoded to
+     * pixels".
+     */
+    private void reportCovers() {
+        int local = 0;
+        int remote = 0;
+        int none = 0;
+        List<javafx.scene.image.Image> pending = new java.util.ArrayList<>();
+
+        for (Song song : library.all()) {
+            javafx.scene.image.Image image = CoverArt.of(song, 256);
+            if (image == null) {
+                none++;
+            } else if (song.getCoverPath() != null) {
+                local++;
+            } else {
+                remote++;
+                pending.add(image);
+            }
+        }
+
+        // A remote cover cannot be waited for here, and the reason is worth writing down: JavaFX
+        // decodes it on a background thread but publishes progress and completion *on the interface
+        // thread*, which the smoke test is holding. Sleeping in a loop until it finishes therefore
+        // guarantees it never does - measured, five seconds of waiting reported neither decoded nor
+        // failed. The running application has the thread free and the listener in CoverArt fires
+        // normally; what is checked here instead is that the artwork is real, by decoding one
+        // synchronously. That proves the address and the bytes, and the screenshot below proves the
+        // rest.
+        int decoded = 0;
+        int failed = 0;
+        String first = "";
+        for (Song song : library.all()) {
+            String url = song.getCoverUrl();
+            if (url == null || song.getCoverPath() != null) {
+                continue;
+            }
+            javafx.scene.image.Image check =
+                    new javafx.scene.image.Image(url, 256, 256, true, true);
+            if (check.isError() || check.getWidth() <= 0) {
+                failed++;
+            } else {
+                decoded++;
+                if (first.isEmpty()) {
+                    first = "  first is " + (int) check.getWidth() + "x" + (int) check.getHeight();
+                }
+            }
+        }
+
+        System.out.println("[smoke] covers            : " + local + " from disk, "
+                + remote + " remote (" + decoded + " decode, " + failed + " failed), "
+                + none + " with none" + first);
+
+        // Put a song with remote artwork in the details panel, so the screenshots taken later show
+        // it. By then the interface thread has been free for two seconds and the background load
+        // has landed - which is the only way this is ever visible.
+        library.all().stream()
+                .filter(song -> song.getCoverUrl() != null && song.getCoverPath() == null)
+                .findFirst()
+                .ifPresent(song -> libraryView.showInDetails(song));
+        pending.clear();
+    }
+
+    /**
+     * Runs one real catalogue search, when an application has been configured.
+     *
+     * <p><strong>This is the check that no screenshot and no unit test can stand in for.</strong>
+     * A search failing inside the running application looks identical to one failing in a test
+     * harness that passes - the credentials are the same, the class is the same, and the difference
+     * is somewhere in how the application wired them together. Reported here, in the application's
+     * own process, against the real service.
+     *
+     * <p>Costs exactly one request, on the user's own quota, and only when they have configured an
+     * application at all. Nothing is printed that could identify the credentials.
+     */
+    private void reportCatalogueSearch() {
+        if (!spotify.isCatalogSearch()) {
+            System.out.println("[smoke] spotify search    : no application configured "
+                    + "(catalogue search off)");
+            return;
+        }
+        List<com.eia.superdwarfkart.spotify.SpotifyTrack> found =
+                spotify.searchTracks("the beatles", 50);
+        String problem = spotify.searchProblem();
+        System.out.println("[smoke] spotify search    : " + found.size() + " results"
+                + (found.isEmpty() ? "  PROBLEM: " + problem : "  e.g. " + found.get(0)));
     }
 
     /**
@@ -1231,6 +1612,76 @@ public class App extends Application {
             System.out.println("[smoke] beatmap file      : "
                     + beatmaps.cache().fileFor(beatmap.sourceHash()).getFileName());
         }
+    }
+
+    /**
+     * Builds a beatmap the way a streamed track has to, and checks it against the file's own.
+     *
+     * <p><strong>This is how the Spotify course path is verified without a Spotify account.</strong>
+     * A streamed track has no file, so its beatmap is built from the audio going past the playback
+     * tap - and the only property that matters is that the result is the <em>same</em> beatmap the
+     * file analyser would have produced. If the two disagree, a score earned on a streamed track
+     * means nothing on a local copy of the same recording, and neither a screenshot nor a synthetic
+     * click track would show it: {@code StreamBeatmapBuilderTest} pins the agreement on audio this
+     * project generated, and this line pins it on real music.
+     *
+     * <p>The blocks handed over are read through {@link PcmFormat}, which is the same decode
+     * playback uses, so these are the bytes the tap would genuinely see.
+     */
+    private void reportStreamedBeatmap() {
+        Song song = player.current();
+        java.nio.file.Path file = song == null ? null : song.getFilePath();
+        if (file == null) {
+            System.out.println("[smoke] stream beatmap    : - no local track to compare against -");
+            return;
+        }
+
+        Beatmap read = beatmaps.status().isReady() ? beatmaps.beatmap() : Beatmap.EMPTY;
+        if (read.isEmpty()) {
+            System.out.println("[smoke] stream beatmap    : - the file's own analysis is not ready -");
+            return;
+        }
+
+        long startedAt = System.nanoTime();
+        Beatmap heard;
+        long frames = 0;
+        try (com.eia.superdwarfkart.analysis.StreamBeatmapBuilder builder =
+                     new com.eia.superdwarfkart.analysis.StreamBeatmapBuilder()) {
+            builder.arm(read.sourceHash(), read.durationSeconds());
+            try (javax.sound.sampled.AudioInputStream in = PcmFormat.open(file)) {
+                // AudioInputStream reads whole frames, which is what a PcmListener is promised.
+                byte[] block = new byte[4096];
+                for (int read0 = in.read(block); read0 > 0; read0 = in.read(block)) {
+                    builder.pcm(block, 0, read0);
+                    frames += read0 / AppConfig.BYTES_PER_FRAME;
+                }
+            }
+            heard = builder.finishAndWait(java.time.Duration.ofSeconds(30));
+        } catch (Exception e) {
+            System.out.println("[smoke] stream beatmap    : FAILED - " + e.getMessage());
+            return;
+        }
+
+        double seconds = (System.nanoTime() - startedAt) / 1e9;
+        if (heard == null) {
+            System.out.println("[smoke] stream beatmap    : REFUSED after "
+                    + frames + " frames - the run was not usable");
+            return;
+        }
+
+        boolean sameTempo = Math.abs(heard.bpm() - read.bpm()) < 0.001;
+        boolean sameOnsets = java.util.Arrays.equals(heard.onsets(), read.onsets());
+        boolean sameBeats = java.util.Arrays.equals(heard.strongBeats(), read.strongBeats());
+        System.out.printf("[smoke] stream beatmap    : %.1f BPM, %d onsets, %d on the beat "
+                        + "(%.1fs of listening at %.0fx realtime)%n",
+                heard.bpm(), heard.onsetCount(), heard.strongBeatCount(), seconds,
+                heard.durationSeconds() / Math.max(seconds, 1e-6));
+        System.out.println("[smoke] stream vs file    : "
+                + (sameTempo && sameOnsets && sameBeats
+                        ? "identical - a streamed track generates the same course as a local copy"
+                        : "DIFFERENT - tempo " + (sameTempo ? "ok" : "differs")
+                                + ", onsets " + (sameOnsets ? "ok" : "differ")
+                                + ", beats " + (sameBeats ? "ok" : "differ")));
     }
 
     /**
@@ -1691,7 +2142,7 @@ public class App extends Application {
         // Each rail destination in turn. All four are new views that only exist once their button
         // has been pressed, so the base shot says nothing whatsoever about any of them.
         for (Destination target : new Destination[] {
-                Destination.HISTORY, Destination.RACERS, Destination.SETTINGS}) {
+                Destination.HISTORY, Destination.RACERS, Destination.SPOTIFY, Destination.SETTINGS}) {
             sideRail.select(target);
             layoutAndCapture(scene, destination, target.name().toLowerCase());
         }
@@ -1893,6 +2344,16 @@ public class App extends Application {
         }
         if (engine != null) {
             engine.close();
+        }
+        if (spotifyView != null) {
+            spotifyView.shutdown();
+        }
+        // Last, and it matters that it happens at all: this kills the go-librespot child. An
+        // orphaned daemon holds a Spotify session and keeps the API port bound, so the next launch
+        // finds the port taken and Spotify silently does not work, with nothing on screen saying
+        // why. There is a shutdown hook behind this for the paths that never reach here.
+        if (spotify != null) {
+            spotify.close();
         }
     }
 

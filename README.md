@@ -64,12 +64,12 @@ Built milestone by milestone; each is verified before the next begins.
 | M3 | Three playback modes behind one interface, mode selector, complexity panel | ✅ |
 | M4 | **Structure visualizer** — circuit, starting grid, animated BST traversal, live complexity scatter, Presentation Mode | ✅ |
 | M5 | Real playback, PCM tap, independent left/right level meters | ✅ |
-| M6 | Offline beat analysis and beatmap cache | ⬜ |
-| M7 | The 3-lane rhythm runner | ⬜ |
-| M8 | Mini companion window | ⬜ |
-| M9 | Favourites, history, statistics, keyboard shortcuts | ⬜ |
+| M6 | Offline beat analysis and beatmap cache | ✅ |
+| M7 | The 3-lane rhythm runner | ✅ |
+| M8 | Mini companion window | ✅ |
+| M9 | Side rail, favourites, history, statistics, `DARK` + `LIGHT` moods, collapsible structure column | ✅ |
 | M11 | **Mood system** — 16-colour GBA palettes, overlay layers, pixel editor, palette import. Dark mode ships here, as two moods rather than a boolean | ⬜ |
-| M10 | *Optional:* Spotify playback through go-librespot | ⬜ |
+| M10 | *Optional:* Spotify playback and search through go-librespot | ✅ built; search runs on your own Spotify application and needs only a released daemon |
 
 ---
 
@@ -296,26 +296,119 @@ never leaves the bottom of the bar.
 
 ---
 
-## Optional: Spotify playback
+## Spotify playback and search
 
-Not built, and nothing in the application depends on it. If it is attempted, it plugs in behind
-the `AudioSource` interface and nothing outside `audio/` learns that a subprocess exists.
+Built, and **strictly additive**: nothing in the rest of the application imports it, the three
+hand-written structures are untouched, and with the daemon absent everything works exactly as it
+did before. A `LayeringTest` fails the build if that stops being true.
 
-The implementation would be **`devgianlu/go-librespot`**, run as a child process writing raw
-`s16le` PCM to a named pipe — which is exactly the format the analyzer and the meters already
-expect, so nothing downstream would change.
+### What it does
 
-Two settings are correctness requirements rather than preferences: `zeroconf_enabled: false` and
-`disable_autoplay: true`. If either is wrong, Spotify chooses the next track instead of the
-active playback mode, and the data structures become decorations while playback carries on
-looking normal.
+Open **SPOTIFY** on the side rail and connect. Once logged in you can search the catalogue, open
+your saved tracks and your playlists, and add any track to the library. **An added track is an
+ordinary song**: the circular list shuffles it, the queue holds it, the tree sorts it by title, and
+it is rated, favourited and counted like anything else. The only difference is where its audio
+comes from.
 
-**`librespot-java` (`xyz.gianlu.librespot`) is deprecated and has been tested — it does not
-work.** It needs JitPack or a protoc source build, and requires a Premium account. Do not spend
-time on it. `librespot-org/librespot-golang` is a different, archived project.
+### How it works
 
-Spotify playback would also be POSIX-only, since it needs `mkfifo`. Local file playback stays
-portable.
+**`devgianlu/go-librespot`** runs as a child process with `audio_backend: pipe`, so it owns no
+audio device and makes no sound of its own — it writes raw `s16le` to a named pipe. That is
+already `PcmFormat.PLAYBACK_FORMAT` (44.1 kHz, 16-bit, stereo, little-endian), so **nothing is
+decoded on the Java side**. This application reads the pipe, writes it to the sound card, and taps
+the same buffer for the level meters and the beat analyser — byte for byte the arrangement local
+files already use, with a different source of bytes.
+
+**Searching and playing reach Spotify by two entirely separate routes**, and only one of them
+involves the daemon:
+
+| | Route | Quota |
+|---|---|---|
+| **Search** | your own Spotify application → `api.spotify.com/v1/search` | yours alone |
+| **Playback** | daemon `/player/play` → librespot's session protocol | not the Web API at all |
+
+### Turning search on
+
+Register a free application at [developer.spotify.com](https://developer.spotify.com), then paste
+its **client id** and **secret** into the **SEARCH APPLICATION** panel on the Spotify page. There is
+no redirect URI to configure and no second login: this is the **Client Credentials** flow, which
+searches the public catalogue and never sees your account. The credentials are verified when saved,
+so a mistyped secret says so instead of quietly returning no results, and they are stored in
+`~/.superdwarfkart/settings.json`.
+
+**A released go-librespot is enough** — `brew install go-librespot`, or the GitHub download. No Go
+toolchain, no `pkg-config`, no source build.
+
+> **Why not just use the daemon's proxy?** go-librespot can forward to `api.spotify.com` with the
+> session's token attached, and that is what this used to do. The problem is that librespot
+> hardcodes **Spotify's own desktop client id**, shared by every librespot instance in the world,
+> and Spotify rate-limits per client id. Measured against a live account: `retry-after: 31`, then
+> **33 after forty seconds of complete idleness** — a rolling window nobody is spending drains to
+> zero, and this one went *up*. It is not your usage and waiting does not clear it. A registered
+> application of your own has a quota nothing else can spend.
+>
+> The proxy is also `master`-only (`/web-api` and `/token` appear nowhere in v0.8.0's API spec,
+> which declares 17 endpoints and every `/player/*` route this app calls), so moving search off it
+> is what made a stock install sufficient.
+
+> **Saved tracks and playlists still need the proxy**, and a source build with it. An application
+> token identifies an application, not a person, so every `v1/me/*` path answers 401 through the
+> Client Credentials flow however the request is shaped. Those two buttons appear only when the
+> proxy is present. To build one (needs Go):
+>
+> ```bash
+> go install github.com/devgianlu/go-librespot/cmd/daemon@master
+> ```
+>
+> The Spotify page has a **BUILD & ENABLE SEARCH** button that runs exactly this, into the app's own
+> folder (`GOBIN=~/.superdwarfkart/spotify/bin`), leaving the Homebrew one on `PATH` untouched. Note
+> that `go install` names the binary `daemon` after its package directory, so the app renames it —
+> installing it by hand leaves it under a name the app will not find.
+>
+> The button appears only once the build prerequisites are present — Go, `pkg-config`, and
+> `ogg`/`vorbis`/`flac`/`mpg123`. Otherwise the page names exactly what is missing and offers the one
+> command that installs all of it (on macOS, typically `brew install pkg-config mpg123`, since the
+> three audio libraries arrive as Homebrew dependencies of go-librespot but mpg123 does not).
+
+### Getting the daemon
+
+Resolution runs most-specific first: a path set in `settings.json` → the copy in
+`~/.superdwarfkart/spotify/bin` → whatever is on `PATH` → a download from GitHub releases. The
+download happens in the background at startup and needs no action.
+
+**On macOS there is nothing to download.** go-librespot has only ever published Linux binaries —
+`linux_x86_64`, `linux_arm64`, `linux_armv6` — so the Spotify page offers Homebrew instead, as a
+button with the command printed beside it:
+
+```bash
+brew install go-librespot
+```
+
+Nothing is installed without being asked for. Logging in is the only step that needs a person: the
+daemon prints an authorisation link, the app opens it, and the redirect completes against a local
+server the daemon runs. Credentials persist in `~/.superdwarfkart/spotify/state.json`, once per
+machine.
+
+### Settings that are correctness requirements, not preferences
+
+The configuration is regenerated on every launch and is never hand-edited. Four values decide
+whether this application or Spotify chooses what plays next — `disable_autoplay: true`,
+`zeroconf_enabled: false`, `crossfade_duration: 0` and `audio_backend: pipe` — and **every one of
+them fails silently**: playback carries on sounding normal while the data structures stop being
+consulted. `SpotifyConfigTest` asserts each one and the smoke test prints them.
+
+### Limits
+
+- **POSIX only**, since it needs `mkfifo`. Local file playback stays portable.
+- **Spotify Premium is required**, by go-librespot.
+- **A streamed track has no beatmap until it has been heard**, because there is no file to analyse
+  ahead of time. The first play gives audio, meters and an empty course; the analysis is cached and
+  every later play has the full course.
+- **Everything past the login is unverified.** No Premium account was available while this was
+  built, so the daemon launch, the configuration, the authorisation link and the clean shutdown were
+  all checked against the real binary, but audio through the pipe has never actually been heard.
+- **`librespot-java` (`xyz.gianlu.librespot`) is deprecated and was tested — it does not work.** Do
+  not spend time on it. `librespot-org/librespot-golang` is a different, archived project.
 
 ---
 

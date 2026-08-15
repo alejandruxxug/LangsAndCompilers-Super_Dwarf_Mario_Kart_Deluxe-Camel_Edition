@@ -275,6 +275,104 @@ class PlaybackEngineTest {
         assertEquals(Duration.ZERO, engine.duration());
     }
 
+    /**
+     * The two announcements anything built out of the audio itself depends on.
+     *
+     * <p>A beatmap for a streamed track is derived from the bytes going past, so it has to be told
+     * when those bytes stop corresponding to the track - which is a seek - and when there will be no
+     * more of them, which is the end. Neither can be worked out by watching the song change: a
+     * skipped track and a finished one look identical from there, and one of them has produced a
+     * usable beatmap while the other has produced half of one.
+     */
+    @org.junit.jupiter.api.Nested
+    @DisplayName("telling the analysis what the audio just did")
+    class Announcements {
+
+        @Test
+        @DisplayName("the end of a track is announced before the running order moves")
+        void trackEndIsAnnouncedBeforeAdvancing() {
+            Library library = new Library(Songs.list("Rainbow Road", "Sky Garden"));
+            Player player = new Player(library, new ArrivalOrderMode());
+            PlaybackEngine engine = new PlaybackEngine(player, audio);
+            Song finishing = player.current();
+
+            java.util.List<Song> currentWhenTold = new java.util.ArrayList<>();
+            engine.setOnTrackEnded(() -> currentWhenTold.add(player.current()));
+            engine.play();
+
+            audio.reachEndOfMedia();
+
+            assertEquals(java.util.List.of(finishing), currentWhenTold,
+                    "told a moment later, the beatmap built from the track that just finished "
+                            + "would be filed against the one that followed it");
+            assertEquals("Sky Garden", player.current().getTitle(),
+                    "and the running order still moves on afterwards");
+        }
+
+        @Test
+        @DisplayName("the last track of a one-way order still announces its end")
+        void theLastTrackStillAnnounces() {
+            Library library = new Library(Songs.list("Rainbow Road"));
+            Player player = new Player(library, new ArrivalOrderMode());
+            PlaybackEngine engine = new PlaybackEngine(player, audio);
+
+            int[] told = {0};
+            engine.setOnTrackEnded(() -> told[0]++);
+            engine.play();
+            audio.reachEndOfMedia();
+
+            assertEquals(1, told[0],
+                    "a drained queue is where playback stops, and the track that finished has "
+                            + "still been heard in full - the course it earned must not be lost "
+                            + "because there was nothing to play next");
+        }
+
+        @Test
+        @DisplayName("seeking is announced, and only when there is something loaded")
+        void seekingIsAnnounced() {
+            Library library = new Library(Songs.list("Rainbow Road"));
+            Player player = new Player(library, new ArrivalOrderMode());
+            PlaybackEngine engine = new PlaybackEngine(player, audio);
+
+            int[] told = {0};
+            engine.setOnSeek(() -> told[0]++);
+
+            engine.seek(Duration.ofSeconds(30));
+            assertEquals(1, told[0]);
+        }
+
+        @Test
+        @DisplayName("a seek with nothing loaded announces nothing")
+        void seekingWithNothingLoadedIsSilent() {
+            Player player = new Player(new Library(), new ArrivalOrderMode());
+            PlaybackEngine engine = new PlaybackEngine(player, audio);
+
+            int[] told = {0};
+            engine.setOnSeek(() -> told[0]++);
+            engine.seek(Duration.ofSeconds(30));
+
+            assertEquals(0, told[0], "a seek that went nowhere has nothing to announce");
+        }
+
+        @Test
+        @DisplayName("skipping a track is not the end of it")
+        void skippingIsNotFinishing() {
+            Library library = new Library(Songs.list("Rainbow Road", "Sky Garden"));
+            Player player = new Player(library, new ArrivalOrderMode());
+            PlaybackEngine engine = new PlaybackEngine(player, audio);
+
+            int[] told = {0};
+            engine.setOnTrackEnded(() -> told[0]++);
+            engine.play();
+
+            player.next();
+
+            assertEquals(0, told[0],
+                    "half a track heard is half a beatmap, which is not a short course but a "
+                            + "wrong one - and it would be cached and believed");
+        }
+    }
+
     @Test
     @DisplayName("closing releases the audio and stops following the player")
     void closeReleasesEverything() {

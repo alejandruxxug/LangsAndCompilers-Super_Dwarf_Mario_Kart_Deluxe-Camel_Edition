@@ -81,20 +81,36 @@ final class ClickTrack {
     static Path writeWav(Path file, double seconds, double[] clickTimes) throws IOException {
         float[] samples = mono(seconds, clickTimes);
         AudioFormat format = new AudioFormat(AppConfig.SAMPLE_RATE, 16, 2, true, false);
-        byte[] pcm = new byte[samples.length * 4];
-        for (int frame = 0; frame < samples.length; frame++) {
-            short value = (short) Math.round(Math.clamp(samples[frame], -1f, 1f) * 32767);
-            for (int channel = 0; channel < 2; channel++) {
-                int index = frame * 4 + channel * 2;
-                pcm[index] = (byte) (value & 0xFF);
-                pcm[index + 1] = (byte) ((value >> 8) & 0xFF);
-            }
-        }
+        byte[] pcm = interleave(samples);
         try (AudioInputStream in =
                      new AudioInputStream(new ByteArrayInputStream(pcm), format, samples.length)) {
             AudioSystem.write(in, AudioFileFormat.Type.WAVE, file.toFile());
         }
         return file;
+    }
+
+    /**
+     * Turns mono samples into the application's playback format.
+     *
+     * <p>This is what {@link #writeWav} puts in the file, byte for byte, which is the point:
+     * feeding it to a listener is the same audio the file analyser would decode out of that file,
+     * so the two routes to a beatmap can be compared rather than merely both checked for
+     * plausibility.
+     *
+     * @param samples the mono samples
+     * @return 16-bit signed stereo, interleaved, little-endian
+     */
+    static byte[] interleave(float[] samples) {
+        byte[] pcm = new byte[samples.length * AppConfig.BYTES_PER_FRAME];
+        for (int frame = 0; frame < samples.length; frame++) {
+            short value = (short) Math.round(Math.clamp(samples[frame], -1f, 1f) * 32767);
+            for (int channel = 0; channel < 2; channel++) {
+                int index = frame * AppConfig.BYTES_PER_FRAME + channel * 2;
+                pcm[index] = (byte) (value & 0xFF);
+                pcm[index + 1] = (byte) ((value >> 8) & 0xFF);
+            }
+        }
+        return pcm;
     }
 
     /**

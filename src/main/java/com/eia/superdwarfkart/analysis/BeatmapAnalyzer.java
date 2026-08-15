@@ -209,19 +209,43 @@ public final class BeatmapAnalyzer {
             frames = reader.framesRead();
         }
 
+        Beatmap map = fromNovelty(sourceHash, novelty, count, frames, sensitivity);
+
+        if (progress != null) {
+            progress.accept(1.0);
+        }
+        LOG.info(String.format("Analysed %s in %.2fs: %.1f BPM, %d onsets, %d on the beat",
+                file.getFileName(), (System.nanoTime() - startedAt) / 1e9, map.bpm(),
+                map.onsetCount(), map.strongBeatCount()));
+        return map;
+    }
+
+    /**
+     * Turns a finished novelty curve into a beatmap.
+     *
+     * <p><strong>This is the whole of the analysis after the audio has been read, and it is shared
+     * deliberately.</strong> {@link StreamBeatmapBuilder} produces the same curve from the playback
+     * tap rather than from a decode of a file, and a beatmap built that way has to be
+     * indistinguishable from one built here - same tempo estimate, same phase fit, same accent
+     * strengths - or a streamed track would generate a subtly different course from a local copy of
+     * the same recording, and no test comparing the two would say which was right. Two
+     * near-identical copies of these six lines is exactly how that drift starts.
+     *
+     * @param sourceHash  the cache key the result is stored under
+     * @param novelty     the novelty curve, one value per hop
+     * @param count       how many values of it are valid
+     * @param frames      how many audio frames were read in total
+     * @param sensitivity how far above its neighbourhood a peak must stand
+     * @return the beatmap
+     */
+    static Beatmap fromNovelty(String sourceHash, float[] novelty, int count, long frames,
+                               double sensitivity) {
         double duration = frames / (double) AppConfig.SAMPLE_RATE;
         OnsetDetector.Peaks peaks = OnsetDetector.pickPeaksWithStrength(novelty, count, sensitivity);
         double[] onsets = peaks.times();
         double bpm = estimateBpm(onsets);
         double[] strong = strongBeats(onsets, bpm, duration);
         double[] strength = strengthsOf(strong, peaks);
-
-        if (progress != null) {
-            progress.accept(1.0);
-        }
-        LOG.info(String.format("Analysed %s in %.2fs: %.1f BPM, %d onsets, %d on the beat",
-                file.getFileName(), (System.nanoTime() - startedAt) / 1e9, bpm,
-                onsets.length, strong.length));
         return new Beatmap(sourceHash, AppConfig.ANALYZER_VERSION, duration, bpm, onsets, strong,
                 strength);
     }
