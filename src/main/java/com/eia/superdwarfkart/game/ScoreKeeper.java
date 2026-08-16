@@ -20,6 +20,9 @@ import java.util.Objects;
  * The rank is a fraction of the coins the generator put on the course, and a bonus that was never
  * on the course would let a lucky star push it past 100%.
  *
+ * <p><strong>The combo multiplies the balance and never the rank</strong>, and that split is the
+ * reason it fits here at all rather than needing a scoring rule of its own - see {@link #combo()}.
+ *
  * <p>Nothing here knows what a frame is. The keeper is told what happened and by whom; when it
  * happened, and whether it was near a beat, is {@link RunnerGame}'s business.
  */
@@ -31,6 +34,16 @@ public final class ScoreKeeper {
     /** Coins awarded for breaking an obstacle while starred. */
     public static final int BREAK_BONUS_COINS = 5;
 
+    /**
+     * The highest the combo goes, and therefore the most a pickup can be multiplied by.
+     *
+     * <p>Ten because that is where a meter made of blocks stops being countable at a glance, which
+     * is the only place the number is ever read from. Past it the combo simply holds: a streak that
+     * went on climbing invisibly would make the meter say the same thing at twenty as at ten while
+     * quietly paying differently, and the player has no way to see the difference.
+     */
+    public static final int MAX_COMBO = 10;
+
     private final SpeedClass speedClass;
     private final int coinsAvailable;
 
@@ -39,6 +52,8 @@ public final class ScoreKeeper {
     private int obstaclesHit;
     private int obstaclesBroken;
     private int starsCollected;
+    private int combo;
+    private int bestCombo;
 
     /**
      * @param speedClass     the class being driven, which sets what a coin is worth
@@ -53,9 +68,16 @@ public final class ScoreKeeper {
     // What happened
     // ------------------------------------------------------------------
 
-    /** Records a coin driven into. */
+    /**
+     * Records a coin driven into.
+     *
+     * <p><strong>One coin, however many it is worth.</strong> The balance takes the multiplier and
+     * {@link #coinsCollected()} takes exactly one, because the course held exactly one - see
+     * {@link #combo()}.
+     */
     public void collectCoin() {
-        coins++;
+        advanceCombo();
+        coins += multiplier();
         coinsCollected++;
     }
 
@@ -64,21 +86,54 @@ public final class ScoreKeeper {
      *
      * <p>The balance floors at zero rather than going negative: a debt the player cannot see the
      * bottom of stops being a penalty and starts being a reason to give up on the run.
+     *
+     * <p><strong>The combo is lost here and the penalty is not scaled by it.</strong> Losing a
+     * multiplier that took a minute to build is already by far the larger of the two costs; taking
+     * five coins per level on top would make one mistake at the top of the meter unrecoverable,
+     * which is the opposite of what the brief invulnerability after a bump exists to prevent.
      */
     public void hitObstacle() {
         obstaclesHit++;
+        combo = 0;
         coins = Math.max(0, coins - HIT_PENALTY_COINS);
     }
 
     /** Records an obstacle destroyed by driving through it while starred. */
     public void breakObstacle() {
+        advanceCombo();
         obstaclesBroken++;
-        coins += BREAK_BONUS_COINS;
+        coins += BREAK_BONUS_COINS * multiplier();
+    }
+
+    /**
+     * Records an obstacle jumped clean over.
+     *
+     * <p>Pays nothing and builds the combo, which is the only reward the jump has ever carried. A
+     * wall blocks all three lanes and the jump is the only way past it, so this is where the one
+     * control the player has to learn feeds the one number that makes the rest of the course worth
+     * more - and it is a deliberate answer to the jump otherwise being a thing that merely avoids a
+     * loss.
+     */
+    public void clearObstacle() {
+        advanceCombo();
     }
 
     /** Records a star driven into. */
     public void collectStar() {
+        advanceCombo();
         starsCollected++;
+    }
+
+    /**
+     * Takes the combo up one, holding at {@link #MAX_COMBO}.
+     *
+     * <p>Called before the coins are added rather than after, so the pickup that takes the combo to
+     * a new level is paid at that level. Rewarding it at the old one means the meter and the number
+     * it is multiplying disagree in the one frame the player is looking at both.
+     */
+    private void advanceCombo() {
+        combo = Math.min(MAX_COMBO, combo + 1);
+        bestCombo = Math.max(bestCombo, combo);
     }
 
     /** Clears the tally, for a run being started again. */
@@ -88,6 +143,8 @@ public final class ScoreKeeper {
         obstaclesHit = 0;
         obstaclesBroken = 0;
         starsCollected = 0;
+        combo = 0;
+        bestCombo = 0;
     }
 
     // ------------------------------------------------------------------
@@ -122,6 +179,42 @@ public final class ScoreKeeper {
     /** @return how many stars were collected */
     public int starsCollected() {
         return starsCollected;
+    }
+
+    /**
+     * How many things have been picked up or cleared in a row, up to {@link #MAX_COMBO}.
+     *
+     * <p><strong>Only a bump breaks it.</strong> Not a coin that went by in another lane, which
+     * happens constantly and by design - there are three lanes and one racer, so a combo broken by
+     * missing a coin would be a combo nobody could ever build. What it counts is mistakes: it holds
+     * for as long as the player takes nothing on the chin, and it is the same rule at every speed
+     * class, where the fast ones simply put far more chances to make one on the road.
+     *
+     * <p>It multiplies {@link #coins()} and cannot touch {@link #coinsCollected()}, so the rank is
+     * untouched by it. That is not tidiness: the rank is a fraction of what the generator put on the
+     * course, and a multiplier applied to its numerator would let a good streak read as more coins
+     * than the course ever held.
+     *
+     * @return the current streak, 0 before anything has been collected
+     */
+    public int combo() {
+        return combo;
+    }
+
+    /**
+     * @return the longest streak this run reached, which is what says whether a course can be
+     *         driven cleanly at all
+     */
+    public int bestCombo() {
+        return bestCombo;
+    }
+
+    /**
+     * @return what a pickup is currently worth, 1 with no combo running and {@link #MAX_COMBO} at
+     *         the top of the meter
+     */
+    public int multiplier() {
+        return Math.max(1, combo);
     }
 
     /** @return the class being driven */
@@ -161,6 +254,7 @@ public final class ScoreKeeper {
     @Override
     public String toString() {
         return "ScoreKeeper[" + coins + " coins, " + coinsCollected + "/" + coinsAvailable
-                + " collected, rank " + rank() + ", score " + score() + "]";
+                + " collected, combo x" + multiplier() + ", rank " + rank() + ", score " + score()
+                + "]";
     }
 }

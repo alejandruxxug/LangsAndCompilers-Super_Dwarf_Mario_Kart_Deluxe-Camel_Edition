@@ -112,7 +112,9 @@ class RunnerGameTest {
         runPastJudgement(game, 7);
 
         assertSame(EntityState.HIT, game.stateOf(6));
-        assertEquals(6 - ScoreKeeper.HIT_PENALTY_COINS, game.score().coins());
+        // Six coins in a row are worth 1+2+3+4+5+6 rather than six, because the combo was climbing
+        // the whole way. The penalty is flat and comes off the balance they built.
+        assertEquals(21 - ScoreKeeper.HIT_PENALTY_COINS, game.score().coins());
         assertEquals(6, game.score().coinsCollected(),
                 "a penalty must not change how well the course was driven");
         assertTrue(game.isInvulnerable());
@@ -253,7 +255,8 @@ class RunnerGameTest {
 
         runPastJudgement(game, 6);
         assertSame(EntityState.BROKEN, game.stateOf(1));
-        assertEquals(ScoreKeeper.BREAK_BONUS_COINS, game.score().coins());
+        // The star took the combo to one and the break took it to two, so the bonus is paid at two.
+        assertEquals(ScoreKeeper.BREAK_BONUS_COINS * 2, game.score().coins());
         assertEquals(0, game.score().coinsCollected(),
                 "coins broken out of a bump are not coins the course held, so they must not be "
                         + "able to push the rank past what was actually collected");
@@ -473,6 +476,76 @@ class RunnerGameTest {
 
         runTo(game, 7);
         assertEquals(List.of("coin", "hit"), heard);
+    }
+
+    // ------------------------------------------------------------------
+    // The combo
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a coin left in another lane does not break the combo")
+    void missingACoinKeepsTheCombo() {
+        RunnerGame game = new RunnerGame(fixed(
+                new Coin(5, Lane.CENTER), new Coin(6, Lane.LEFT), new Coin(7, Lane.CENTER)));
+        runPastJudgement(game, 7);
+
+        assertEquals(2, game.score().coinsCollected(), "the one in the left lane went by");
+        assertEquals(2, game.score().combo(),
+                "there are three lanes and one racer, so a combo broken by an uncollected coin "
+                        + "would be a combo nobody could ever build");
+    }
+
+    @Test
+    @DisplayName("a bump breaks the combo and the next coin starts again at one")
+    void aBumpBreaksTheCombo() {
+        RunnerGame game = new RunnerGame(fixed(
+                new Coin(1, Lane.CENTER), new Coin(2, Lane.CENTER), new Coin(3, Lane.CENTER),
+                new Obstacle(4, Lane.CENTER), new Coin(5, Lane.CENTER)));
+
+        runPastJudgement(game, 3);
+        assertEquals(3, game.score().combo());
+        int beforeTheBump = game.score().coins();
+
+        runPastJudgement(game, 4);
+        assertSame(EntityState.HIT, game.stateOf(3));
+        assertEquals(0, game.score().combo());
+
+        runPastJudgement(game, 5);
+        assertEquals(1, game.score().combo());
+        assertEquals(beforeTheBump - ScoreKeeper.HIT_PENALTY_COINS + 1, game.score().coins(),
+                "the coin after a bump is worth one, because the streak it was riding is gone");
+        assertEquals(3, game.score().bestCombo());
+    }
+
+    @Test
+    @DisplayName("jumping a wall builds the combo, which is the only thing the jump has ever paid")
+    void clearingAWallBuildsTheCombo() {
+        RunnerGame game = new RunnerGame(fixed(
+                new Obstacle(5, Lane.LEFT, true), new Obstacle(5, Lane.CENTER, true),
+                new Obstacle(5, Lane.RIGHT, true)));
+        runTo(game, 5 - RunnerGame.JUMP_SECONDS / 2);
+        game.jump();
+        runPastJudgement(game, 5);
+
+        assertSame(EntityState.CLEARED, game.stateOf(1), "only the racer's lane is judged");
+        assertEquals(1, game.score().combo(),
+                "one wall is one obstacle cleared, however many lanes it blocked");
+        assertEquals(0, game.score().coins(), "and it pays nothing on its own");
+    }
+
+    @Test
+    @DisplayName("seeking forward writes entities off without handing over a combo")
+    void aSkippedStretchEarnsNoCombo() {
+        RunnerGame game = new RunnerGame(fixed(
+                new Coin(1, Lane.CENTER), new Coin(2, Lane.CENTER), new Coin(3, Lane.CENTER),
+                new Coin(4, Lane.CENTER)));
+        game.update(0);
+        game.update(20);
+
+        assertEquals(0, game.score().combo(),
+                "a course cannot be collected by dragging the playhead across it, and it cannot "
+                        + "be used to arrive at the next stretch already multiplied either");
+        assertEquals(0, game.score().coinsCollected());
     }
 
     @Test

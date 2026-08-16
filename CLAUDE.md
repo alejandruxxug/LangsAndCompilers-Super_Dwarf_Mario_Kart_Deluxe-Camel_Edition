@@ -125,7 +125,11 @@ block (a bare `-D` on the Maven command line does **not** reach the app):
 | `-Dsdmk.home=/tmp/demo` | Use a scratch profile instead of `~/.superdwarfkart`. Seed a `library.json` there to demo against fake data without touching the user's real library. |
 | `-Dsdmk.diag=true` | Measure the runner's frame loop: achieved fps and frame-interval percentiles, the tick split, and the playback clock's own granularity. Prints a line every two seconds and draws a readout over the road. **`F3` toggles it live** (off → printed + overlay → printed only), which is the more useful of the two — a stutter somebody is watching can be measured while it happens. |
 | `-Djavafx.pulseLogger=true` | The toolkit's own per-phase frame log. Reach for this only when `sdmk.diag` says the frame interval is long but the tick is cheap, i.e. the time is going to the render thread or to layout rather than to anything this project wrote. |
-| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. It also writes one shot per view beside it — `out-shuffle`, `-arrival`, `-alphabetical` (the three structure views), `-presentation`, `-history`, `-racers`, `-spotify`, `-settings`, `-moods`, `-moods-light`, `-library-light` (the light palette on the controls, where a bevel drawn the wrong way round shows), `-dsa-folded` (the table with the structure column folded away), `-race` and `-mini` / `-mini-compact`. **Every one of them exists only once a mode has been selected or a key pressed**, so one shot of the opening state proves nothing about any of them. The companion shots are taken from **its own scene** (it is a separate window, so the main one's snapshot contains none of it) and after a seek a third of the way in, because a progress line at zero is a picture of an empty line. |
+| `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. It also writes one shot per view beside it — `out-shuffle`, `-arrival`, `-alphabetical` (the three structure views), `-presentation`, `-history`, `-racers`, `-spotify`, `-settings`, `-moods`, `-moods-light`, `-library-light` (the light palette on the controls, where a bevel drawn the wrong way round shows), `-dsa-folded` (the table with the structure column folded away), `-race`, `-mini` / `-mini-compact`,
+and **`-boot`, `-boot-partway`, `-boot-glitch`, `-boot-loading`** — the boot screen, which exists
+only until the cartridge goes in and is therefore photographed *first*, before any other check runs.
+The glitch and the loading bar are asked for at a stated instant through `BootScreen.previewAt`,
+because the sequence's own timer never ticks while the smoke test holds the interface thread. **Every one of them exists only once a mode has been selected or a key pressed**, so one shot of the opening state proves nothing about any of them. The companion shots are taken from **its own scene** (it is a separate window, so the main one's snapshot contains none of it) and after a seek a third of the way in, because a progress line at zero is a picture of an empty line. |
 
 **The smoke test plays about three seconds of the current song** and prints the measured L/R levels,
 so a run is audible. That is the point: the base screenshot is taken while audio is still flowing,
@@ -152,10 +156,13 @@ local copy of the same recording.
 those lines cannot be checked any other way. The entity counts are the claim that difficulty comes
 from the music rather than from a timer, and only mean something against a real track's onsets.
 `reproducible` regenerates each course and compares it — every stored high score rests on that
-holding. And `lap` runs a scripted greedy driver over the whole course at sixty frames a second
+holding. And `lap` runs `game/ScriptedDriver` over the whole course at sixty frames a second
 through the real collision rules; a course a competent driver cannot rank well on is a generated
 course the rules cannot survive, and that is what the line catches, over four minutes of beatmap,
-on every launch.
+on every launch. It also reports **the best combo reached**, which is the only check that the
+multiplier is reachable on real music rather than only in a unit test — a meter that never leaves
+`x1` over four minutes of real beatmap is decoration, and that is a property of the generator against
+a particular track rather than of the scoring rules, so nothing but driving one can establish it.
 
 **Then it drives the runner with real key events and times a frame.** `steering` and `jump` fire
 `LEFT` and `SPACE` at the scene and report what the kart actually did — a control that never reaches
@@ -231,7 +238,7 @@ tooltips and dialogs are all rebuilt as hard-edged beveled blocks.
 | `F6` | swap the library for the runner, and back |
 | `F7` | collapse to the companion strip, and back — **the same key in both windows** |
 | `F8` *(companion window)* | put the artwork away, leaving the song and the transport, and back |
-| `Esc` | leave Presentation Mode; on the companion strip, expand |
+| `Esc` | leave Presentation Mode; on the companion strip, expand; **on the boot screen, quit** — it draws no title bar, so it draws no close button |
 | `→` / `Space` *(tree view focused)* | step through one edge of a traversal |
 | `←` / `→` / `A` / `D` *(road focused)* | change lane |
 | `Space` / `↑` / `W` *(road focused)* | jump |
@@ -302,6 +309,102 @@ the one thing the missing chrome would actually be missed for.
 
 The **native file chooser is the one exception** — it belongs to the operating system and
 cannot be styled.
+
+**The main window joined them last, and until it did this section was describing an intention
+rather than the code.** `App` never called `initStyle`, so the primary stage was `DECORATED` while
+`app.css` and this file both asserted that nothing was. It is `StageStyle.TRANSPARENT` now, with
+`scene.setFill(Color.TRANSPARENT)` and a `.pixel-window` shell drawing the border, exactly as the
+dialogs do.
+
+- **The header *is* the title bar** — one strip, not two. It already had the name, the version and
+  the three view toggles, and it was already a `.pixel-titlebar` in everything but name (same
+  `-ui-recessed` ground, same `-role-primary` underline); it gained `-fx-cursor: move`, a
+  `PixelDialog.dragBy`, and **minimise / maximise / close** at its right end. Stacking a second
+  full-width bar above it would have cost 40 px of an 800 px window to draw the name twice.
+- **The close button is not a nicety.** Before it, the main window had *no* way to quit: the only
+  `Platform.exit()` a user could reach was the companion window's. Undecorating without it would
+  have left the application closable only by collapsing to the companion strip first.
+- **The three window buttons are `setFocusTraversable(false)`** for the same reason the view toggles
+  are, and they are more exposed to it: they sit at the *end* of the strip, where a traversal
+  arrives.
+- **Presentation mode swaps the shell's centre, not the scene's root.** `togglePresentation` used
+  `scene.setRoot`, which was harmless while the operating system drew the chrome and takes the title
+  bar away with it now — leaving a window that cannot be moved or closed until `F5` is pressed a
+  second time. The header was hoisted out of `root` into a persistent shell for this. The visualizer
+  gets the stage less the title bar, which is the right trade.
+- **The window comes up maximised**, and `MAIN_WIDTH` / `MAIN_HEIGHT` became the size it *restores*
+  to. Both sizes have to lay out, which is what the maximise button is for. The smoke test does not
+  maximise: it measures the middle of the window against `SIDE_COLUMN_WIDTH` and photographs every
+  view, and both want the size the constants describe rather than whatever display the run is on.
+- **Dragging is ignored while maximised**, consumed in a mouse *filter* so it runs before
+  `dragBy`'s handler. The filter checks `event.getTarget() == header`, which is what keeps the
+  buttons on the strip working — a press on one of them is targeted at the button, not the strip.
+
+### The boot screen: insert the cartridge (`ui/BootScreen`)
+
+**The application opens on a black screen with a cartridge on it, and the user drags it into a
+slot.** The name is a ROM filename, the interface is 8-bit, and the companion window is already
+literally a game cartridge standing on a record — so the launch is the ritual the whole thing is
+dressed as. It **replaced** the `START YOUR ENGINES` dialog: inserting the cartridge *is* that
+answer, and a second modal question straight afterwards is one too many. Boot lands on the library,
+**paused**; pressing play still brings the road up on its own, exactly as before.
+
+- **The name is on the cartridge, not on the screen.** That is what a cartridge is — the label is
+  where the title goes — and printing it over the top as well would be the one place in this
+  application where `APP_NAME` appeared twice at once. It is placed by `SpriteSheet.darkRegion(0)`,
+  measured at **238x389 at (204,3)**, and wrapped on the name's *own* separators (`_` and `-`) so it
+  reads as a ROM label rather than as a sentence chopped mid-word. `labelFontSize` fits it both ways
+  — no line wider than the label, no block taller.
+- **Nothing else is on the screen.** The ground is `SHADOW`, the darkest role there is, so a light
+  mood gets a light room rather than a black rectangle somebody forgot to theme. **The title bar is
+  not attached yet**: it is built during `start()` (it wires the window's drag and buttons) and
+  attached in `finishBooting()`. A console with the power just switched on does not have a title bar
+  across the top of it.
+- **Which means Escape quits, and it has to.** With no title bar there is no close button, and a
+  window with no visible way to shut it needs an invisible one. Escape is what every other frameless
+  window here already uses to say no. The black itself is the drag handle (`dragBy` on the pane);
+  the cartridge consumes its own presses, so dragging it never moves the window.
+- **Every other shortcut is dead while booting.** Otherwise the first key of the session could
+  collapse the application to a companion strip over a boot screen, or swap in a road nobody can
+  see. Both the filter and the handler return early on `booting`.
+- **`suspendMainViews()` is called before the first frame.** Five canvases start their timers as
+  they are constructed, and an `AnimationTimer` does not stop because the node it paints cannot be
+  seen — the identical fault the companion window and the `F4` fold each had to fix. The existing
+  suspend/resume pair is reused unchanged.
+- **Insertion is a threshold, not a destination.** `INSERT_THRESHOLD` is 0.6 of the travel: past
+  halfway because the gesture is deliberate and being made to repeat it reads as the drag not having
+  worked, short of 1 because insisting on the last pixel makes the slot a target rather than a
+  direction. Short of it, the cartridge springs back. The travel is `SEAT_SHARE` of the cartridge's
+  own drawn height, so replacement art seats to the same *place* rather than the same number, and
+  the mouth's width comes from `SpriteSheet.footprint(0)` — the artwork's real inlet, 454 of 500.
+- **Then a flash, a glitch and a loading bar** — what a console did when a cartridge went into a live
+  slot. The picture tears into `TEAR_BANDS` horizontal bands thrown sideways by `tearOffset`,
+  decaying to nothing across `GLITCH_SECONDS`, with interference bands in `ACCENT` and `NEGATIVE`
+  (the two roles furthest from the room's own colour, so they read as interference in any mood and
+  never as part of the artwork). The flash is `TEXT_PRIMARY` — protected, so no mood can turn it into
+  a flash nobody sees. Total sequence 2.35 s, which a test pins at three seconds before it stops
+  being a flourish and starts being a wait.
+- **The tear is seeded, not random**, by the **SplitMix64 finalizer** over band and frame. Same
+  decision as `Course`'s own hash and for a related reason: an effect nobody can reproduce is an
+  effect nobody can check, and the smoke test drives this with no pulses at all. **FNV-1a was tried
+  first and was measurably wrong here** — it avalanches poorly in its high bits over two-word inputs,
+  so *every* band cleared the displacement threshold, which is static rather than tearing.
+  `BootScreenGeometryTest.notEveryBandMoves` is what caught it.
+- **`settle()` and `previewAt(glitch, loading)` exist because none of this can be photographed or
+  waited for.** `runSmokeTest` runs synchronously inside `start()`, so no pulse ever arrives: the
+  seat timeline, the glitch and the loading bar would all sit frozen at whatever the last synthesised
+  drag left. Same reason `StructureView.settle()` and `MiniPlayerView.previewAt` exist.
+  **`previewAt` must call `requestLayout()` itself** — a `Parent` only lays out when something marked
+  it dirty and none of the phase fields are observable, so without it a second preview silently
+  redraws the first one, which looks like the phase never changed rather than like the canvas was
+  never asked to. That was a real bug, caught by looking at the picture.
+- **The smoke test drags it with real mouse events**, twice: once short of the threshold, asserting
+  it is *refused*, and once past it. A threshold that accepts everything is not a threshold, and a
+  drag is exactly the kind of routing fault no screenshot and no unit test can reach — a canvas left
+  pickable in front of the cartridge would swallow every press while still hovering correctly, which
+  is the fault that ate the companion window's transport clicks. `fireDrag` aims at the **node**,
+  unlike `fireKey`, which aims at the scene.
+- Screenshots: `docs/screenshots/sdmk-boot.png`, `-boot-partway`, `-boot-glitch`, `-boot-loading`.
 
 ### Sprites in the interface
 
@@ -574,7 +677,7 @@ com.eia.superdwarfkart
 ├── analysis/     BeatmapAnalyzer, Beatmap, BeatmapCache, OnsetDetector, Fft, BeatmapService,
 │                 BeatmapIndex
 ├── game/         RunnerGame, RunnerListener, Course, Lane, Entity (sealed), Obstacle, Coin,
-│                 Star, EntityState, ScoreKeeper, Rank, ScoreEntry, SpeedClass
+│                 Star, EntityState, ScoreKeeper, Rank, ScoreEntry, SpeedClass, ScriptedDriver
 ├── spotify/      SpotifyBinary, SpotifyConfig, SpotifyDaemon, SpotifyApi,      ← M10
 │                 SpotifyEvents, SpotifyTrack, SpotifySession
 ├── persistence/  Repository<T> (interface), LibraryRepository, ScoreRepository
@@ -799,6 +902,25 @@ All entities are placed **on beats**, never on a timer.
   N beats;
   passing *through* an obstacle while starred **breaks it**, plays the 2-frame explosion and
   awards bonus coins. The star sheet is animated — slice and loop it.
+- **Combo** — every pickup or cleared obstacle takes it up one, holding at **`ScoreKeeper.MAX_COMBO`
+  = 10**, and it multiplies what the next one pays. **Only a bump breaks it.** Not a coin left in
+  another lane: there are three lanes and one racer, so a combo broken by an uncollected coin would
+  be a combo nobody could ever build. What it counts is *mistakes*.
+  - **It multiplies the balance and can never touch the rank.** `coins` takes the multiplier;
+    `coinsCollected` takes exactly one, because the course held exactly one. That is the split
+    `ScoreKeeper` was already built around — the rank is a fraction of what the generator put on the
+    course, and a multiplier on its numerator would let a good streak read as more coins than the
+    course ever held, straight past 100%.
+  - **The bump penalty is flat and deliberately not scaled by it.** Losing a multiplier that took a
+    minute to build is already much the larger of the two costs; five coins a level on top would
+    make one mistake at the top of the meter unrecoverable, which is the opposite of what the
+    invulnerability after a bump exists to do.
+  - **Jumping a wall builds it and pays nothing else**, which is the only reward the jump has ever
+    carried. The one control the player has to learn now feeds the one number that makes the rest of
+    the course worth more, instead of merely avoiding a loss.
+  - **The multiplier is applied before the coins are added**, so the pickup that takes the meter to a
+    new level is paid at that level. Rewarding it at the old one makes the meter and the number it is
+    multiplying disagree in the one frame the player is looking at both.
 - **Entities are drawn far to near, and the loop runs *backwards* for that reason.** The course is in
   ascending beat order, so a low index arrives sooner — which is the entity closest to the racer and
   lowest on the screen. Walking up from `firstVisible` therefore drew the nearest first and let every
@@ -856,6 +978,103 @@ All entities are placed **on beats**, never on a timer.
   All three fire from `RunnerListener` callbacks, so each happens exactly once per event rather than
   being deduced per frame by diffing `EntityState` — which is wrong the first time a frame is
   dropped. They are timed off the game clock, so a pause freezes them with everything else.
+- **The combo heat: the screen gets excited as the meter fills, and it is `PRIMARY`.** Two parts over
+  one colour, both wash-only — nothing about the combo reaches the geometry, same rule as the beat.
+  The **standing** tint is squared and tops out at `COMBO_TINT_ALPHA` = 0.13; the **beat** adds
+  `COMBO_BEAT_SURGE` = 0.20 on top, linear in the heat, for a heaviest frame of **0.33** against the
+  0.35 ceiling. The role is named once as `RunnerView.COMBO_ROLE` and used by the wash, the meter,
+  the multiplier and the horizon, so the four cannot drift apart and the test measures the role the
+  road is actually seen through rather than one written down twice.
+  - **It was `ACCENT` until 2026-08-16 and the change was asked for.** The old argument was that the
+    horizon already flashes to the accent on every beat, so a screen sliding that way reads as the
+    beat taking over the picture rather than as a colour arriving from nowhere. What that missed is
+    that the accent is the palette's *cool* bright role: over this backdrop a cyan wash reads as the
+    light changing, where the yellow reads as the picture being **lit**, and at the alpha this is
+    capped at that difference is most of the effect. The yellow is also already the colour of
+    everything the combo is multiplying — the coin tally, the score plate, the star's own timer.
+    `PRIMARY` is not one of the four protected roles, which is what keeps the swap safe.
+  - **The one cost is that `PRIMARY` is also the pickup flash's colour**, so the two would compete if
+    the standing tint were strong. It is another reason it is not.
+  - **The two knobs were split apart for a measured reason.** Multiplying the surge *by* the standing
+    tint makes the middle of the meter a cube of a small number, so a combo of five showed nothing —
+    which is exactly where the player most needs to see something being built. Adding it keeps the
+    standing part faint and lets the beat carry the effect: excitement is motion, not a filter.
+  - **`COMBO_TINT_ALPHA` came down from 0.20 to 0.10 on a measurement, not on taste** — and back up
+    to 0.13 with the move to yellow, on a request for a combo that shows more. The scripted driver
+    spends **about ninety percent** of a clean 50cc or 100cc run pinned at the top of the meter
+    (against a third of it at 150cc and 200cc). That is the combo working — a clean run is the whole
+    thing it rewards — but it means the *standing* tint is what the game looks like nearly all of the
+    time for anyone driving well, and at 0.20 that stopped reading as an earned state and started
+    reading as a mood nobody chose, burying the beat's own washes underneath it. **So "more
+    noticeable" was spent on the surge rather than on the tint**: the standing part went up by three
+    hundredths and the beat by six, and the surge took the whole of the headroom left under the cap.
+  - **It is drawn over the beat wash, not under it, and the order is load-bearing.** It was the other
+    way round first and the two cancelled: the beat wash darkens hardest at the instant of the strike,
+    which is exactly when the combo's surge peaks, so the accent was dimmed away precisely when it
+    was meant to be seen and the beat looked identical at every combo level. Over the top, a strong
+    beat at a full combo is a dark frame *in the combo's colour*. The bump's alarm still goes last —
+    it is the one event the player may have missed the cause of.
+  - **The horizon's beat floor rises with the heat**, capped at `COMBO_HORIZON_SHARE` = 0.75 of the
+    way. Let it reach the whole way and a full combo leaves the line permanently lit, with the beat
+    flash having nowhere left to go — it disappears at the moment the game is most exciting.
+  - **The horizon's *colour* migrates with the heat too**, from `ACCENT` at no combo to `COMBO_ROLE`
+    at a full one, rather than the line flashing in one colour over a floor in another. Measured on
+    the race shot at a full combo, the line reads `#d6ba4f` where it used to read `#4f4c78` — the
+    widest thing on screen is the combo's colour, which is exactly the point. The alternative, a
+    yellow floor flashing to cyan, puts a hue swing on that line twice a second and reads as a fault
+    rather than as a beat; here the hue only moves as fast as the heat glides.
+  - **The heat glides, timed off the game clock from a start value and a start time** — the same
+    arrangement as the lane glide and the event flash, never a per-frame accumulator, so it pauses
+    with the music for free. Without it the tint steps once per coin, which on a fast class is a
+    visible jolt several times a second in the corner of the eye.
+  - **Read off the tally per frame rather than pushed by a listener**, which is the opposite of what
+    every other effect here does and is right for this one: it is a continuous value being glided
+    towards a target, so a dropped frame costs it a frame of glide and nothing else.
+  - **`RunnerComboHeatTest` holds the bar**, because this wash goes *over* the entities: coins and
+    bumps must stay ≥ 25 ΔE apart through the heaviest wash **in every mood**, and the whole thing is
+    capped at 0.35 — the same ceiling `ABOVE_CONTENT` overlay layers get, for the same reason.
+    Confirmed to fail when the alpha is raised, and it fails on the **light** mood first. Measured at
+    0.33 in `PRIMARY`: coins against bumps 99 in the dark mood and 81 in the light one.
+    **The pair with the least room is now the star against the road** — 75 and 46 — because the wash
+    *is* the star's own colour, so the star cannot move at all while the road is pulled towards it.
+    That is the one that would go first if this were raised again.
+  - The rate is the track's own beat and nothing else, so it is inside §8b's 3 Hz cap without needing
+    an oscillator of its own to clamp — and it must be wired to "Reduce motion" along with the rest
+    of the beat effects when M11 builds that switch.
+- **The combo meter is ten 32×18 blocks standing up the right-hand edge**, centred on the height of
+  the canvas, captioned `COMBO`, filling **upwards**, with the multiplier under it at 16px. Blocks
+  rather than a continuous bar — the same convention the library's rating meter uses, and the
+  readable one at this size, because a small whole number should be *counted* rather than measured
+  against a track. Upwards because that is the direction the L and R level bars flanking the same
+  road fill, so the one gauge between them needs no second convention. Its place is held whether or
+  not a combo is running: a meter that appeared when the streak started would be something arriving
+  in the corner of the eye at the exact moment the player has stopped looking away from the road.
+  Only at the top of the meter does the column itself take the beat.
+  - **It sat under `COINS` and `SCORE` until 2026-08-16**, which is the shorter path to reading what
+    it does and is what it gave up: a vertical bar is the shape a filling meter actually has, and
+    there is no room for one down the left where the rank and the best run already are. **So it
+    gained a caption** — a bare column of blocks on an edge that carried nothing but the song title
+    says nothing about what it is counting, where under the two numbers it was multiplying it needed
+    no label at all. The multiplier moved from beside the meter to beneath it for the same reason:
+    to the right of the bar there is nothing but the edge of the window.
+  - **Centring it is what keeps it clear of everything else**, rather than a number measured against
+    the block above it. The right-hand edge already carries the song at the top, and the bottom
+    carries the star timer and the controls line; a meter anchored under the song has to be
+    re-checked against all three every time one of them moves or the window resizes, where a centred
+    one sits opposite the kart and cannot reach any of them. The caption and the multiplier are part
+    of what is centred — leave them out and the column sits high enough to read as hand-placed.
+  - **The width costs the road nothing, and that was checked rather than assumed.** The road is
+    `ROAD_HALF_FRACTION` either side of centre, so at its widest — the racer's own line — it ends at
+    nine tenths of the canvas, and the bar's left edge is past that. Centred, it is beside a part of
+    the road that is narrower still.
+  - **`RunnerView.settleCombo()` exists because none of this photographs.** The heat glides from
+    wherever the picture was, and before a preview the picture was nowhere — so the first frame after
+    `previewDrivenTo` drives a whole course finds the combo at ten and the heat at zero and starts
+    easing, which in a live run is correct and lasts a third of a second and in a still is the whole
+    photograph. Without it `docs/screenshots/sdmk-race.png` is a full meter over a screen with no
+    light on it, which is a picture of the effect being broken. Same reason `StructureView.settle()`
+    and `MiniPlayerView.previewAt` exist, and it was caught by reading the horizon's pixel out of the
+    shot rather than by looking at it.
 - **The star cycles the kart through the palette, and the rainbow is made of roles.**
   `RunnerView.RAINBOW` walks `PRIMARY → POSITIVE → METER_LOW → ACCENT → HIGHLIGHT → NEGATIVE`,
   mixing between neighbours and snapping back onto the 5-bit grid. Reaching for `Color.hsb` would
@@ -1332,6 +1551,28 @@ smoke test prints all of it and re-derives it every launch.
   routing fault lives entirely in how the scene delivers an event: no screenshot shows it and no
   unit test reaches it. It caught the dead jump the moment it was added, and it caught the stale
   playing-flag straight after.
+  - **It presses away from whichever edge the racer is on.** A key pressed into the wall is a key
+    that correctly does nothing, and reporting that as `DID NOTHING` is a red light nobody can trust.
+  - **And it runs against `previewAt`, never `previewDrivenTo`** — see below. The photographed
+    moment is chosen to be a *wall*, and a wall is the one thing the scripted driver jumps, so a
+    driven preview leaves the racer airborne and off the middle lane **by design**: `game.jump()`
+    no-ops while a jump is running, so a working jump key would be reported as a dead one. Both
+    lines failed exactly this way once.
+  - **A library holding streamed tracks makes these lines non-deterministic**, and that is not a
+    fault in them. Shuffle can make a Spotify song current, a streamed song has no audio until the
+    daemon is connected, and the runner only claims the keys while the music is running — so both
+    lines correctly read `DID NOTHING` and `audio file` reads `null`. Check that line before
+    believing a control is broken, and use a local-only profile when verifying one.
+- **`game/ScriptedDriver` is the greedy player, and it has two callers.** It was forty lines of game
+  policy inside `App`, untestable and about to be copied. It holds no JavaFX, so it is exercised by
+  handing it a course, and it is the difference between the smoke test's lap and a screenshot of a
+  run in progress being two implementations that can drift.
+- **`RunnerView.previewAt` jumps the clock and `previewDrivenTo` drives to the moment**, and the
+  split is not tidiness. Jumping resolves everything behind the playhead as skipped — the correct
+  rule, and what stops a course being collected by dragging the seek bar — so the race screenshot
+  came out with a **zeroed head-up display**: no coins, an empty combo meter and a rank of D over a
+  road nobody had driven. Every readout in that corner is only worth photographing once something
+  has happened to it. The control checks want the opposite: a known state to fire a key at.
 - **A jump lifts the kart 130 px, not the 54 it started at**, with the shadow shrinking and pulling
   away and a puff of dust at the take-off point. On a 190 px kart the original lift was a bob
   indistinguishable from the sprite sitting still — the control worked and read as broken, which is
@@ -2041,6 +2282,22 @@ it — it fails the build if anything in `ds/`, `model/`, `playback/`, `analysis
   `settings.json`; it is skipped entirely during a smoke test, so the build never depends on the
   network.
 
+  **Superseded again on 2026-08-16: the boot screen starts the daemon while its bar runs.** The
+  cartridge going in is the start ritual, and a console reading a cartridge is the right cover for
+  the one thing at startup that genuinely takes a moment. It also answers what the Spotify page kept
+  raising — connecting was a step whose necessity nothing on screen explained.
+  - **The boot never waits for it.** The bar runs its own length and hands over regardless; a daemon
+    that is slow, absent or sitting on a login must not be able to hold the application shut (ground
+    rule 5). The caption reports how far it got by the time the machine finished reading, and the
+    Spotify page carries on from there.
+  - **The caption is the only line on that screen that changes**, so it is drawn in `ACCENT` rather
+    than `TEXT_DIM` — a reader has about a second and a half to notice it.
+  - **`previewAt` runs none of the sequence's side effects**, deliberately: a screenshot must not
+    start a daemon. So the smoke test sets the caption by hand before photographing
+    `boot-loading`, or the one shot of that phase would show the line blank and prove nothing.
+  - Suppressed entirely under `sdmk.smokeTest`, which prints `SKIPPING GO-LIBRESPOT` on the screen
+    and a suppression line in the log rather than quietly doing nothing.
+
   **Superseded in one place as of 2026-08-15: pressing play on a streamed song now connects.** The
   rule stands for everything else — the daemon still waits for a button *unless the user has asked
   for the one thing that requires it*, which is a clearer statement of intent than pressing CONNECT
@@ -2509,6 +2766,22 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
   into both fields produces.
 - **The four Spotify configuration values in §10 fail silently**, every one of them by letting
   Spotify choose the running order while the music goes on sounding fine.
+- **The combo multiplies `coins` and must never touch `coinsCollected`.** The rank is a fraction of
+  what the generator put on the course; multiply its numerator and a good streak reads as more coins
+  than the course ever held, past 100%, and `ScoreEntry`'s own constructor throws on it. The split
+  already existed for the star's break bonus — the combo is the second thing that depends on it.
+- **A screen-wide wash goes over the entities, so it is a protected-role problem.** The combo heat,
+  the beat wash and the event flashes all sit above the coins and the bumps, and a tint that closes
+  the gap between them throws nothing and photographs perfectly. Any new one needs a ΔE check across
+  every mood, and it will fail on the **light** mood before the dark one. **Washing in a role that
+  something on the road is already drawn in is the sharper version of the same trap**: the combo
+  washes in `PRIMARY`, which the star and the coin tally are, so that pair cannot separate by moving
+  apart — only the ground can move, and it moves *towards* them.
+- **A value that glides is a value a screenshot photographs at zero.** The combo heat eases from
+  where the picture was, and a preview has no previous picture, so the race shot came out with a
+  full meter over an unlit screen and nothing anywhere said so. Anything eased off the game clock
+  needs its own `settle()` before a still is taken — the same fix `StructureView`, `MiniPlayerView`
+  and `BootScreen` each needed for the same reason.
 - **Dequeuing in mode 2 must not delete songs from the library.**
 - **BST deletion with two children, and duplicate song titles** — the two places this breaks.
   Both are covered by tests; keep them passing.
@@ -2539,6 +2812,19 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
 - **Not every asset is pixel art.** Check before applying ground rule 8 to it: a flat-block sheet
   wants an integer scale with smoothing off, a 1830-colour illustration wants to be fitted like
   album art. `Cartridge.png` is the second kind and is the only one so far.
+- **Swapping `scene.setRoot` takes the title bar with it**, now that the header is the title bar.
+  Anything that replaces what is on screen has to swap the shell's *centre*; replacing the root
+  leaves a window that cannot be moved or closed until the same key is pressed again. This is what
+  `F5` did.
+- **A `Parent` only lays out when something marked it dirty.** A method that changes plain fields and
+  then calls `applyCss()` / `layout()` to redraw silently does nothing — the previous frame stays on
+  the canvas, which reads as the state never having changed rather than as the redraw never having
+  happened. Call `requestLayout()` first. `BootScreen.previewAt` was written wrong this way and the
+  only symptom was a screenshot of the wrong phase.
+- **FNV-1a avalanches poorly in its high bits**, so a seeded effect that takes its randomness from
+  the top of an FNV hash over two small integers is not random at all — measured, *every* band of the
+  boot glitch cleared its displacement threshold. Use the SplitMix64 finalizer for a mixer over small
+  seeds; keep FNV for identity hashing, where `Course` uses it correctly.
 - **A `Canvas` in front of a control eats its clicks**, over the canvas's whole rectangle, however
   little it has drawn. The control still hovers and still does nothing, and the keyboard path keeps
   working so every key-driven test stays green. `setMouseTransparent(true)` on any canvas that

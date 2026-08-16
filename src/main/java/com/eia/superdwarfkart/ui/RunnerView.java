@@ -17,6 +17,7 @@ import com.eia.superdwarfkart.game.Obstacle;
 import com.eia.superdwarfkart.game.RunnerGame;
 import com.eia.superdwarfkart.game.ScoreEntry;
 import com.eia.superdwarfkart.game.ScoreKeeper;
+import com.eia.superdwarfkart.game.ScriptedDriver;
 import com.eia.superdwarfkart.game.SpeedClass;
 import com.eia.superdwarfkart.game.Star;
 import com.eia.superdwarfkart.model.Song;
@@ -371,6 +372,131 @@ public class RunnerView extends BorderPane {
      */
     private static final double HIT_FLASH_PULSES = 3;
 
+    // ------------------------------------------------------------------
+    // The combo
+    // ------------------------------------------------------------------
+
+    /**
+     * The colour the combo owns: the picture's wash, the meter, the multiplier and the horizon's
+     * standing glow.
+     *
+     * <p><strong>{@code PRIMARY}, the palette's yellow, and it used to be {@code ACCENT}.</strong>
+     * The argument for the accent was that the horizon already flashes to it on every beat, so a
+     * screen sliding that way reads as the beat taking over the picture rather than as a colour
+     * arriving from nowhere. What that reasoning missed is that the accent is the palette's
+     * <em>cool</em> bright role - over this backdrop a cyan wash reads as the light changing, where
+     * the yellow reads as the picture being lit, and at the alpha this is capped at the difference
+     * is most of the effect. The yellow is also already the colour of everything the combo is
+     * multiplying: the coin tally, the score plate and the star's own timer.
+     *
+     * <p>Named once and used everywhere the combo appears, so the wash, the meter and the horizon
+     * cannot drift apart - and so {@code RunnerComboHeatTest} measures the separations against the
+     * role actually being laid over the road rather than against one written down twice.
+     *
+     * <p>It is not one of the four protected roles, which is what keeps the choice safe: leaning on
+     * it cannot make a coin look like a bump. It <em>is</em> the colour of a pickup's own flash, so
+     * the two would compete if the standing tint were strong - which is the other reason the
+     * standing part stays low and {@link #COMBO_BEAT_SURGE} carries the effect.
+     */
+    static final PaletteRole COMBO_ROLE = PaletteRole.PRIMARY;
+
+    /**
+     * How far the whole picture <strong>sits</strong> pushed towards {@link #COMBO_ROLE} at a full
+     * combo.
+     *
+     * <p>A wash over the finished frame, exactly like the beat and the event flashes, and for the
+     * same reason: the combo must never reach the geometry.
+     *
+     * <p><strong>Low, and it was measured down from more than twice as much.</strong> The scripted
+     * driver in the smoke test spends <em>ninety percent</em> of a clean 50cc run pinned at the top
+     * of the meter - which is the combo working exactly as intended, a clean run being the whole
+     * thing it rewards, but it means the standing tint is what the game looks like almost all of the
+     * time for anyone driving it well. At the 0.20 this started at that stopped reading as an earned
+     * state and started reading as a mood nobody chose, and it buried the beat's own washes
+     * underneath it. So the standing part is kept faint and {@link #COMBO_BEAT_SURGE} carries the
+     * effect: excitement is motion, not a filter.
+     *
+     * <p>Raised from 0.10 with the move to {@link #COMBO_ROLE}, on a request for a combo that shows
+     * more. The ninety-percent argument above still holds and is why this went up by three
+     * hundredths where the surge went up by six.
+     */
+    private static final double COMBO_TINT_ALPHA = 0.13;
+
+    /**
+     * How much of {@link #COMBO_ROLE} the beat adds on top at a full combo.
+     *
+     * <p>This is what "excited" actually means here, and it is the half of the effect a player
+     * actually notices: as the meter fills, each beat pulls the whole picture towards the combo's
+     * colour and lets it go, so a good run visibly rides the music where a broken one does not.
+     *
+     * <p><strong>Added rather than scaling the standing tint</strong>, so its strength is linear in
+     * the heat while the standing tint is squared. Multiplying the two together made the middle of
+     * the meter a cube of a small number - invisible at a combo of five, which is exactly where the
+     * player most needs to see that something is being built.
+     *
+     * <p>The rate is the track's own beat and nothing else - about 2 Hz on a 120 BPM track - so it
+     * stays inside the 3 Hz cap on beat reactivity without needing an oscillator of its own to be
+     * clamped, and it stops with the music because the pulse does.
+     *
+     * <p>Together with the standing tint this puts the heaviest possible frame - a full combo on the
+     * beat - at <strong>0.33</strong>, against the 0.35 an {@code ABOVE_CONTENT} overlay layer is
+     * capped at. That ceiling is the one number here that is not a matter of taste, so the surge
+     * took the whole of the headroom the standing tint left rather than the other way round.
+     */
+    private static final double COMBO_BEAT_SURGE = 0.20;
+
+    /**
+     * How far the combo may light the horizon on its own, of the whole way to {@link #COMBO_ROLE}.
+     *
+     * <p>Short of 1 deliberately. The horizon is the widest continuous thing on screen and it is
+     * where the beat has always been read from; let the heat take it the whole way and a full combo
+     * would leave it permanently lit, with the beat flash having nowhere further to go and
+     * disappearing at the exact moment the game is at its most exciting.
+     */
+    private static final double COMBO_HORIZON_SHARE = 0.75;
+
+    /**
+     * How long the heat takes to reach a new combo level, in seconds.
+     *
+     * <p>Interpolated from a start value and a start time off the game clock, never accumulated per
+     * frame - the same arrangement as the lane glide and the event flash, and it pauses with the
+     * music for free. Without it the tint steps once per coin, which on a fast class is a visible
+     * jolt several times a second in the corner of the eye; with it the screen <em>slides</em>
+     * towards the accent, which is the whole of the effect the combo is meant to have.
+     */
+    private static final double COMBO_GLIDE_SECONDS = 0.35;
+
+    /** How tall one block of the combo meter is, which is its step <em>along</em> the meter. */
+    private static final double COMBO_BLOCK = 18;
+
+    /**
+     * How wide one block of the combo meter is, across the bar.
+     *
+     * <p>Wider than it is tall, which is what makes a stack of them read as one column filling up
+     * rather than as ten squares in a line.
+     *
+     * <p>This is the only dimension that can cost the road anything, and it does not: the road is
+     * {@link #ROAD_HALF_FRACTION} either side of the centre, so its widest point - the racer's own
+     * line - ends at nine tenths of the canvas, and the bar's left edge sits past that. The meter is
+     * centred on the edge, where the road is narrower still.
+     */
+    private static final double COMBO_BLOCK_WIDTH = 32;
+
+    /** Gap between two blocks of the combo meter, in pixels. */
+    private static final double COMBO_BLOCK_GAP = 4;
+
+    /**
+     * Point size of the multiplier under the combo meter.
+     *
+     * <p>Larger than the rest of the head-up display, and the one number here that earns it: the
+     * blocks say how far along the streak is and only this says what it is paying. A whole number of
+     * pixels, like every size in this interface - a pixel font at a fraction is a blurred one.
+     */
+    private static final double COMBO_LABEL_SIZE = 16;
+
+    /** Gap above and below the combo meter's column, for its caption and its multiplier. */
+    private static final double COMBO_LABEL_GAP = 10;
+
     /** How tall a wall's hazard band is at the racer, in pixels. */
     private static final double BARRIER_HEIGHT_NEAR = 34;
 
@@ -457,6 +583,28 @@ public class RunnerView extends BorderPane {
 
     /** How many times the flash pulses on its way out; 0 is a plain fade. */
     private double flashPulses;
+
+    // ------------------------------------------------------------------
+    // The combo heat
+    // ------------------------------------------------------------------
+
+    /**
+     * The combo the picture is currently drawn for, so a change to it is noticed exactly once.
+     *
+     * <p><strong>Read off the tally per frame rather than pushed by a listener</strong>, which is
+     * the opposite of what the events do and is right for this one: the heat is a continuous value
+     * being glided towards a target, so a frame dropped on the way costs it a frame of glide and
+     * nothing else. The events cannot be handled that way - a coin collected and a bump taken
+     * inside one frame would leave a diff showing only the bump - and this deliberately does not
+     * care about the intermediate values it may have skipped.
+     */
+    private int comboShown;
+
+    /** The heat when the combo last changed, so the glide starts from where the picture actually is. */
+    private double heatFrom;
+
+    /** When the combo last changed, in playback seconds, or negative infinity before the first. */
+    private double heatChangedAt = Double.NEGATIVE_INFINITY;
 
     /**
      * Set while the smoke test is drawing a still of a moment that is not being played.
@@ -986,6 +1134,10 @@ public class RunnerView extends BorderPane {
      * the two or three seconds the smoke test has actually played is a picture of an empty road,
      * which says nothing about the one thing worth looking at.
      *
+     * <p><strong>The clock is jumped, so the racer is left in a known state</strong> - middle lane,
+     * on the ground, nothing collected. That is what the smoke test's control checks need to fire a
+     * key at; {@link #previewDrivenTo(double)} is the one to photograph.
+     *
      * <p>Safe because the frame loop reads the clock afresh on its next tick: this moves the view
      * for one frame and the next real tick puts it back.
      *
@@ -1000,6 +1152,54 @@ public class RunnerView extends BorderPane {
         } finally {
             previewing = false;
         }
+    }
+
+    /**
+     * Draws the course at a moment with the run <strong>driven</strong> up to it, for a screenshot.
+     *
+     * <p>{@link #previewAt(double)} jumps the clock, which resolves everything behind the playhead
+     * as skipped - the correct rule, and what stops a course being collected by dragging the seek
+     * bar, but it means the picture comes out with a zeroed head-up display: no coins, an empty
+     * combo meter and a rank of D over a road nobody has driven. Every readout in that corner is
+     * only worth photographing once something has happened to it.
+     *
+     * <p><strong>It is deliberately not what the control checks use.</strong> The moment being
+     * photographed is chosen to be a wall, and a wall is the one thing the scripted driver jumps -
+     * so this leaves the racer airborne and off the middle lane by design, and a jump key fired at
+     * it would be refused by a jump already running and reported as a control that never arrived.
+     *
+     * @param seconds where in the track to draw
+     */
+    public void previewDrivenTo(double seconds) {
+        previewing = true;
+        try {
+            syncCourse();
+            ScriptedDriver.driveTo(game, seconds);
+            settleCombo();
+            redraw();
+        } finally {
+            previewing = false;
+        }
+    }
+
+    /**
+     * Puts the combo heat where a run that had held this streak would have taken it.
+     *
+     * <p>The heat glides over {@link #COMBO_GLIDE_SECONDS} from wherever the picture was, and the
+     * picture before a preview was nowhere - so the first frame drawn after driving a whole course
+     * finds the combo at ten and the heat at zero, and starts easing. In a live run that is exactly
+     * right and lasts a third of a second; in a still it is the whole photograph. Without this the
+     * one picture of the game in {@code docs/screenshots/} shows a full meter over a screen with no
+     * light on it whatsoever, which is a picture of the effect being broken.
+     *
+     * <p>Same reason {@code StructureView.settle()} and {@code MiniPlayerView.previewAt} exist: a
+     * smoke test holds the interface thread, so no second frame is ever drawn to glide into.
+     */
+    private void settleCombo() {
+        comboShown = game.score().combo();
+        heatFrom = comboTarget(comboShown);
+        // Infinitely long ago, so the glide is over however the clock is then read.
+        heatChangedAt = Double.NEGATIVE_INFINITY;
     }
 
     // ------------------------------------------------------------------
@@ -1020,6 +1220,8 @@ public class RunnerView extends BorderPane {
 
         double now = game.now();
         double pulse = beatPulse(now);
+        trackCombo(now);
+        double heat = comboHeat(now);
         double horizonY = Math.round(height * HORIZON_FRACTION);
         double groundY = height - BOTTOM_MARGIN;
         double depth = groundY - horizonY;
@@ -1047,7 +1249,7 @@ public class RunnerView extends BorderPane {
             gc.translate(-width / 2, -height / 2);
         }
 
-        drawSky(gc, width, horizonY, pulse);
+        drawSky(gc, width, horizonY, pulse, heat);
         drawRoad(gc, width, height, horizonY, depth, halfNear, now);
         drawEntities(gc, width, horizonY, depth, halfNear, groundY, now);
         drawRacer(gc, width, halfNear, groundY, now);
@@ -1062,10 +1264,22 @@ public class RunnerView extends BorderPane {
         // Over the whole picture and under the head-up display: the beat and the last thing that
         // happened are things the road is seen *through*, and neither may make a score unreadable.
         // Outside the zoom, so a full-canvas wash stays a full-canvas wash.
+        //
+        // The combo goes on *over* the beat, and the order is not arbitrary - it was the other way
+        // round first and the two cancelled. The beat wash darkens hardest at the instant of the
+        // strike, which is exactly when the combo's own surge peaks, so an accent laid down
+        // underneath it was dimmed away precisely when it was meant to be seen: the beat then looked
+        // identical at every combo level, which is the whole of what this was for. Over the top, a
+        // strong beat at a full combo is a dark frame in the combo's colour, and that is the picture
+        // getting excited rather than merely getting darker.
+        //
+        // The bump's alarm stays last. It is the one event the player may have missed the cause of,
+        // and nothing may sit on top of it.
         drawBeatWash(gc, width, height, pulse);
+        drawComboHeat(gc, width, height, heat, pulse);
         drawEventFlash(gc, width, height, now);
 
-        drawHud(gc, width, height);
+        drawHud(gc, width, height, heat, pulse, now);
         drawControlsHint(gc, width, height, now);
         drawBanner(gc, width, height);
 
@@ -1220,6 +1434,121 @@ public class RunnerView extends BorderPane {
     }
 
     /**
+     * Notices that the combo has moved and starts the heat gliding towards its new level.
+     *
+     * <p>Called once at the top of the frame rather than from inside whichever draw wants the heat,
+     * so every part of the picture is drawn for one value: the horizon, the wash and the meter all
+     * disagreeing by a frame is exactly the sort of thing nobody can name and everybody can see.
+     *
+     * @param now the playback position, in seconds
+     */
+    private void trackCombo(double now) {
+        int combo = game.score().combo();
+        if (combo == comboShown) {
+            return;
+        }
+        // From where the picture actually is, not from the level just left, so a combo climbing
+        // faster than the glide runs on smoothly instead of restarting from a step behind.
+        heatFrom = comboHeat(now);
+        comboShown = combo;
+        heatChangedAt = now;
+    }
+
+    /**
+     * How excited the picture is right now, 0 with no combo running and 1 at the top of the meter.
+     *
+     * <p>Timed from the game clock, so a pause freezes the heat exactly where the run froze rather
+     * than letting the screen cool down behind a stopped road.
+     *
+     * @param now the playback position, in seconds
+     * @return the eased heat, 0 to 1
+     */
+    private double comboHeat(double now) {
+        double target = comboTarget(comboShown);
+        double elapsed = (now - heatChangedAt) / COMBO_GLIDE_SECONDS;
+        if (!(elapsed < 1)) {
+            // Also catches the infinity before the first change, and a seek backwards past one.
+            return target;
+        }
+        return heatFrom + (target - heatFrom) * smoothstep(Math.max(0, elapsed));
+    }
+
+    /**
+     * Eases a linear fraction so a movement starts and stops gently.
+     *
+     * <p>The runner has its own copy of this for the lane glide and it is deliberately not shared:
+     * {@code game/} holds no JavaFX precisely so that it can be tested without one, and widening a
+     * package-private helper into its public surface to save three lines would be paying for that
+     * in the wrong currency.
+     *
+     * @param t linear progress in 0..1
+     * @return eased progress in 0..1
+     */
+    private static double smoothstep(double t) {
+        double at = Math.clamp(t, 0d, 1d);
+        return at * at * (3 - 2 * at);
+    }
+
+    /**
+     * Where a combo sits on the meter.
+     *
+     * <p>Zero at a combo of one, because a streak of one is not a streak - a pickup is worth exactly
+     * what it was worth before, and lighting the screen for it would say the multiplier had started
+     * when it had not.
+     *
+     * @param combo the streak, 0 to {@link ScoreKeeper#MAX_COMBO}
+     * @return its share of the meter, 0 to 1
+     */
+    static double comboTarget(int combo) {
+        return Math.clamp((combo - 1) / (double) (ScoreKeeper.MAX_COMBO - 1), 0d, 1d);
+    }
+
+    /**
+     * Washes the whole screen towards {@link #COMBO_ROLE} as the combo builds.
+     *
+     * <p>Two parts over one colour. The <em>standing</em> tint is squared, so the first few pickups
+     * barely touch the picture and only the top of the meter is worth noticing on its own; the
+     * <em>beat</em> lift is linear in the heat, so the middle of the meter has something to show at
+     * all. See the two constants for why that split is what makes a combo of five visible.
+     *
+     * <p>Nothing here moves: the road's width and its scroll rate remain functions of the speed
+     * class alone, exactly as {@link #PULSE_SECONDS} requires. What the combo changes is the light
+     * over the finished frame and the meter reporting it, and nothing else.
+     *
+     * @param gc     the context to draw into
+     * @param width  canvas width
+     * @param height canvas height
+     * @param heat   the combo heat, 0 to 1
+     * @param pulse  the beat flash, 0 to 1
+     */
+    private static void drawComboHeat(GraphicsContext gc, double width, double height, double heat,
+                                      double pulse) {
+        if (heat <= 0) {
+            return;
+        }
+        gc.setFill(color(COMBO_ROLE, comboAlpha(heat, pulse)));
+        gc.fillRect(0, 0, width, height);
+    }
+
+    /**
+     * How much accent the combo is laying over the picture.
+     *
+     * <p>Its own method so it can be measured. What the number has to be is not a matter of taste:
+     * this wash goes over the entities, and the palette's coins and bumps are two of the four roles
+     * whose whole job is to stay told apart. A tint that quietly closed the gap between them would
+     * throw nothing, look fine in a screenshot, and fail in front of the room at exactly the moment
+     * the run was going well. {@code RunnerComboHeatTest} holds the bar.
+     *
+     * @param heat  the combo heat, 0 to 1
+     * @param pulse the beat flash, 0 to 1
+     * @return the opacity to lay {@link #COMBO_ROLE} over the frame at
+     */
+    static double comboAlpha(double heat, double pulse) {
+        double at = Math.clamp(heat, 0d, 1d);
+        return at * at * COMBO_TINT_ALPHA + Math.clamp(pulse, 0d, 1d) * at * COMBO_BEAT_SURGE;
+    }
+
+    /**
      * Lights the whole screen in a role's colour after something happened.
      *
      * <p>Called from the run's listeners, so it fires exactly once per event rather than being
@@ -1320,8 +1649,10 @@ public class RunnerView extends BorderPane {
      * @param width    canvas width
      * @param horizonY where the road vanishes
      * @param pulse    the beat flash, 0 to 1
+     * @param heat     the combo heat, 0 to 1
      */
-    private void drawSky(GraphicsContext gc, double width, double horizonY, double pulse) {
+    private void drawSky(GraphicsContext gc, double width, double horizonY, double pulse,
+                         double heat) {
         gc.setFill(color(PaletteRole.BACKGROUND));
         gc.fillRect(0, 0, width, horizonY);
 
@@ -1340,9 +1671,25 @@ public class RunnerView extends BorderPane {
 
         // The horizon line carries the beat. It is the widest continuous thing on screen, so a
         // flash there reads from the back of a room where a flicker on a sprite does not.
-        gc.setFill(pulse > 0
-                ? palette().mix(PaletteRole.OUTLINE, PaletteRole.ACCENT, pulse)
+        //
+        // The combo raises the floor it flashes from rather than adding a light of its own, so a
+        // good run has the horizon already glowing before the beat lands on it - one line, one
+        // meaning - and the share is short of the whole way so the beat always has somewhere left
+        // to go.
+        //
+        // What the combo does change is the colour that light is: the line lifts towards the beat's
+        // accent with no streak running and migrates to the combo's own colour as the meter fills.
+        // The alternative - a yellow floor flashing to cyan - puts a hue swing on the widest thing
+        // on screen at two a second, which reads as a fault rather than as a beat. Here the hue
+        // moves only as fast as the heat glides, and at a full combo the horizon is simply the
+        // colour the whole picture is being washed in.
+        double lit = Math.max(pulse, heat * COMBO_HORIZON_SHARE);
+        Color glow = palette().mix(PaletteRole.ACCENT, COMBO_ROLE, heat);
+        gc.setFill(lit > 0
+                ? GbaColor.snap(color(PaletteRole.OUTLINE).interpolate(glow, lit))
                 : color(PaletteRole.OUTLINE));
+        // Only the beat thickens it. The heat is a state and would leave the line permanently fat,
+        // which stops reading as a horizon.
         gc.fillRect(0, horizonY - 1, width, 2 + Math.round(2 * pulse));
     }
 
@@ -2171,7 +2518,8 @@ public class RunnerView extends BorderPane {
      * @param width  canvas width
      * @param height canvas height
      */
-    private void drawHud(GraphicsContext gc, double width, double height) {
+    private void drawHud(GraphicsContext gc, double width, double height, double heat, double pulse,
+                         double now) {
         ScoreKeeper score = game.score();
         double x = HUD_PADDING;
 
@@ -2188,7 +2536,7 @@ public class RunnerView extends BorderPane {
         y += HUD_SIZE + 8;
         gc.setFill(color(PaletteRole.TEXT_PRIMARY));
         gc.fillText("SCORE " + String.format("%05d", score.score()), x, y);
-        y += HUD_SIZE + 8;
+        y += HUD_SIZE + 10;
 
         gc.setFont(Fonts.pixel(TEXT_SIZE));
         gc.setFill(color(PaletteRole.TEXT_DIM));
@@ -2206,6 +2554,14 @@ public class RunnerView extends BorderPane {
 
         drawNowPlaying(gc, width);
 
+        // Up the right-hand edge and centred on it. It sat under the two numbers it multiplies
+        // until now, which is the shorter path to reading what it does - but a vertical bar is the
+        // shape a filling meter actually has, and there is no room for one down the left where the
+        // rank and the best run already are. Its place is held whether or not a combo is running: a
+        // meter that appeared when the streak started would be something arriving in the corner of
+        // the eye at the exact moment the player has stopped looking away from the road.
+        drawComboMeter(gc, width - HUD_PADDING - COMBO_BLOCK_WIDTH, height, score, heat, pulse, now);
+
         if (game.isStarred()) {
             drawStarTimer(gc, width, height);
         }
@@ -2217,6 +2573,117 @@ public class RunnerView extends BorderPane {
         String hint = "< > STEER   SPACE JUMP";
         gc.fillText(hint, width - HUD_PADDING - textWidth(hint, TEXT_SIZE),
                 height - HUD_PADDING);
+    }
+
+    /**
+     * Draws the combo as a vertical column of blocks, captioned, with the multiplier beneath it.
+     *
+     * <p>Blocks rather than a continuous bar, which is the same convention the rating meter in the
+     * library uses and is the readable one at this size: a filled fraction has to be measured
+     * against its own track, where nine lit squares out of ten are <em>counted</em> - and the number
+     * this is reporting is a small whole number, so it should be shown as one.
+     *
+     * <p><strong>It fills upwards</strong>, which is the direction every other meter in this
+     * application fills and the one a column of anything is read in. It is also what the L and R
+     * level bars flanking this same road do, so the eye needs no second convention for the one
+     * gauge sitting between them.
+     *
+     * <p>The empty blocks stay drawn, so how much is left is as legible as how much has been earned.
+     * At the top of the meter the whole column takes the beat, which is the only moment the meter
+     * itself moves - a column that pulsed the whole way up would be a thing flashing in the corner
+     * of the eye for most of a run.
+     *
+     * <p><strong>Centred on the height of the canvas</strong>, caption and multiplier included, so
+     * the assembly sits opposite the kart rather than hanging off the top of the window. That is
+     * also what keeps it clear of the three things the edges already carry - the song at the top,
+     * the star timer and the controls line along the bottom - at any window size, where an anchored
+     * meter has to be checked against each of them every time one of them moves.
+     *
+     * @param gc     the context to draw into
+     * @param x      left edge of the bar
+     * @param height canvas height, which the whole assembly is centred on
+     * @param score  the tally being reported
+     * @param heat   the combo heat, 0 to 1
+     * @param pulse  the beat flash, 0 to 1
+     * @param now    the playback position, in seconds
+     */
+    private void drawComboMeter(GraphicsContext gc, double x, double height, ScoreKeeper score,
+                                double heat, double pulse, double now) {
+        int filled = Math.min(score.combo(), ScoreKeeper.MAX_COMBO);
+        boolean full = filled >= ScoreKeeper.MAX_COMBO;
+        // Only at the top, and only on the beat. See above.
+        double beat = full ? pulse : 0;
+        double right = x + COMBO_BLOCK_WIDTH;
+        double meterHeight = ScoreKeeper.MAX_COMBO * (COMBO_BLOCK + COMBO_BLOCK_GAP)
+                - COMBO_BLOCK_GAP;
+
+        // The caption and the multiplier are part of what is being centred, or the column sits
+        // slightly high and the whole thing reads as having been placed by hand.
+        double assembly = TEXT_SIZE + COMBO_LABEL_GAP + meterHeight + COMBO_LABEL_GAP
+                + COMBO_LABEL_SIZE;
+        double top = Math.round((height - assembly) / 2) + TEXT_SIZE + COMBO_LABEL_GAP;
+
+        // Named, because a bare column of blocks on an edge that carries nothing else says nothing
+        // about what it is counting. It was legible without a caption while it sat under COINS and
+        // SCORE and it is not any more.
+        gc.setFont(Fonts.pixel(TEXT_SIZE));
+        gc.setFill(color(PaletteRole.TEXT_DIM, 0.7));
+        String caption = "COMBO";
+        gc.fillText(caption, Math.round(right - textWidth(caption, TEXT_SIZE)),
+                Math.round(top - COMBO_LABEL_GAP));
+
+        for (int block = 0; block < ScoreKeeper.MAX_COMBO; block++) {
+            // Index 0 is the bottom of the column, so the stack grows against gravity.
+            double blockY = top + (ScoreKeeper.MAX_COMBO - 1 - block)
+                    * (COMBO_BLOCK + COMBO_BLOCK_GAP);
+            if (block < filled) {
+                // Towards the palette's near-white on the beat rather than to a brighter colour,
+                // for the same reason the beat's own release lifts that way: it is the one direction
+                // that reads as light in a mood of any brightness.
+                gc.setFill(beat > 0
+                        ? palette().mix(COMBO_ROLE, PaletteRole.TEXT_PRIMARY, beat * 0.6)
+                        : color(COMBO_ROLE));
+            } else {
+                // The empty blocks warm slightly with the heat, so the column reads as one object
+                // filling up rather than as two stacks of different things sitting on each other.
+                gc.setFill(palette().mix(PaletteRole.SHADOW, COMBO_ROLE, 0.12 + 0.18 * heat)
+                        .deriveColor(0, 1, 1, 0.85));
+            }
+            gc.fillRect(x, Math.round(blockY), COMBO_BLOCK_WIDTH, COMBO_BLOCK);
+        }
+
+        gc.setStroke(color(PaletteRole.OUTLINE));
+        gc.setLineWidth(1);
+        gc.strokeRect(x - 0.5, top - 0.5, COMBO_BLOCK_WIDTH + 1, meterHeight + 1);
+
+        // The multiplier in words, because the blocks say how far along the streak is and only the
+        // number says what it is paying. Under the column rather than beside it: there is nothing
+        // to the right of the bar but the edge of the window. Dim at x1 - there is no combo
+        // running, and printing it in the combo's own colour would announce a multiplier that is
+        // not multiplying anything.
+        String label = "x" + score.multiplier();
+        gc.setFont(Fonts.pixel(COMBO_LABEL_SIZE));
+        gc.setFill(score.combo() > 1
+                ? (full ? rainbowSafe(now) : color(COMBO_ROLE))
+                : color(PaletteRole.TEXT_DIM, 0.6));
+        gc.fillText(label, Math.round(right - textWidth(label, COMBO_LABEL_SIZE)),
+                Math.round(top + meterHeight + COMBO_LABEL_GAP + COMBO_LABEL_SIZE));
+    }
+
+    /**
+     * The colour the multiplier is written in once the meter is full.
+     *
+     * <p>The star's own cycle, which is the application's existing way of saying "this is as good as
+     * it gets" and is made of palette roles rather than of hues - so a mood restyles it along with
+     * everything else. Slowed to a walk: the star runs for eight beats and a full combo can run for
+     * minutes, and at the star's rate that is a colour strobing in the corner of the eye for the
+     * whole of a good run.
+     *
+     * @param now the playback position, in seconds
+     * @return the colour to write the multiplier in
+     */
+    private static Color rainbowSafe(double now) {
+        return rainbow(now * 0.25, 1);
     }
 
     /**

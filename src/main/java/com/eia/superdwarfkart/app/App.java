@@ -5,6 +5,7 @@ import com.eia.superdwarfkart.analysis.BeatmapIndex;
 import com.eia.superdwarfkart.analysis.BeatmapService;
 import com.eia.superdwarfkart.assets.AssetKind;
 import com.eia.superdwarfkart.assets.AssetRegistry;
+import com.eia.superdwarfkart.assets.SpriteSheet;
 import com.eia.superdwarfkart.audio.AudioSource;
 import com.eia.superdwarfkart.audio.LevelAnalyzer;
 import com.eia.superdwarfkart.audio.Levels;
@@ -16,6 +17,8 @@ import com.eia.superdwarfkart.game.Entity;
 import com.eia.superdwarfkart.game.Lane;
 import com.eia.superdwarfkart.game.Obstacle;
 import com.eia.superdwarfkart.game.RunnerGame;
+import com.eia.superdwarfkart.game.ScoreKeeper;
+import com.eia.superdwarfkart.game.ScriptedDriver;
 import com.eia.superdwarfkart.game.SpeedClass;
 import com.eia.superdwarfkart.model.Library;
 import com.eia.superdwarfkart.model.ModeId;
@@ -40,6 +43,7 @@ import com.eia.superdwarfkart.playback.PlaybackMode;
 import com.eia.superdwarfkart.playback.Player;
 import com.eia.superdwarfkart.playback.ShuffleMode;
 import com.eia.superdwarfkart.ui.BeatmapTimeline;
+import com.eia.superdwarfkart.ui.BootScreen;
 import com.eia.superdwarfkart.ui.ComplexityPanel;
 import com.eia.superdwarfkart.ui.CoverArt;
 import com.eia.superdwarfkart.ui.SpotifyView;
@@ -72,6 +76,8 @@ import javafx.scene.control.Label;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -218,7 +224,26 @@ public class App extends Application {
     /** Set when the user chose the library by hand, so pressing play does not overrule them. */
     private boolean libraryPinned;
 
+    /**
+     * The window itself: the title bar, the border, and whatever is currently being shown.
+     *
+     * <p>Separate from {@link #root} because presentation mode swaps what is inside the window and
+     * must not swap the window. Before this existed the header was inside {@code root} and F5
+     * replaced the lot, which was harmless while the operating system drew the chrome and takes the
+     * title bar away with it now that the header <em>is</em> the chrome - leaving a window that
+     * cannot be moved or closed until F5 is pressed again.
+     */
+    private BorderPane shell;
+
     private BorderPane root;
+    private BootScreen bootScreen;
+
+    /** The title bar, kept so the smoke test can measure whether its captions still fit. */
+    private HBox header;
+
+    /** Set while the boot screen is up, so no shortcut reaches a window nobody has opened yet. */
+    private boolean booting = true;
+
     private PlaybackBar playbackBar;
     private VBox sideColumn;
     private Button structureToggle;
@@ -415,26 +440,78 @@ public class App extends Application {
 
         root = new BorderPane();
         root.getStyleClass().add("root-pane");
-        root.setTop(new VBox(buildHeader(), playbackBar, beatmapTimeline));
+        root.setTop(new VBox(playbackBar, beatmapTimeline));
         root.setLeft(new HBox(sideRail, sideColumn));
         root.setCenter(libraryView);
         root.setRight(meters);
 
-        Scene scene = new Scene(root, AppConfig.MAIN_WIDTH, AppConfig.MAIN_HEIGHT);
+        // The window: its own title bar, its own border, and one slot in the middle for whatever is
+        // being shown. Everything the operating system used to draw is drawn here instead, so the
+        // window looks the same on macOS and on Windows and neither breaks the theme.
+        shell = new BorderPane();
+        shell.getStyleClass().add("pixel-window");
+        // Built now - it wires the window's drag and its buttons - but not attached yet. The boot
+        // screen gets the whole window: it is a console with the power just switched on, and a
+        // title bar across the top of that is the application admitting it was a window all along.
+        buildHeader();
+
+        bootScreen = new BootScreen(assets);
+        bootScreen.setOnInserted(this::finishBooting);
+        bootScreen.setOnLoading(this::bootLoadSpotify);
+        // There is no title bar to drag by while this is up, so the black itself is the handle. The
+        // cartridge consumes its own presses, so dragging it never moves the window.
+        PixelDialog.dragBy(bootScreen, stage);
+        shell.setCenter(bootScreen);
+        // Nothing behind the boot screen may draw. Five canvases started their timers as they were
+        // constructed above, and an AnimationTimer does not stop because the node it paints cannot
+        // be seen - the same fault the companion window and the F4 fold each had to fix.
+        suspendMainViews();
+
+        Scene scene = new Scene(shell, AppConfig.MAIN_WIDTH, AppConfig.MAIN_HEIGHT);
+        // The stage is transparent, so the window's visible edge is the border the shell draws.
+        scene.setFill(Color.TRANSPARENT);
         Theme.apply(scene);
         installShortcuts(scene);
 
+        // Before show(), which is the only time a stage will accept it. The title stays even though
+        // nothing draws it any more: it is what the dock and the task switcher show.
+        stage.initStyle(StageStyle.TRANSPARENT);
         stage.setTitle(AppConfig.APP_NAME);
         stage.setScene(scene);
+        // Filling the screen from the start, because the boot screen is a console powering up and a
+        // console does not power up in a window. MAIN_WIDTH and MAIN_HEIGHT stay as the size the
+        // window restores to, and the layout has to be right at both - which is what the maximise
+        // button in the title bar is for.
+        if (!Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
+            // Not during a smoke test: it measures the middle of the window against SIDE_COLUMN_WIDTH
+            // and photographs every view, and both of those want the size the constants describe
+            // rather than whatever display the run happens to be on.
+            stage.setMaximized(true);
+        }
         stage.show();
 
         if (Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
             runSmokeTest(stage, scene, pixelFont);
+        }
+    }
+
+    /**
+     * Hands the window over to the application, once the cartridge is in.
+     *
+     * <p>Lands on the library, paused. Inserting the cartridge is the start ritual and asking a
+     * second question straight afterwards would be one too many - but it is a statement about
+     * <em>starting up</em>, not about playback: pressing play still brings the road up on its own,
+     * exactly as it did before.
+     */
+    private void finishBooting() {
+        if (!booting) {
             return;
         }
-        // After the window is on screen, so the dialog has something to centre on and the user can
-        // see what they are being asked about.
-        Platform.runLater(() -> offerToStart(stage));
+        booting = false;
+        // The title bar arrives with the application, not before it.
+        shell.setTop(header);
+        shell.setCenter(root);
+        resumeMainViews();
     }
 
     /**
@@ -523,34 +600,6 @@ public class App extends Application {
     }
 
     /**
-     * Asks whether to start playing, once, on the first launch of a session.
-     *
-     * <p>Nothing plays until somebody says so. Opening a music player and having it start making
-     * noise at whatever the shuffle picked is the behaviour every one of them is disliked for, and
-     * here it would also drop the user straight into a race they had not asked to drive.
-     *
-     * <p>Accepting starts the music, which brings the road up on its own - see
-     * {@link RunnerView#setOnRaceStarted}. Declining leaves the library on screen, paused, with
-     * everything still reachable.
-     *
-     * @param stage the window to centre the question on
-     */
-    private void offerToStart(Stage stage) {
-        Song song = player.current();
-        if (song == null) {
-            return;
-        }
-        boolean start = PixelDialog.confirm(stage, "START YOUR ENGINES",
-                song.getTitle() + "\nby " + song.getArtist()
-                        + "\n\nPlay this and drive its course?"
-                        + "\n\nF6 swaps the road for the library at any time.");
-        if (start) {
-            engine.play();
-            playbackBar.refresh();
-        }
-    }
-
-    /**
      * Wires the keyboard shortcuts.
      *
      * <p>They are split across the two phases of event delivery on purpose, because the two
@@ -574,11 +623,23 @@ public class App extends Application {
      */
     private void installShortcuts(Scene scene) {
         scene.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
+            // Nothing on the window is reachable until the cartridge is in. Without this, the very
+            // first key of the session could collapse the application to a companion strip over a
+            // boot screen, or swap in a road that is not on screen.
+            if (booting) {
+                // Except the way out. The boot screen draws no title bar, so it draws no close
+                // button either, and a window with no visible way to shut it needs an invisible
+                // one - Escape, which is what every other frameless window here uses to say no.
+                if (event.getCode() == KeyCode.ESCAPE) {
+                    Platform.exit();
+                }
+                return;
+            }
             if (event.getCode() == STRUCTURE_KEY) {
                 toggleStructureColumn();
                 event.consume();
             } else if (event.getCode() == PRESENTATION_KEY) {
-                togglePresentation(scene);
+                togglePresentation();
                 event.consume();
             } else if (event.getCode() == RACE_KEY) {
                 toggleRace();
@@ -587,7 +648,7 @@ public class App extends Application {
                 collapseToCompanion();
                 event.consume();
             } else if (event.getCode() == KeyCode.ESCAPE && presenting) {
-                togglePresentation(scene);
+                togglePresentation();
                 event.consume();
             } else if (event.getCode() == KeyCode.TAB && !typing(scene)) {
                 playbackBar.cycleMode();
@@ -596,6 +657,9 @@ public class App extends Application {
         });
 
         scene.addEventHandler(KeyEvent.KEY_PRESSED, event -> {
+            if (booting) {
+                return;
+            }
             switch (event.getCode()) {
                 case LEFT, TRACK_PREV -> {
                     player.previous();
@@ -704,15 +768,18 @@ public class App extends Application {
      * <p>The same node travels in both directions, so the tree keeps its pan, its zoom and any
      * walk in progress: entering presentation mode mid-answer must not reset what is being shown.
      *
-     * @param scene the scene whose root is swapped
+     * <p><strong>It swaps the shell's centre, not the scene's root.</strong> The header is the
+     * window's title bar now, so replacing the root would take the drag handle and the close button
+     * away with it and leave a window that could not be moved or closed until F5 was pressed a
+     * second time. The visualizer gets the stage less the title bar, which is the right trade.
      */
-    private void togglePresentation(Scene scene) {
+    private void togglePresentation() {
         if (presenting) {
             presentation.detach();
             // Back above the complexity panel, where it came from - even when the column is folded
             // away, so that unfolding finds it there rather than empty.
             sideColumn.getChildren().add(0, visualizer);
-            scene.setRoot(root);
+            shell.setCenter(root);
             presenting = false;
             updateVisualizerDrawing();
             return;
@@ -720,7 +787,7 @@ public class App extends Application {
         // Detach from the main layout first: a node cannot sit in two places at once.
         sideColumn.getChildren().remove(visualizer);
         presentation.attach(visualizer);
-        scene.setRoot(presentation);
+        shell.setCenter(presentation);
         presenting = true;
         // F5 is how somebody folded out of the way reaches the visualizer for a question, so this
         // has to pick the timer back up rather than assume it was left running.
@@ -734,9 +801,15 @@ public class App extends Application {
      * use {@link AppConfig#APP_NAME_SHORT} instead: at 44 characters in the 8-bit font the full
      * name is several times the width of that window.
      *
-     * @return the header node
+     * <p><strong>It is now the window's title bar as well as its header</strong>, because there is
+     * no system one any more. Rather than stack a second full-width strip above it - which would
+     * cost 40 pixels of an 800 pixel window to draw the name a second time - it gains what the
+     * chrome supplied: the three window buttons, and dragging by the strip itself.
+     *
+     * <p>Built early and attached late: it belongs to the application rather than to the boot
+     * screen, which gets the window to itself. See {@link #finishBooting()}.
      */
-    private HBox buildHeader() {
+    private void buildHeader() {
         Label name = new Label(AppConfig.APP_NAME);
         name.getStyleClass().add("app-name");
 
@@ -774,11 +847,79 @@ public class App extends Application {
         miniToggle.setFocusTraversable(false);
         viewToggle.setFocusTraversable(false);
 
-        HBox header = new HBox(14, name, spacer, structureToggle, miniToggle, viewToggle, version);
+        header = new HBox(14, name, spacer, structureToggle, miniToggle, viewToggle, version,
+                buildWindowButtons());
         header.setAlignment(Pos.CENTER_LEFT);
         header.setPadding(new Insets(14, 16, 14, 16));
         header.getStyleClass().add("app-header");
-        return header;
+
+        // The one sanctioned implementation - there must never be a second copy of those eight
+        // lines, because a window that cannot be moved is the single thing the missing chrome would
+        // actually be missed for.
+        PixelDialog.dragBy(header, mainStage);
+        // A maximised window has nowhere to be dragged to, and moving one by its own coordinates
+        // leaves it maximised at the wrong place. Consumed in a filter, which runs before the drag
+        // handler above; the target check is what keeps the buttons on the strip working, since a
+        // press on one of them is targeted at the button rather than at the strip.
+        header.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> {
+            if (mainStage.isMaximized() && event.getTarget() == header) {
+                event.consume();
+            }
+        });
+        header.addEventFilter(MouseEvent.MOUSE_DRAGGED, event -> {
+            if (mainStage.isMaximized() && event.getTarget() == header) {
+                event.consume();
+            }
+        });
+    }
+
+    /**
+     * Builds the minimise, maximise and close buttons.
+     *
+     * <p><strong>The close button is the load-bearing one.</strong> Before this the main window had
+     * no way to quit at all - the only {@code Platform.exit()} a user could reach was the companion
+     * window's, so taking the system chrome away without adding this would have left the application
+     * closable only by collapsing to the companion strip first.
+     *
+     * <p>Maximise exists because an undecorated stage loses the native zoom along with everything
+     * else. Its caption changes rather than its icon, since a caption that changes width would shove
+     * the buttons beside it along as it is pressed - which is exactly where the pointer already is.
+     *
+     * @return the three buttons in a row, furthest right where system chrome puts them
+     */
+    private HBox buildWindowButtons() {
+        Button minimise = new Button("_");
+        minimise.getStyleClass().add("window-button");
+        minimise.setTooltip(new Tooltip("Minimise"));
+        minimise.setOnAction(event -> mainStage.setIconified(true));
+
+        Button maximise = new Button("[ ]");
+        maximise.getStyleClass().add("window-button");
+        maximise.setTooltip(new Tooltip("Maximise or restore"));
+        maximise.setOnAction(event -> mainStage.setMaximized(!mainStage.isMaximized()));
+        // Driven by the stage rather than set in the handler, because the application maximises
+        // itself at start-up and a caption written only where the button is pressed would come up
+        // saying the opposite of what the window is doing. Both captions are three characters, so
+        // the two buttons beside it do not shift as it changes.
+        maximise.setText(mainStage.isMaximized() ? "[-]" : "[ ]");
+        mainStage.maximizedProperty().addListener(
+                (observable, was, now) -> maximise.setText(now ? "[-]" : "[ ]"));
+
+        Button quit = new Button("X");
+        quit.getStyleClass().addAll("window-button", "close-button");
+        quit.setTooltip(new Tooltip("Close"));
+        quit.setOnAction(event -> Platform.exit());
+
+        // Same rule as the three view toggles beside them: a focusable button in the header answers
+        // the first space bar of the session instead of play/pause, and these three sit at the end
+        // of the strip where the traversal would reach them.
+        minimise.setFocusTraversable(false);
+        maximise.setFocusTraversable(false);
+        quit.setFocusTraversable(false);
+
+        HBox buttons = new HBox(6, minimise, maximise, quit);
+        buttons.setAlignment(Pos.CENTER_RIGHT);
+        return buttons;
     }
 
     /**
@@ -1078,10 +1219,15 @@ public class App extends Application {
      * @param pixelFont whether the bundled font loaded
      */
     private void runSmokeTest(Stage stage, Scene scene, boolean pixelFont) {
+        // First, because the boot screen is what is on the window until a cartridge goes into it and
+        // every check below this line looks for the library.
+        boolean bootOk = reportBoot(scene);
+
         boolean libraryViewPresent = scene.getRoot().lookup(".library-view") != null;
         boolean tablePresent = scene.getRoot().lookup(".table-view") != null;
 
         System.out.println("[smoke] window shown      : " + stage.isShowing());
+        System.out.println("[smoke] window undecorated: " + (stage.getStyle() == StageStyle.TRANSPARENT));
         System.out.println("[smoke] window title      : " + stage.getTitle());
         System.out.println("[smoke] title matches     : " + AppConfig.APP_NAME.equals(stage.getTitle()));
         System.out.println("[smoke] stylesheets       : " + scene.getStylesheets().size());
@@ -1122,6 +1268,7 @@ public class App extends Application {
         boolean tabWorks = player.mode().id() != beforeTab;
         System.out.println("[smoke] tab               : " + beforeTab + " -> " + player.mode().id());
 
+        boolean headerOk = reportHeader(scene);
         boolean foldOk = reportStructureFold(scene);
 
         reportAudio();
@@ -1149,15 +1296,18 @@ public class App extends Application {
         boolean spotifyOk = reportSpotify();
 
         boolean ok = stage.isShowing()
+                && stage.getStyle() == StageStyle.TRANSPARENT
                 && AppConfig.APP_NAME.equals(stage.getTitle())
                 && !scene.getStylesheets().isEmpty()
                 && pixelFont
+                && bootOk
                 && libraryViewPresent
                 && tablePresent
                 && visualizer.view() != null
                 && visualizer.view().modeId() == player.mode().id()
                 && arrowWorks
                 && tabWorks
+                && headerOk
                 && foldOk
                 && companionOk
                 && spotifyOk;
@@ -1172,6 +1322,182 @@ public class App extends Application {
             Platform.exit();
         });
         close.play();
+    }
+
+    /**
+     * Drags the cartridge into the slot with real mouse events, and reports what happened.
+     *
+     * <p>Three things here can only be checked by doing it. Whether the press even reaches the
+     * cartridge is a routing question - a canvas in front of it would swallow every one of them
+     * while still hovering correctly, which is the fault that ate the companion window's transport
+     * clicks and which neither a screenshot nor a unit test can see. Whether the threshold is a
+     * threshold cannot be established by crossing it, so a short drag is made first and is expected
+     * to be refused. And whether the boot actually hands the window over is the whole feature.
+     *
+     * @param scene the scene the boot screen is in
+     * @return whether a short drag was refused and a long one booted
+     */
+    private boolean reportBoot(Scene scene) {
+        if (bootScreen == null) {
+            System.out.println("[smoke] boot screen       : ABSENT");
+            return false;
+        }
+        layoutNow(scene);
+
+        SpriteSheet sheet = bootScreen.cartridgeSheet();
+        String art = sheet.isPlaceholder()
+                ? "- missing, placeholder -"
+                : assets.firstEntry(AssetKind.CARTRIDGE)
+                        .map(entry -> entry.relativePath())
+                        .orElse("- unnamed -");
+        double inlet = sheet.footprint(0).map(foot -> foot.getWidth()).orElse(0d);
+        System.out.println("[smoke] boot cartridge    : " + art
+                + " (" + (int) sheet.frameWidth() + "x" + (int) sheet.frameHeight()
+                + ", inlet " + (int) inlet + ")");
+        System.out.println("[smoke] boot travel       : " + Math.round(bootScreen.travelPixels())
+                + " px to seat");
+
+        // The name goes on the cartridge's own label and nowhere else on this screen, so a label
+        // that could not be measured means the name is not on screen at all - which no assertion
+        // elsewhere would notice and which reads, in a picture, as artwork with nothing printed on
+        // it rather than as a measurement that was refused.
+        boolean labelled = sheet.darkRegion(0).isPresent();
+        System.out.println("[smoke] boot label        : "
+                + sheet.darkRegion(0)
+                        .map(rect -> (int) rect.getWidth() + "x" + (int) rect.getHeight()
+                                + " at (" + (int) rect.getMinX() + "," + (int) rect.getMinY()
+                                + "), name printed on it")
+                        .orElse("NO PANEL FOUND - the name has nowhere to go"));
+
+        Node handle = bootScreen.cartridgeHandle();
+        double travel = bootScreen.travelPixels();
+
+        // The one moment this screen exists in. Everything photographed after this point is the
+        // application behind it.
+        captureIfRequested(scene, "boot");
+
+        // Short of the threshold. It has to spring back, and nothing may start up.
+        fireDrag(handle, travel * (BootScreen.INSERT_THRESHOLD / 2));
+        boolean refused = !bootScreen.isSeated();
+        System.out.println("[smoke] boot short drag   : "
+                + (refused ? "refused, as it should be" : "SEATED BELOW THE THRESHOLD"));
+        // The spring-back is a Timeline and no pulse will arrive, so the cartridge is left exactly
+        // where the drag put it - which is the half-inserted picture worth having.
+        layoutNow(scene);
+        captureIfRequested(scene, "boot-partway");
+
+        // The glitch and the loading bar cannot be photographed by waiting for them: this method
+        // holds the interface thread, so the sequence's own timer never ticks. Both are asked for at
+        // a stated instant instead, the way the companion window's spinning record is.
+        bootScreen.previewAt(0.35, 0);
+        layoutNow(scene);
+        captureIfRequested(scene, "boot-glitch");
+        // previewAt draws a moment; it deliberately runs none of the sequence's side effects, or a
+        // screenshot would start a daemon. So the caption the real boot sets is put here by hand -
+        // otherwise the one shot of this phase shows the line blank and proves nothing about it.
+        bootScreen.setStatus("LOADING GO-LIBRESPOT...");
+        bootScreen.previewAt(1, 0.55);
+        layoutNow(scene);
+        captureIfRequested(scene, "boot-loading");
+
+        // And the real thing, past the threshold, run to its end by hand for the same reason.
+        fireDrag(handle, travel);
+        bootScreen.settle();
+        layoutNow(scene);
+        boolean booted = bootScreen.isBooted() && !booting;
+        boolean libraryUp = scene.getRoot().lookup(".library-view") != null;
+        System.out.println("[smoke] boot insert       : "
+                + (booted && libraryUp ? "seated, machine started, library shown"
+                        : booted ? "started but THE LIBRARY DID NOT APPEAR" : "DID NOTHING"));
+
+        return refused && booted && libraryUp && labelled;
+    }
+
+    /**
+     * Measures the title bar against the window it has to fit in.
+     *
+     * <p>The strip now carries the application name, three view toggles, the version and three
+     * window buttons, and in a font whose glyphs are one em wide that is a great deal of text on one
+     * row. What it does when it runs out of room is <em>not</em> throw: the spacer collapses and
+     * then the captions ellipsize, so the name reads {@code Super_Dwarf_Mario...} and the toggles
+     * lose the very key they are printed to advertise. Nothing reports it and it is easy to miss in
+     * a screenshot, because a truncated caption still looks deliberate.
+     *
+     * <p>The natural width is what is measured, not the laid-out width - the laid-out width always
+     * fits, which is exactly the problem.
+     *
+     * @param scene the scene the header is in
+     * @return whether the header's contents fit without being squeezed
+     */
+    private boolean reportHeader(Scene scene) {
+        if (header == null) {
+            System.out.println("[smoke] header fits       : ABSENT");
+            return false;
+        }
+        layoutNow(scene);
+        double wanted = header.prefWidth(-1);
+        double available = scene.getWidth();
+        boolean fits = wanted <= available;
+        System.out.println("[smoke] header fits       : " + Math.round(wanted) + " of "
+                + Math.round(available) + " px"
+                + (fits ? " (" + Math.round(available - wanted) + " px spare)"
+                        : " - OVERFLOWS BY " + Math.round(wanted - available) + " px"));
+        return fits;
+    }
+
+    /**
+     * Photographs the scene beside the given screenshot, when one was asked for.
+     *
+     * <p>For views that exist only for a moment. {@code captureEveryView} runs two seconds later
+     * from a timeline, by which time the boot screen has been gone since before the first check.
+     *
+     * @param scene  the scene to capture
+     * @param suffix what to call it, beside the base path
+     */
+    private void captureIfRequested(Scene scene, String suffix) {
+        String destination = System.getProperty(SCREENSHOT_PROPERTY);
+        if (destination == null || destination.isBlank()) {
+            return;
+        }
+        writeScreenshot(scene, derivedPath(destination, suffix));
+    }
+
+    /**
+     * Presses a node, drags it down by a distance and lets go.
+     *
+     * <p>Aimed at the node rather than at the scene, which is the opposite of {@link #fireKey}: the
+     * shortcuts are wired on the scene and are meant to run wherever the focus is, where a drag
+     * belongs to the thing being dragged and has to be delivered to it.
+     *
+     * @param target   the node to drag
+     * @param distance how far down to drag it, in pixels
+     */
+    private static void fireDrag(Node target, double distance) {
+        double startX = target.getLayoutBounds().getWidth() / 2;
+        double startY = target.getLayoutBounds().getHeight() / 2;
+        javafx.event.Event.fireEvent(target, mouse(MouseEvent.MOUSE_PRESSED, target, startX, startY));
+        javafx.event.Event.fireEvent(target,
+                mouse(MouseEvent.MOUSE_DRAGGED, target, startX, startY + distance));
+        javafx.event.Event.fireEvent(target,
+                mouse(MouseEvent.MOUSE_RELEASED, target, startX, startY + distance));
+    }
+
+    /**
+     * Builds one mouse event in the node's own coordinates.
+     *
+     * @param type   which event
+     * @param target the node it is aimed at
+     * @param x      where in the node, across
+     * @param y      where in the node, down
+     * @return the event
+     */
+    private static MouseEvent mouse(javafx.event.EventType<MouseEvent> type, Node target,
+            double x, double y) {
+        javafx.geometry.Point2D onScreen = target.localToScreen(x, y);
+        double screenX = onScreen == null ? x : onScreen.getX();
+        double screenY = onScreen == null ? y : onScreen.getY();
+        return new MouseEvent(type, x, y, screenX, screenY, MouseButton.PRIMARY, 1,
+                false, false, false, false, true, false, false, true, false, true, null);
     }
 
     /**
@@ -1269,6 +1595,60 @@ public class App extends Application {
         reportCatalogueSearch();
         reportCovers();
         return configOk;
+    }
+
+    /**
+     * Starts go-librespot while the loading bar runs, and reports how far it got.
+     *
+     * <p>The cartridge going in is the start ritual, and a console reading a cartridge is exactly
+     * the right cover for the one thing at startup that genuinely takes a moment. It is also the
+     * answer to the question the Spotify page kept raising: connecting was a step whose necessity
+     * nothing on screen explained, and the natural place to do it is the screen that already looks
+     * like something loading.
+     *
+     * <p><strong>The boot never waits for it.</strong> The bar runs its own length and hands over
+     * regardless — a daemon that is slow, absent, or waiting on a browser login must not be able to
+     * hold the application shut (ground rule 5). What the caption shows is how far it had got by
+     * the time the machine finished reading, and the Spotify page carries on from there.
+     */
+    private void bootLoadSpotify() {
+        if (Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
+            // A smoke test starts no subprocess and takes no port; the build must not depend on it.
+            bootScreen.setStatus("SKIPPING GO-LIBRESPOT");
+            return;
+        }
+        if (!spotify.isAvailable()) {
+            bootScreen.setStatus(SpotifyBinary.isSupportedPlatform()
+                    ? "GO-LIBRESPOT NOT INSTALLED"
+                    : "GO-LIBRESPOT UNSUPPORTED HERE");
+            return;
+        }
+        if (spotify.isConnected()) {
+            bootScreen.setStatus("GO-LIBRESPOT READY");
+            return;
+        }
+        bootScreen.setStatus("LOADING GO-LIBRESPOT...");
+        spotify.connect();
+    }
+
+    /**
+     * Keeps the boot caption in step with the daemon.
+     *
+     * <p>Only while the boot screen is up: afterwards the Spotify page is the thing that reports
+     * this, and writing to a screen nobody can see would be a listener quietly kept alive for the
+     * session.
+     */
+    private void updateBootStatus() {
+        if (!booting) {
+            return;
+        }
+        bootScreen.setStatus(switch (spotify.state()) {
+            case CONNECTED -> "GO-LIBRESPOT READY";
+            case AWAITING_LOGIN -> "GO-LIBRESPOT NEEDS A LOGIN";
+            case FAILED -> "GO-LIBRESPOT DID NOT START";
+            case UNAVAILABLE -> "GO-LIBRESPOT NOT INSTALLED";
+            case STARTING, READY_TO_CONNECT -> "LOADING GO-LIBRESPOT...";
+        });
     }
 
     /**
@@ -1371,6 +1751,8 @@ public class App extends Application {
      * why it is cheap enough to hang off the session's own notification rather than polling.
      */
     private void spotifyStateChanged() {
+        updateBootStatus();
+
         Song waiting = awaitingSpotify;
         if (waiting == null) {
             return;
@@ -1741,10 +2123,13 @@ public class App extends Application {
         System.out.println("[smoke] runner course     : " + game.course());
 
         Lane before = game.lane();
-        fireKey(scene, KeyCode.LEFT);
-        fireKey(scene, KeyCode.LEFT);
-        System.out.println("[smoke] steering          : " + before + " -> " + game.lane()
-                + (game.lane() == before ? "  DID NOTHING" : "  ok"));
+        // Away from whichever edge the racer is on. It is the middle lane here, because previewAt
+        // jumps the clock rather than driving - but a key pressed into the wall is a key that
+        // correctly does nothing, and this line would report that as a control that never arrived.
+        KeyCode towards = before == Lane.LEFT ? KeyCode.RIGHT : KeyCode.LEFT;
+        fireKey(scene, towards);
+        System.out.println("[smoke] steering          : " + before + " -" + towards + "-> "
+                + game.lane() + (game.lane() == before ? "  DID NOTHING" : "  ok"));
 
         fireKey(scene, KeyCode.SPACE);
         boolean jumped = game.isJumping();
@@ -2000,94 +2385,38 @@ public class App extends Application {
                 && compactOk && keysReach && restored;
     }
 
-    /** How far ahead the scripted driver treats a bump as a reason to be elsewhere, in seconds. */
-    private static final double DANGER_HORIZON_SECONDS = 0.2;
-
-    /** How far ahead the scripted driver looks for something to collect, in seconds. */
-    private static final double AIM_HORIZON_SECONDS = 0.6;
-
     /**
      * Drives a course from start to finish with a scripted driver, at sixty frames a second.
      *
-     * <p>The driver is greedy and short-sighted: get out of any lane with a bump about to arrive in
-     * it, and otherwise sit in the lane of the next thing worth collecting. That is deliberately
-     * not an optimal player - it loses coins whenever a bump and a coin want opposite lanes at the
-     * same moment - but it is enough to make the line mean something. A course that a competent
-     * driver <em>cannot</em> get a good rank on is a generated course the rules cannot survive: two
-     * bumps too close together to dodge, or an entity placed where the resolution window can never
-     * reach it. That is what this catches, over four minutes of real beatmap, on every launch.
+     * <p>The policy lives in {@link ScriptedDriver}, which the runner's own screenshot uses too.
+     * A course that a competent driver <em>cannot</em> get a good rank on is a generated course the
+     * rules cannot survive: two bumps too close together to dodge, or an entity placed where the
+     * resolution window can never reach it. That is what this catches, over four minutes of real
+     * beatmap, on every launch.
+     *
+     * <p><strong>It also reports the best combo the driver reached</strong>, which is the only check
+     * there is that the multiplier is reachable on real music rather than only in a unit test - a
+     * meter that never leaves {@code x1} on a real four-minute beatmap is decoration, and that is a
+     * property of the generator against a particular track rather than of the scoring rules, so
+     * nothing but driving one can establish it.
+     *
+     * <p>Measured on {@code Crimewave}, all four classes reach {@code x10}, and what separates them
+     * is how long they hold it: the driver takes no bumps at all at 50cc and 100cc and sits at the
+     * top of the meter for about ninety percent of the run, against a third of it at 150cc and
+     * 200cc where it takes twenty and thirty-five. That spread is what {@code COMBO_TINT_ALPHA} was
+     * tuned against - a clean run at the easy classes is what the screen looks like most of the
+     * time, so the standing tint has to be something worth living with rather than a reward.
      *
      * @param course the course to drive
      * @return the rank the scripted driver earned
      */
     private static String driveScriptedLap(Course course) {
-        if (course.isEmpty()) {
+        ScoreKeeper lap = ScriptedDriver.driveLap(course);
+        if (lap == null) {
             return "- empty -";
         }
-        RunnerGame lap = new RunnerGame(course);
-        double step = 1 / 60d;
-        double end = course.entityAt(course.size() - 1).beatTime() + 1;
-
-        for (double at = 0; at <= end; at += step) {
-            boolean[] dangerous = new boolean[Lane.COUNT];
-            int aim = -1;
-            for (int index = course.firstEntityAtOrAfter(at);
-                    index < course.size()
-                            && course.entityAt(index).beatTime() <= at + AIM_HORIZON_SECONDS;
-                    index++) {
-                Entity entity = course.entityAt(index);
-                if (entity instanceof Obstacle) {
-                    if (entity.beatTime() <= at + DANGER_HORIZON_SECONDS) {
-                        dangerous[entity.lane().index()] = true;
-                    }
-                } else if (aim < 0) {
-                    aim = entity.lane().index();
-                }
-            }
-
-            if (aim >= 0 && !dangerous[aim]) {
-                steerTowards(lap, Lane.ofIndex(aim));
-            }
-            if (dangerous[lap.lane().index()]) {
-                int safe = firstSafeLane(dangerous);
-                if (safe >= 0) {
-                    steerTowards(lap, Lane.ofIndex(safe));
-                } else {
-                    // Every lane is blocked. That is what the jump is for.
-                    lap.jump();
-                }
-            }
-            lap.update(at);
-        }
-        return lap.score().rank() + " " + lap.score().coinsCollected() + "/"
-                + course.coinsAvailable();
-    }
-
-    /**
-     * @param dangerous which lanes have a bump arriving
-     * @return the index of the first lane that does not, or {@code -1} when they all do
-     */
-    private static int firstSafeLane(boolean[] dangerous) {
-        for (int index = 0; index < dangerous.length; index++) {
-            if (!dangerous[index]) {
-                return index;
-            }
-        }
-        return -1;
-    }
-
-    /**
-     * Moves the scripted driver one lane towards a target.
-     *
-     * @param lap    the run being driven
-     * @param target the lane to head for
-     */
-    private static void steerTowards(RunnerGame lap, Lane target) {
-        if (lap.lane().index() < target.index()) {
-            lap.moveRight();
-        } else if (lap.lane().index() > target.index()) {
-            lap.moveLeft();
-        }
+        return lap.rank() + " " + lap.coinsCollected() + "/" + course.coinsAvailable()
+                + " combo x" + lap.bestCombo();
     }
 
     private static void sleepQuietly(long millis) {
@@ -2135,9 +2464,9 @@ public class App extends Application {
         player.next();
         layoutAndCapture(scene, destination, "alphabetical");
 
-        togglePresentation(scene);
+        togglePresentation();
         layoutAndCapture(scene, destination, "presentation");
-        togglePresentation(scene);
+        togglePresentation();
 
         // Each rail destination in turn. All four are new views that only exist once their button
         // has been pressed, so the base shot says nothing whatsoever about any of them.
@@ -2178,7 +2507,10 @@ public class App extends Application {
         // correct and photographs as almost nothing.
         state.setSpeedClass(SpeedClass.CC150);
         layoutNow(scene);
-        runner.previewAt(screenshotMoment());
+        // Driven up to the moment rather than jumped to it, so the head-up display in the corner is
+        // a real run's - coins, a combo part way up its meter, a rank - instead of the zeroed one a
+        // seek leaves behind. See RunnerView.previewDrivenTo.
+        runner.previewDrivenTo(screenshotMoment());
         writeScreenshot(scene, derivedPath(destination, "race"));
         state.setSpeedClass(SpeedClass.defaultClass());
         toggleRace();

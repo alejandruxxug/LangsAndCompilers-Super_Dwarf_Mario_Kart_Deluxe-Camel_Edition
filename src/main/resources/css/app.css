@@ -80,13 +80,20 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* Application header                                                  */
+/* Application header - which is also the window's title bar           */
 /* ------------------------------------------------------------------ */
 
+/*
+ * The main window is undecorated like every other window here, so this strip is the title bar: it
+ * carries the name, the three window buttons, and the drag handle. It was already a .pixel-titlebar
+ * in everything but name - same recessed ground, same primary underline - and the move cursor is
+ * the only thing it needed to say so.
+ */
 .app-header {
     -fx-background-color: -ui-recessed;
     -fx-border-color: transparent transparent -role-primary transparent;
     -fx-border-width: 0 0 3 0;
+    -fx-cursor: move;
 }
 
 .app-name {

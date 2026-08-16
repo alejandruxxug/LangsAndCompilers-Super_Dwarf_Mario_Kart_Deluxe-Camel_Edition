@@ -327,6 +327,10 @@ public final class RunnerGame {
         }
         if (clearedByJump(beat)) {
             states[index] = EntityState.CLEARED;
+            // Pays nothing and keeps the combo climbing, which is the whole of the jump's reward -
+            // see ScoreKeeper.clearObstacle. Recorded before the listeners run, as every other
+            // outcome here is, so a handler reading the tally sees the finished one.
+            score.clearObstacle();
             for (RunnerListener listener : listeners) {
                 listener.obstacleCleared(obstacle);
             }
