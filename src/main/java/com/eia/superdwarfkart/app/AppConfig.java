@@ -53,6 +53,19 @@ public final class AppConfig {
     /** Classpath root that {@code AssetRegistry} scans for artwork. */
     public static final String ASSETS_RESOURCE_ROOT = "/assets";
 
+    /**
+     * The fanfare the machine makes as the cartridge lands.
+     *
+     * <p>Named here rather than in {@code AssetRegistry}, which scans for <em>artwork</em>: a sound
+     * has no frames to slice, no manifest to override it and nothing to infer, so the classification
+     * machinery that earns its place for sprite sheets would buy nothing at all. It is a fixed part of
+     * the application in the same way the font and the stylesheet are, and it sits with them.
+     *
+     * <p>Missing, it is silent and says so once in the log - the same rule as a missing sprite
+     * (ground rule 5).
+     */
+    public static final String SOUND_BOOT = "/assets/sounds/psx.mp3";
+
     // ------------------------------------------------------------------
     // Audio
     // ------------------------------------------------------------------

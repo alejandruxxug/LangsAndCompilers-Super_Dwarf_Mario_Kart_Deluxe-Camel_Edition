@@ -17,6 +17,13 @@ import java.util.List;
  * @param uri        the track URI, {@code spotify:track:...}
  * @param title      the track name
  * @param artist     the artists, already joined for display
+ * @param artistId   the <em>first</em> credited artist's id, or {@code null} when the track names
+ *                   none. Carried because <strong>a track object has no genre in it</strong>: Spotify
+ *                   files genres against the artist, so turning a search result into a
+ *                   {@link com.eia.superdwarfkart.model.Genre} needs a second call to
+ *                   {@code v1/artists/{id}} and this is the only thing that identifies which one. The
+ *                   first artist rather than all of them, because a feature credit describes the
+ *                   guest and the track is the host's.
  * @param album      the album name, or an empty string
  * @param duration   the playing time
  * @param coverUrl   the album art address, or {@code null}
@@ -25,6 +32,7 @@ import java.util.List;
 public record SpotifyTrack(String uri,
                            String title,
                            String artist,
+                           String artistId,
                            String album,
                            Duration duration,
                            String coverUrl,
@@ -79,10 +87,17 @@ public record SpotifyTrack(String uri,
         }
 
         List<String> artists = new ArrayList<>();
+        String firstArtistId = null;
         for (JsonNode artist : node.path("artists")) {
             String name = artist.path("name").asText("");
             if (!name.isBlank()) {
                 artists.add(name);
+            }
+            // The first one with an id, which is not always the first one in the array: a local
+            // track or a removed artist appears as a name with nothing to look up.
+            String id = artist.path("id").asText("");
+            if (firstArtistId == null && !id.isBlank()) {
+                firstArtistId = id;
             }
         }
 
@@ -93,6 +108,7 @@ public record SpotifyTrack(String uri,
                 uri,
                 title,
                 joinArtists(artists),
+                firstArtistId,
                 album.path("name").asText(""),
                 Duration.ofMillis(Math.max(0, node.path("duration_ms").asLong(0))),
                 coverUrl,

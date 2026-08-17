@@ -134,11 +134,20 @@ block (a bare `-D` on the Maven command line does **not** reach the app):
 | `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. It also writes one shot per view beside it — `out-shuffle`, `-arrival`, `-alphabetical` (the three structure views), `-presentation`, `-history`, `-racers`, `-spotify`, `-settings`, `-moods`, `-moods-light`, `-library-light` (the light palette on the controls, where a bevel drawn the wrong way round shows), `-dsa-folded` (the table with the structure column folded away), `-race`, `-mini` / `-mini-compact`,
 **`-mood-sunset`, `-mood-bowser`, `-mood-sky`** (three presets whose overlay layers are the point of
 them, photographed over the library rather than beside their own switcher), **`-mood-customizer`**,
-**`-mood-layers`**, **`-pixel-editor`**,
-and **`-boot`, `-boot-partway`, `-boot-glitch`, `-boot-loading`** — the boot screen, which exists
-only until the cartridge goes in and is therefore photographed *first*, before any other check runs.
-The glitch and the loading bar are asked for at a stated instant through `BootScreen.previewAt`,
-because the sequence's own timer never ticks while the smoke test holds the interface thread. **Every one of them exists only once a mode has been selected or a key pressed**, so one shot of the opening state proves nothing about any of them. The companion shots are taken from **its own scene** (it is a separate window, so the main one's snapshot contains none of it) and after a seek a third of the way in, because a progress line at zero is a picture of an empty line. |
+**`-mood-layers`**, **`-pixel-editor`**, **`-spotify-add`** (the library's add-from-Spotify modal, with a
+track already picked — the form is hidden until something is, so a shot of it as it opens would be missing
+the half worth looking at; the results are made up rather than searched for, so a layout check does not
+stop running when the machine is offline), **`-shutdown`** (photographed by `captureShutdown`, which tears
+nothing down),
+and **`-boot`, `-boot-partway`, `-boot-flash`, `-boot-glitch`, then one per movement of the fifteen-second
+show — `-boot-presents`, `-boot-title`, `-boot-hold`, `-boot-loading`, `-boot-fade`** — the boot screen,
+which exists only until the cartridge goes in and is therefore photographed *first*, before any other
+check runs. Each is asked for at a stated instant through `BootScreen.previewGlitch` / `previewShow`,
+because the sequence's own timer never ticks while the smoke test holds the interface thread. **Every
+movement is a fade, so the instant matters**: the shots are taken at the *middle* of each one
+(`BootScreen.Movement` carries them), since a still of the edge of a fade is a still of an empty screen
+and looks exactly like a screen that failed to draw. The flash needs its own shot for the same reason —
+it is over in `FLASH_SECONDS` of a `GLITCH_SECONDS` tear, so the glitch shot is taken after it. **Every one of them exists only once a mode has been selected or a key pressed**, so one shot of the opening state proves nothing about any of them. The companion shots are taken from **its own scene** (it is a separate window, so the main one's snapshot contains none of it) and after a seek a third of the way in, because a progress line at zero is a picture of an empty line. |
 
 **The smoke test plays about three seconds of the current song** and prints the measured L/R levels,
 so a run is audible. That is the point: the base screenshot is taken while audio is still flowing,
@@ -247,11 +256,47 @@ tooltips and dialogs are all rebuilt as hard-edged beveled blocks.
 | `F6` | swap the library for the runner, and back |
 | `F7` | collapse to the companion strip, and back — **the same key in both windows** |
 | `F8` *(companion window)* | put the artwork away, leaving the song and the transport, and back |
-| `Esc` | leave Presentation Mode; on the companion strip, expand; **on the boot screen, quit** — it draws no title bar, so it draws no close button |
+| `F11` | **true fullscreen for the runner and nothing else** — starts the race if one is not running |
+| `Esc` | leave true fullscreen; leave Presentation Mode; on the companion strip, expand; **on the boot screen, quit** — it draws no title bar, so it draws no close button |
+| any key *(boot screen, cartridge already in)* | skip the rest of the fifteen-second start-up sequence. `Esc` still quits rather than skipping |
 | `→` / `Space` *(tree view focused)* | step through one edge of a traversal |
 | `←` / `→` / `A` / `D` *(road focused)* | change lane |
 | `Space` / `↑` / `W` *(road focused)* | jump |
 | `F3` *(road on screen)* | cycle the frame-pacing readout: off → drawn → printed only |
+
+**True fullscreen (`F11`) is the runner and nothing else** — no title bar, no side rail, no meters, no
+playback bar, no window frame and no desktop. It is presentation mode's idea taken one step further:
+`F5` gives the whole *window* to the visualizer, `F11` gives the whole *display* to the game. It
+**starts the race** if one is not running, because a fullscreen kart player with no kart in it is a
+black screen with a rank of D in the corner.
+
+- **The road is moved into the overlay pane's slot**, exactly as `F5` moves the visualizer, so it keeps
+  the mood's layers instead of losing its wallpaper at the moment the game fills the screen.
+- **`.pixel-window.no-frame` drops the border.** A frame is what tells you where a window ends, and on
+  a screen with no window on it three pixels of amber is the only thing on the display that is not the
+  game. The boot screen wears the same class for a related reason — see §"the boot screen" below.
+- **The toolkit's own fullscreen exit key is switched off** and `Esc` is handled here instead. They are
+  the same keystroke and not the same thing: the toolkit's would take the stage out of fullscreen and
+  leave every other change in place — no title bar, no border, a runner parented to the wrong pane, and
+  a window that cannot be moved or closed. That is the `scene.setRoot` trap in a different costume, so
+  there is exactly one way in and one way out. The hint the toolkit prints goes with it; the road
+  already draws its own controls line.
+- **Every other shortcut is dead while it is up**, and not because it would throw — because it would
+  *work*: `F6` would swap the library into a pane that is not on screen and leave the road showing,
+  which reads as a key doing nothing while quietly having done something. Same shape of early return as
+  the boot screen's, in the same filter. The driving keys are untouched: the runner installs those as
+  its own scene filter, which runs after this one.
+- **Leaving fullscreen is not leaving the race.** A run lost to a keystroke about window management
+  would be a run lost for no reason.
+- **`Stage.setFullScreen` is skipped during a smoke test, and that is not a shortcut — it deadlocks.**
+  On macOS it enters a *nested event loop* and does not return until the platform's transition has
+  finished, and the smoke test runs synchronously on the interface thread inside a synthesised key
+  event, so that transition can never complete. Measured: the run wedged inside
+  `MacApplication._enterNestedEventLoopImpl` and printed not one line after `window shrink`. A nested
+  loop also pumps the event queue, which would re-enter the very check that is running. Everything the
+  *application* decides is still driven and still asserted, and `[smoke] race fullscreen` says out loud
+  that the stage's own call was left out. **Do not call anything that enters a nested event loop from
+  inside `runSmokeTest`** — `showAndWait` is the other one.
 
 They are wired across **both phases of event delivery**, and the split is load-bearing:
 
@@ -358,17 +403,58 @@ dressed as. It **replaced** the `START YOUR ENGINES` dialog: inserting the cartr
 answer, and a second modal question straight afterwards is one too many. Boot lands on the library,
 **paused**; pressing play still brings the road up on its own, exactly as before.
 
-- **The name is on the cartridge, not on the screen.** That is what a cartridge is — the label is
-  where the title goes — and printing it over the top as well would be the one place in this
-  application where `APP_NAME` appeared twice at once. It is placed by `SpriteSheet.darkRegion(0)`,
-  measured at **238x389 at (204,3)**, and wrapped on the name's *own* separators (`_` and `-`) so it
-  reads as a ROM label rather than as a sentence chopped mid-word. `labelFontSize` fits it both ways
-  — no line wider than the label, no block taller.
-- **Nothing else is on the screen.** The ground is `SHADOW`, the darkest role there is, so a light
-  mood gets a light room rather than a black rectangle somebody forgot to theme. **The title bar is
-  not attached yet**: it is built during `start()` (it wires the window's drag and buttons) and
-  attached in `finishBooting()`. A console with the power just switched on does not have a title bar
-  across the top of it.
+- **The name is on the cartridge while the cartridge is on screen, and on the screen once it is not.**
+  That is what a cartridge is — the label is where the title goes — so during the drag it is placed by
+  `SpriteSheet.darkRegion(0)`, measured at **238x389 at (204,3)**, and wrapped on the name's *own*
+  separators (`_` and `-`) so it reads as a ROM label rather than as a sentence chopped mid-word.
+  `labelFontSize` fits it both ways — no line wider than the label, no block taller.
+
+  **Once the cartridge is *in* the machine there is no label left to read, and the loading screen
+  prints the name across itself as a splash** — which is where a console has always put a title, and
+  the one screen in this application with room for a 43-character joke at a size worth reading. The
+  cartridge's label is 48% of a cartridge, the title bar shares a strip with three toggles, and the
+  companion window is measured to have room for none of it. It is safe here *precisely because* the
+  cartridge has gone: the two can never be on screen at once, which was the whole reason the splash did
+  not exist before. Measured on this window: **44px over two lines, widest line 23 characters = 1012 px
+  of 1440**. `splashFontSize` searches down from 44px for the largest size that wraps to no more than
+  `SPLASH_MAX_LINES` = 3 — the name breaks into seven runs, so with more lines allowed it would happily
+  come out as a narrow column of them at full size, which is the one arrangement that reads as a
+  wrapping accident rather than as a logo. `BootScreen.splashAt` reports it and the smoke test measures
+  it, because a splash that silently fell back to its minimum still draws perfectly well; it just stops
+  being a splash. `SPLASH_GAP` exists because leaving it out put the LOADING caption inside the
+  descender space of a 44px glyph — nothing overlapped and it still read as a collision.
+- **The cartridge disappears the moment it is inserted, and getting that wrong left a sliver of it on
+  screen under the loading bar.** A `Pane` does not clip its children and the cartridge is deliberately
+  taller than the travel it makes, so near full insertion its foot hangs *below* the pane's own bottom
+  edge — where the three canvases end and nothing can paint over it. Everything else went black and the
+  one thing that had just gone into the machine was still visible. Two fixes, both needed: the pane is
+  **clipped** to its own bounds, and the `ImageView` and the name plate are **hidden whenever the phase
+  is not `INSERT`**, decided in `layoutChildren` because four different things enter a phase (the drag,
+  `settle()`, `previewAt()` and the sequence's own timer) and that is the one place all four pass
+  through. The glitch still draws its own *torn* copy of the artwork from the sheet — that is the
+  picture breaking up, not the object still sitting there. `[smoke] boot cartridge in` reads the node's
+  visibility, because the sliver hung below the pane and is off the shot on a tall window.
+- **Nothing else is on the screen, and it is black and white rather than in the user's mood.**
+  `Palette.hardware()` — black ground, white light, nothing else — because at this point the system has
+  not started: a mood is something the *software* chose, so a boot screen in Sunset Wilds is the console
+  admitting it was running all along, and the flash at the moment of contact stops being a flash of
+  light and becomes a flash of somebody's colour scheme. **The window frame goes too** (`.no-frame`, the
+  same class true fullscreen uses), because an amber border around a black screen is the software's look
+  arriving before the software does. **The title bar is not attached yet** either: it is built during
+  `start()` (it wires the window's drag and buttons) and attached in `finishBooting()`, along with the
+  frame and the mood's layers.
+
+  **This is still inside ground rule 7**, and that is why it is a `Palette` rather than a handful of
+  literals in `ui/`. The rule is about *where colours are defined*: these screens still name a
+  `PaletteRole` for every colour they draw and still ask a palette for it — they just ask a different
+  one — so the hex values live in the one file the project allows them in, and a screen that wanted the
+  mood back would need no change but which palette it reads. It is monochrome, so the roles carry
+  **lightness** instead of hue: `ACCENT` and `NEGATIVE` are the glitch's two interference bands and are
+  a long way apart on that axis for the same reason they are a long way apart in hue everywhere else.
+  It is never offered in the switcher and never reaches `MoodValidator` — the protected roles'
+  guarantees are about a look a user can choose, and nobody can choose this one. `HardwarePaletteTest`
+  pins the monochrome, the true black, and that the flash is `#ffffff` rather than the `248` a
+  `c5 << 3` shift would give.
 - **Which means Escape quits, and it has to.** With no title bar there is no close button, and a
   window with no visible way to shut it needs an invisible one. Escape is what every other frameless
   window here already uses to say no. The black itself is the drag handle (`dragBy` on the pane);
@@ -386,13 +472,115 @@ answer, and a second modal question straight afterwards is one too many. Boot la
   direction. Short of it, the cartridge springs back. The travel is `SEAT_SHARE` of the cartridge's
   own drawn height, so replacement art seats to the same *place* rather than the same number, and
   the mouth's width comes from `SpriteSheet.footprint(0)` — the artwork's real inlet, 454 of 500.
-- **Then a flash, a glitch and a loading bar** — what a console did when a cartridge went into a live
-  slot. The picture tears into `TEAR_BANDS` horizontal bands thrown sideways by `tearOffset`,
-  decaying to nothing across `GLITCH_SECONDS`, with interference bands in `ACCENT` and `NEGATIVE`
-  (the two roles furthest from the room's own colour, so they read as interference in any mood and
-  never as part of the artwork). The flash is `TEXT_PRIMARY` — protected, so no mood can turn it into
-  a flash nobody sees. Total sequence 2.35 s, which a test pins at three seconds before it stops
-  being a flourish and starts being a wait.
+- **Then a white flash and a tear** - what a console did when a cartridge went into a live slot. The
+  picture tears into `TEAR_BANDS` horizontal bands thrown sideways by `tearOffset`, decaying to nothing
+  across `GLITCH_SECONDS`, with interference bands in `ACCENT` and `NEGATIVE` (the two roles furthest
+  from the room's own colour, and in the console palette the two furthest apart in lightness, so they
+  read as interference and never as part of the artwork). **The flash is `TEXT_PRIMARY`, which in
+  `Palette.hardware()` is `#ffffff`** - genuinely white rather than nearly white in whichever direction
+  a mood happened to lean. It lasts `FLASH_SECONDS` of the tear, so it is the *start* of the glitch
+  rather than the whole of it, and it needs a screenshot of its own (`-boot-flash`): a picture taken a
+  third of the way in is taken after the flash is over.
+
+**Then the show: a fifteen-second start-up sequence that runs for exactly as long as the fanfare.**
+
+This is the PlayStation shape rather than a progress bar - a publisher line, a title arriving on the big
+hit, a long hold, the loading bar, and a fade to black - and the point of the length is that
+**`setSequenceSeconds` takes the fanfare's own decoded duration**, so the picture and the sound end
+together and neither is cut off by the other. `SEQUENCE_SECONDS` = 15.0 is only the fallback for a
+missing sound; replace the audio and the sequence re-times itself with nothing else to change.
+`[smoke] boot sequence` prints both numbers side by side, because the two drifting apart is exactly the
+sort of thing that looks fine in every screenshot.
+
+- **One phase, one clock, and every element a pure function of it.** `Phase.SHOW` holds a single
+  normalised progress and `presentsAlpha`, `titleAlpha`, `titleScale`, `seamWidth`, `rayAlpha`,
+  `raySweep`, `barAlpha`, `barProgress` and `blackout` are all static functions of it. A chain of five
+  phases each with its own timer is five places for the sequence to get out of step with itself and
+  nowhere to ask "what does it look like at eleven seconds" - which is the question every screenshot and
+  every test here needs to ask. `drawShow` decides only *where* things go, never *when*.
+- **The stages are fractions of the show, and they come off the audio's own measured envelope.**
+  Quarter-second RMS blocks over the decoded fanfare: a quiet opening chime to 2.75 s, the big hit at
+  3.00-4.25 s, a sustained passage to 9.0 s, a decay to 14.0 s, then silence. Divided by the 14.45 s
+  show that follows the tear, those land on `PRESENTS_*`, `TITLE_IN`/`TITLE_FULL`, `LOADING_IN` and
+  `FADE_OUT` - which is why **the title arrives *on* the swell** rather than near it.
+- **The fades are smoothstep, not linear** (`ramp`), and that is most of why they read as dramatic: a
+  linear fade starts and stops abruptly at both ends and the eye catches the corner.
+- **The title fades in and settles.** It arrives `TITLE_OVERSHOOT` too big and eases down to the size
+  `splashFontSize` measured, so it *lands* instead of appearing. `titleScale` never goes below 1 - a
+  title that faded in already overflowing the screen and then shrank into it would be a fade in the
+  wrong direction, and a test walks the whole sequence to check it. **The wrap is computed at the
+  resting size and never at the scaled one**, or the line count would change mid-fade and the block
+  would jump.
+- **A seam of light, and it had to be moved.** A line at the centre that opens sideways is the cheapest
+  dramatic reveal there is and the only one that suits hard edges - one rectangle, no blur. But it sits
+  at the height of the middle of the title block, so while both were half-way up **the line ran straight
+  through the words and read as a strikethrough**. It now fades out over the first part of the title's
+  own fade-in, so the two hand over rather than overlap. Caught by looking at the picture.
+- **Rays that start at a radius, not at a point.** Sixteen wedges converging on one pixel fill the
+  middle of the screen with solid grey - a blob with spikes on it rather than light from behind the
+  title, and exactly where the title has to be readable. `RAY_INNER` leaves the centre clear. They are
+  gone by `RAYS_DONE`: this is an arrival, and a starburst that stayed and span would be a screensaver.
+- **A seeded starfield during the hold**, through the same SplitMix64 finalizer as the tear and for the
+  same reason. Five seconds on a static frame reads as the application having frozen at the moment it is
+  meant to look most alive - the same problem the companion window's spinning record solves. One pixel
+  each and capped at `STAR_ALPHA`, so they cannot compete with the title.
+- **The one thing that repeats is `BREATH_HZ` = 0.4**, a slow swell on the held title. Section 8b caps a
+  full-screen rhythmic effect at 3 Hz; this is nowhere near it, deliberately, and a test says so.
+  Nothing else in the sequence repeats at all.
+- **The caption says what is actually being waited for.** The bar has always been a beat rather than a
+  measurement, and now that it runs for fifteen seconds a stale `GO-LIBRESPOT READY` sitting there while
+  it carries on filling reads as a machine that has lost track of itself. Every *resolved* daemon state -
+  connected, needs a login, did not start, not installed - gets `WAITING_FOR_THE_SOUND` appended; only
+  `STARTING`/`READY_TO_CONNECT` still says it is loading. Honest, and the line under it says how to get
+  past it.
+- **`skip()`: any key cuts it short, and that is not a compromise on the sequence.** Running for the
+  length of the fanfare is what makes the *first* launch an event; the tenth launch of an afternoon is a
+  wait, and somebody demonstrating this will start it many times - every console this is dressed as let
+  you press through its own logo. **Escape still means "no" rather than "hurry up"**, so it is handled
+  first and returns; everything else skips. Refused while the cartridge is still outside the machine, or
+  a key would boot the application without the gesture and make the gesture optional. It runs `settle()`,
+  so a user in a hurry and the smoke test take the same path out.
+  **`[smoke] boot skip` checks it from inside a running sequence** - and it has to, because a skip that
+  did nothing would be *invisible*: the sequence would simply run its own length, which is what it does
+  anyway, so nothing would look wrong for fifteen seconds.
+- **`previewGlitch` and `previewShow` replaced `previewAt(glitch, loading)`.** Every movement of the show
+  is a fade, and a fade is the single most unphotographable thing there is: a still of the edge of one is
+  a still of an empty screen, which looks exactly like a screen that failed to draw and is the one
+  picture that would be believed. `BootScreen.Movement` names the five and carries the instant in each
+  worth photographing - the **middle** of the fade, never an edge - so the list lives beside the timings
+  instead of being copied into the smoke test where the two could drift, and the timing constants stay
+  package-private.
+- Screenshots: `-boot-presents`, `-boot-title`, `-boot-hold`, `-boot-loading`, `-boot-fade`.
+- **And the machine makes a noise: `assets/sounds/psx.mp3`, played from `setOnGlitch`.** Fired at the
+  instant the cartridge seats, before the first frame of the tear, because the flash and the sound are
+  the same event and a fanfare a frame late reads as a sound effect rather than as the machine coming on.
+  - **`audio/SoundEffect` opens a line of its own**, and that is the whole design rather than a
+    convenience. The application's existing `SourceDataLine` belongs to the *music*: it is the clock the
+    runner's entire lookahead is read off (`position()` counts the frames that line has rendered), so
+    pushing a fifteen-second fanfare through it would move that clock by fifteen seconds. Nothing in it
+    touches `AudioSource`, the taps, the meters or the beat analyser — a sound effect is not part of the
+    track and must never appear in its beatmap.
+  - **It decodes through `PcmFormat`, not through a decoder of its own.** `PcmFormat.open(InputStream,
+    String)` was added for it: a resource in the jar has no `Path`, and copying it out to a temporary
+    file to be allowed to decode it would be a second decode path to keep in step with the first. The
+    stream is wrapped in a `BufferedInputStream` because that is how a decoder probes a format — it
+    reads a header, decides, and rewinds. Verified against the resolved jars: the fanfare is 44.1 kHz
+    stereo already and takes the one-step conversion.
+  - **Measured: 15.0 seconds**, against a 2.35 s boot. So it deliberately **rings on over the library**,
+    exactly as a console's fanfare does over a game's first screen — and is stopped the moment a song
+    starts, from `PlaybackEngine.setOnPlayCounted`. That hook is exact rather than approximate: the
+    application boots *paused* and no song has ever played, so the first play is always a counted one
+    and can never be a resume that slips past. `stop()` fades over `FADE_SECONDS` rather than cutting,
+    because stopping a line mid-block leaves the cone off zero and that step is an audible tick.
+  - **Nothing about it can throw.** A missing resource, a format no decoder can read and a machine with
+    no free output line are all ordinary; the sound does not happen and a line goes in the log (ground
+    rule 5). `isReady()` exists so the *absence* can be reported, which is the only reason to know — a
+    sound that failed to decode is byte-for-byte as silent as one that was never triggered, and
+    `[smoke] boot fanfare` is the one check that tells those apart. It decodes without playing, because
+    a build log is not a place to play fifteen seconds of audio.
+  - **`previewAt` and `settle()` never fire it**, which is why the smoke test is silent: a screenshot
+    must not make a noise, and a check that ran the whole sequence quietly is worth more than one that
+    does not.
 - **The tear is seeded, not random**, by the **SplitMix64 finalizer** over band and frame. Same
   decision as `Course`'s own hash and for a related reason: an effect nobody can reproduce is an
   effect nobody can check, and the smoke test drives this with no pulses at all. **FNV-1a was tried
@@ -413,7 +601,58 @@ answer, and a second modal question straight afterwards is one too many. Boot la
   pickable in front of the cartridge would swallow every press while still hovering correctly, which
   is the fault that ate the companion window's transport clicks. `fireDrag` aims at the **node**,
   unlike `fireKey`, which aims at the scene.
-- Screenshots: `docs/screenshots/sdmk-boot.png`, `-boot-partway`, `-boot-glitch`, `-boot-loading`.
+- Screenshots: `docs/screenshots/sdmk-boot.png`, `-boot-partway`, `-boot-flash`, `-boot-glitch`, and
+  one per movement of the show - `-boot-presents`, `-boot-title`, `-boot-hold`, `-boot-loading`,
+  `-boot-fade`.
+
+### The shutdown screen: ejecting the cartridge (`ui/ShutdownScreen`)
+
+**The application closes on a black screen with a sweeping bar on it, and it exists because closing used
+to look exactly like a crash.** JavaFX runs `Application.stop()` on the interface thread *after* the last
+window is hidden, and the slowest thing in it is by far the go-librespot child: `SpotifyDaemon.stop()`
+asks it to exit politely and then gives it `GRACE_SECONDS` = **5** before killing it. So pressing close
+made the window vanish and then left the process sitting in the dock, unresponsive, for up to five
+seconds — on macOS long enough to earn a spinning cursor. Nothing was wrong, and there was no way at all
+to tell that from outside.
+
+So the order is inverted. The window **stays up**, shows the screen, and the teardown runs on a thread of
+its own; the interface thread is free the whole time, so the window still paints, still moves and still
+names the step it is on. `Platform.exit()` is called at the end, which reaches `stop()` and finds the
+work already done.
+
+- **`stop()` split into `stopDrawing()` and `releaseResources(report)`, both guarded and idempotent.**
+  The split is the whole safety argument, and it is **ground rule 3 rather than luck**: everything
+  `releaseResources` touches lives in `playback/`, `audio/`, `analysis/` and `spotify/`, none of which
+  may import `javafx` (`LayeringTest` enforces it), so none of it *can* reach the scene graph whichever
+  thread calls it. What genuinely is the scene graph — every `AnimationTimer`, plus `runner.stop()`
+  filing the run in progress — stays on the interface thread and happens before the screen goes up.
+- **`requestQuit()` is the one door**, and all four ways out go through it: the header's close button,
+  the companion window's quit button, `Esc` on the boot screen, and `stage.setOnCloseRequest` (which is
+  how the platform asks — Cmd-Q on macOS). `stop()` still works for the paths that never reach it.
+- **The companion strip is 224 px wide and has nowhere to draw this**, so `requestQuit` brings the main
+  window back for it — shown *before* the companion is hidden, because JavaFX exits when the last window
+  goes and that would close the application at the exact moment it is trying to say it is closing.
+- **The bar sweeps rather than fills.** Nothing here knows how long a subprocess will take to exit, and a
+  bar that filled to 90% and stopped would be claiming progress it cannot have — which reads as precisely
+  the hang this screen was built to stop looking like. It wraps rather than bounces, so the motion is
+  always forwards: a bar that reversed would read as progress being undone.
+- **Same `Palette.hardware()` as the boot screen**, and the layers are cleared (`setMood(null, null)`)
+  so an `ABOVE_CONTENT` scanline layer is not the one thing still drawn in somebody's palette. The two
+  screens bracket the application: at one the system has not started and at the other it has stopped.
+  The splash is deliberately smaller than the boot screen's — this is a goodbye rather than an arrival,
+  and equal weight would make closing feel like as much of an event as opening. It goes through
+  `BootScreen.wrapName`, so the two cannot break the title in different places.
+- **There is no way to cancel.** By the time this is on screen the audio line is closing, and a shutdown
+  that could be called off would be a state every view behind it would have to know about. The title bar
+  goes with it, because a close button on a screen that is already closing can only be a second press
+  that does harm.
+- **The smoke test now closes through `requestQuit()` rather than `Platform.exit()`**, which is the only
+  way to exercise it: the failure mode of getting a background teardown wrong is a process that never
+  exits, and a run that closed itself by a different route than the close button uses would report
+  nothing about the route the user takes. Measured, with no daemon running: **8 ms**. The screen itself
+  is photographed separately by `captureShutdown`, which tears nothing down — running the real teardown
+  mid-run would close the sound card out from under every check after it.
+- Screenshot: `docs/screenshots/sdmk-shutdown.png`.
 
 ### Sprites in the interface
 
@@ -682,7 +921,8 @@ com.eia.superdwarfkart
 │                 ShuffleMode, ArrivalOrderMode, AlphabeticalMode, Player,
 │                 PlaybackEngine (running order <-> audio output)
 ├── audio/        AudioSource (interface), LocalFileAudioSource, PcmFormat, MonoPcmReader,
-│                 PcmListener, Levels, LevelAnalyzer, SmoothClock, AudioMetadata, AudioException
+│                 PcmListener, Levels, LevelAnalyzer, SmoothClock, AudioMetadata, AudioException,
+│                 SoundEffect (the boot fanfare, on a line of its own)
 ├── analysis/     BeatmapAnalyzer, Beatmap, BeatmapCache, OnsetDetector, Fft, BeatmapService,
 │                 BeatmapIndex
 ├── game/         RunnerGame, RunnerListener, Course, Lane, Entity (sealed), Obstacle, Coin,
@@ -691,7 +931,8 @@ com.eia.superdwarfkart
 │                 SpotifyEvents, SpotifyTrack, SpotifySession
 ├── persistence/  Repository<T> (interface), LibraryRepository, ScoreRepository
 ├── assets/       AssetRegistry, SpriteSheet, SpriteAnimation, RacerFrame
-├── mood/         Palette, PaletteRole (enum), GbaColor            ← built in M4
+├── mood/         Palette (+ hardware(), the console's black and white), PaletteRole (enum),
+│                 GbaColor                                        ← built in M4
 │                 PaletteCss                                       ← M9
 │                 Mood, Moods, MoodLayer (sealed), LayerStyle, ZBand,
 │                 LayerBlend, GradientLayer, GradientStop, ImageLayer,
@@ -701,7 +942,9 @@ com.eia.superdwarfkart
 └── ui/           MiniPlayerView, FullscreenView, LibraryView, BeatmapTimeline, RunnerView,
                   RacerSelectView, LevelMeterView, ComplexityPanel,
                   MoodSelectView, MoodCustomizerView, PixelEditorView,
-                  MoodOverlayRenderer, GbaColorPicker
+                  MoodOverlayRenderer, GbaColorPicker,
+                  BootScreen, ShutdownScreen (the two ends, both on Palette.hardware()),
+                  SpotifySearchDialog (add from Spotify, from the library's own header)
     └── visualizer/  StructureView (base) -> RoadView (base) -> CircuitView,
                      StraightView;  BstView extends StructureView directly,
                      StructureVisualizer (swaps them),
@@ -2395,6 +2638,26 @@ recorded in ground rule 7 before starting it.
 line of CSS; it did not touch a single `gc.setFill`, because every one of them already named a
 role. The debt cleared in M9 is what made that true.
 
+### As built (2026-08-17) — the sweep after M11
+
+Six changes, none of them a milestone and all of them things the application was visibly missing. 1060
+tests, up from 1017. Each has its own section above; in one line each:
+
+| Change | Where |
+|---|---|
+| **True fullscreen for the runner** (`F11`, `Esc` leaves) | §"Keyboard shortcuts" |
+| **The cartridge vanishes into the machine** — it used to leave a sliver under the loading bar | §"the boot screen" |
+| **A PS1-shaped fifteen-second start-up sequence**, as long as the fanfare, with the title fading in | §"the boot screen" |
+| **`psx.mp3` as the boot fanfare**, on a line of its own | §"the boot screen" |
+| **The boot screen is black and white**, through `Palette.hardware()` | §"the boot screen" |
+| **A shutdown screen**, so quitting no longer looks like a hang | §"the shutdown screen" |
+| **Add from Spotify out of the library**, with album, genre and a rating | §M10, "As built (2026-08-17)" |
+
+**Two of them are findings rather than features, and both are ground rule 6 again.** `Stage.setFullScreen`
+enters a nested event loop and deadlocks a synchronous smoke test; and Spotify has quietly stopped sending
+`genres` on the artist object while still documenting it, which is why the add dialog's genre comes from
+the library's own knowledge of the artist instead.
+
 **Stop after each milestone and report exactly how to test it before continuing.**
 
 ---
@@ -2818,6 +3081,81 @@ any of it.
   real socket, for the reason `SpotifyApiTest` already does: what breaks here is the shape of the
   wire traffic, and a mock would agree with whatever the code did.
 
+### As built (2026-08-17) — adding a Spotify track from the library, with its album, genre and a rating
+
+**`ui/SpotifySearchDialog`, opened by a SPOTIFY button beside ADD in the library's own header.** Adding a
+song is a library action, so it belongs where the library is. The Spotify page in the side rail is a
+*connection* page — install, log in, register an application — and its search panel adds a track exactly
+as Spotify describes it, which leaves the fields Spotify cannot describe blank forever. This is the same
+search with the missing half attached: pick a track, check what came back, choose a genre, set a rating,
+add it once.
+
+- **`LibraryView` still knows nothing about Spotify.** It takes a `setOnSpotifySearch(Runnable)` and
+  `App` wires it, matching `setOnSongActivated` — so the two-argument constructor the tests use keeps
+  working and no view holds a connection to a streaming service.
+- **Album, year and artwork were always parsed** (`SpotifyTrack.fromJson`); what they were not was
+  *shown*. A field that is populated and invisible is indistinguishable from one that is empty, which is
+  most of why "bring the album correctly" was worth asking for.
+
+**Spotify has stopped answering the genre question, and this is a ground-rule-6 finding measured against
+the live service on 2026-08-17.** `v1/artists/{id}` on an application token returns **HTTP 200 with no
+`genres` key at all** — absent, not an empty array — checked on The Beatles, Ariana Grande and Don Diablo;
+the album object inside a search result carries none either, and neither does the artist object in the
+search response. The Web API reference still documents the field. So on a Client Credentials token there
+is currently **no route from Spotify to a genre**.
+
+- **`SpotifyCatalog.artistGenres` was written, tested and kept anyway.** It is one request on a track the
+  user has deliberately opened, it is correct the moment Spotify sends the field again, and until then it
+  changes nothing and says nothing. What it must never do is **overwrite a better answer with an empty
+  one**, which is why an empty result is discarded rather than applied. Its path is *derived* from the
+  search endpoint rather than written out, so a test pointing the class at a stub gets both redirected
+  for one override — `SpotifyCatalogTest` asserts the request lands beside `v1/search`, because getting
+  that wrong would send a live request from a unit test.
+- **`Library.genreForArtist` is the answer that actually works**, and it is a better one than Spotify's
+  ever was: if the user has filed three Crystal Castles songs as Electronic, the fourth almost certainly
+  is too. Most common answer wins rather than first, so one mis-filed song does not decide it;
+  `UNKNOWN` songs do not vote, because "nobody has said" is not an opinion; and it matches on the
+  **whole credit** case-insensitively, so `"Crystal Castles"` and `"Crystal Castles, HEALTH"` are
+  deliberately different acts — a feature credit is a different act and guessing across them would be
+  worse than not guessing.
+- **`Genre.fromTags` lives in `model/`, not in `spotify/`.** Deciding which of our fourteen constants a
+  phrase describes is a question about *our* vocabulary; nothing in it mentions Spotify, and `model/`
+  may not import it in any case. It matches **substrings, most specific first**, because the tags are
+  compounds and the compound names the parent. Get the order backwards and nothing throws — half the
+  library simply arrives filed under Pop.
+  - **`"dance"` had to go below `"pop"` as well as below `"rock"`**, and a test caught it rather than a
+    reading of the list: above them it filed *dance pop* and *dance rock* as electronic, which is three
+    wrong answers for one right one. `"garage"` is deliberately absent for the same reason and could not
+    be fixed by moving it — it is UK garage and it is garage rock, on opposite sides of the list, and a
+    tag filed wrongly half the time is worse than one that falls through to `UNKNOWN`.
+  - **`UNKNOWN` rather than `OTHER` when nothing matches.** The two are not interchangeable: `OTHER`
+    means the user looked at the list and none of it fitted.
+- **The rating is the user's and always was**; setting it while adding saves a trip through the edit
+  dialog for the field most likely to be wanted immediately.
+- **A `ListView` would have arrived in Modena's own look**, since a bare list view is one of the few
+  controls this project has not restyled (§3b). The rows are `Button`s wearing `.history-entry` with a
+  `.result-row:selected` rule for the pick, whose ground is `-ui-selected` — the same one the library
+  table marks a selected row with. Two CSS rules, no hex literal.
+- **`PixelDialog` gained `resizeToContent()` and `showForCapture()`.** The first is the companion
+  window's `sizeToScene` lesson in a different window: a dialog whose body grows after it is up gets no
+  second pass on its own, and a toolkit will happily clip contents that outgrew it. The second exists
+  because `showAndWait` cannot be photographed — it does not return until the dialog closes — and layout
+  overflow in this font is invisible to every unit test.
+- **`R...` was the first screenshot's verdict**, and it is why the check is a picture. A `GridPane`
+  column is one width across every row, so left to itself it settled on what the *shortest* caption
+  needed: ALBUM and GENRE fitted at five characters and RATING came out ellipsized, which reads as a
+  control with no name on it. `fieldLabel` sets `USE_PREF_SIZE` as the minimum so a caption can never
+  shorten itself, and a `ColumnConstraints` makes the column honour it.
+- **`[smoke] spotify genre` is worth more for what it says when it comes back empty**, which is now
+  always: it prints "Spotify sends no genres field any more (measured)" rather than a blank that could
+  equally be a wrong path, a missing scope or an artist id read out of the wrong field. Printed rather
+  than asserted, because an empty answer is now the *correct* one and failing a build on it would be a
+  red light nobody can act on. `[smoke] library genre` prints what the dialog actually pre-fills with.
+- **The existing `[smoke] spotify search` asked for a limit of 50 while the interface asked for 10.**
+  That is exactly the discrepancy this file already warns about — "a diagnostic that asks for a different
+  limit than the interface does is not testing the interface" — and it was still there. It now uses
+  `SpotifyCatalog.MAX_SEARCH_LIMIT`, as the dialog does.
+
 ### As built (2026-08-15) — streamed tracks generate courses
 
 **Reported as "the loaded go-librespot tracks don't generate a track (circuit for the game)", and it
@@ -3137,8 +3475,33 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
   right. `setManaged(false)` on the canvas, or hold it in a plain `Pane` (whose minimum is just its
   insets) as every other view here does. This is what `MoodOverlayRenderer` did to the restore
   button, and `[smoke] window shrink` is what now catches it.
+- **Nothing called from inside `runSmokeTest` may enter a nested event loop.** `Stage.setFullScreen`
+  does, on macOS: it does not return until the platform's fullscreen transition has finished, and that
+  transition can never finish while a synchronous check is holding the interface thread. The run wedged
+  in `MacApplication._enterNestedEventLoopImpl` and printed nothing after the line before it — no
+  exception, no timeout, just silence. A nested loop also *pumps the event queue*, so it can re-enter the
+  check that is running. `showAndWait` is the other one; `PixelDialog.showForCapture` exists for exactly
+  that reason.
+- **A `Pane` does not clip its children, so a child bigger than the pane draws outside it** — over
+  whatever is behind, and out of reach of any canvas sized to the pane. The boot screen's cartridge is
+  taller than the travel it makes, so its foot hung below the pane's bottom edge and stayed on screen
+  under the loading bar while everything else went black. Worse, it is *off the shot* on a tall window,
+  so the screenshot looked fine. Clip the pane, and hide what should not be there rather than relying on
+  something painting over it.
+- **Spotify's artist object no longer carries `genres` at all**, and its own reference still documents
+  the field. Measured 2026-08-17 on an application token: 200, and the key is simply absent for every
+  artist tried. An empty genre from that endpoint is now the correct answer, so anything reading it must
+  discard an empty result rather than apply it — applying it overwrites a better guess with nothing,
+  which is a field getting *worse* the longer the user waits.
+- **A `GridPane` column is one width across every row, so it settles on what the shortest label needs
+  and ellipsizes the rest.** `RATING` became `R...` beside an `ALBUM` that fitted. Give captions
+  `setMinWidth(Region.USE_PREF_SIZE)`; in this font a truncated six-letter word still looks deliberate
+  and nothing anywhere reports it.
 - **A hex literal anywhere outside `mood/`** — it looks harmless per site and turns M11 into a
-  find-and-replace across a finished UI, which is where the feature gets abandoned.
+  find-and-replace across a finished UI, which is where the feature gets abandoned. **A second palette
+  is not a second place for literals**: `Palette.hardware()` is how the boot and shutdown screens get to
+  be black and white without putting a colour in `ui/` — they still name a role and still ask a palette,
+  they just ask a different one.
 - **Smoothed pixel art.** JavaFX interpolates by default; the sprites turn to mush and it reads
   as a bug in the art, not in the code. `setImageSmoothing(false)`, integer scale factors.
 - **Moods: the four protected roles are the whole risk.** A mood that makes coins and bumps the

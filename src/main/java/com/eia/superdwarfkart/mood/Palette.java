@@ -254,6 +254,73 @@ public final class Palette {
         return new Palette("Default", colors);
     }
 
+    /**
+     * The palette of the machine itself: black ground, white light, and nothing else.
+     *
+     * <p><strong>The boot screen and the shutdown screen draw through this rather than through
+     * {@link #active()}, and that is a statement rather than an oversight.</strong> Those two screens
+     * bracket the application: at the first one the system has not started, and at the last one it
+     * has stopped. A mood is something the software chose, so a boot screen in Sunset Wilds is the
+     * console admitting it was already running - and the flash at the moment the cartridge lands
+     * stops being a flash of light and becomes a flash of somebody's colour scheme.
+     *
+     * <p>It is a {@link Palette} rather than a handful of literals in {@code ui/} because ground rule
+     * 7 is about <em>where colours are defined</em>, not about how many palettes there are. Those
+     * screens still name a {@link PaletteRole} for every colour they draw and still ask a palette for
+     * it; they simply ask this one. Which means the hexadecimal values below sit in the one file the
+     * project allows them in, and a screen that wants the mood back needs no change other than which
+     * palette it reads.
+     *
+     * <p>Monochrome, so the roles carry <em>lightness</em> instead of hue: {@code ACCENT} and
+     * {@code NEGATIVE} are the glitch's two interference bands and are a long way apart on that axis
+     * for the same reason they are a long way apart in hue everywhere else. This palette is not a
+     * mood, is never offered in the switcher and never reaches {@code MoodValidator} - the protected
+     * roles' guarantees are about a look a user can choose, and nobody can choose this one.
+     *
+     * @return the fixed console palette, the same object every time
+     */
+    public static Palette hardware() {
+        return HARDWARE;
+    }
+
+    /**
+     * The console palette, built once.
+     *
+     * <p>Built eagerly and held, unlike {@link #defaultPalette()} which hands out a fresh copy:
+     * a palette is immutable, this one can never be edited, and the boot screen asks for it on every
+     * repaint of every frame of the glitch.
+     */
+    private static final Palette HARDWARE = hardwarePalette();
+
+    /**
+     * @return the console palette; see {@link #hardware()} for why it exists
+     */
+    private static Palette hardwarePalette() {
+        Map<PaletteRole, Color> colors = new EnumMap<>(PaletteRole.class);
+        // True black, and it stays true black through the 5-bit snap. A screen with nothing on it is
+        // the whole of what a console looks like before it is handed a cartridge.
+        colors.put(PaletteRole.BACKGROUND, GbaColor.web("#000000"));
+        colors.put(PaletteRole.BACKGROUND_ALT, GbaColor.web("#0a0a0a"));
+        colors.put(PaletteRole.SURFACE, GbaColor.web("#121212"));
+        colors.put(PaletteRole.SURFACE_RAISED, GbaColor.web("#242424"));
+        colors.put(PaletteRole.OUTLINE, GbaColor.web("#5a5a5a"));
+        // The flash at the moment of contact, and it has to be white rather than nearly white.
+        colors.put(PaletteRole.TEXT_PRIMARY, GbaColor.web("#ffffff"));
+        colors.put(PaletteRole.TEXT_DIM, GbaColor.web("#8c8c8c"));
+        // What the name on the label and the loading bar are drawn in: bright, but a step under the
+        // flash, so the flash still reads as a flash over the top of them.
+        colors.put(PaletteRole.PRIMARY, GbaColor.web("#e8e8e8"));
+        colors.put(PaletteRole.PRIMARY_DIM, GbaColor.web("#4a4a4a"));
+        colors.put(PaletteRole.ACCENT, GbaColor.web("#ffffff"));
+        colors.put(PaletteRole.METER_LOW, GbaColor.web("#6e6e6e"));
+        colors.put(PaletteRole.METER_HIGH, GbaColor.web("#dcdcdc"));
+        colors.put(PaletteRole.POSITIVE, GbaColor.web("#cfcfcf"));
+        colors.put(PaletteRole.NEGATIVE, GbaColor.web("#767676"));
+        colors.put(PaletteRole.HIGHLIGHT, GbaColor.web("#ffffff"));
+        colors.put(PaletteRole.SHADOW, GbaColor.web("#000000"));
+        return new Palette("Hardware", colors);
+    }
+
     @Override
     public String toString() {
         return "Palette[" + name + "]";

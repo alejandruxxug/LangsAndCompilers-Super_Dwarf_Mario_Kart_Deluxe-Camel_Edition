@@ -136,6 +136,16 @@ public class LibraryView extends BorderPane {
     /** Called when the user asks for a song to be played, or {@code null} if nothing listens. */
     private java.util.function.Consumer<Song> onSongActivated;
 
+    /**
+     * Called when the user presses SPOTIFY, or {@code null} if nothing listens.
+     *
+     * <p>A callback rather than a {@code SpotifySession} field, matching {@link #onSongActivated}: this
+     * view shows the library and has no business knowing that a streaming service exists, let alone
+     * holding a connection to one. It also means every constructor of this class keeps working
+     * unchanged, including the two-argument one the tests use.
+     */
+    private Runnable onSpotifySearch;
+
     private boolean populatingDetails;
 
     /**
@@ -193,6 +203,19 @@ public class LibraryView extends BorderPane {
         addButton.setTooltip(new Tooltip("Import an audio file into the library"));
         addButton.setOnAction(e -> onAdd());
 
+        // Beside ADD, because it is the same action from a different source: a song comes into the
+        // library either off the disk or off Spotify, and there is no reason the second one should be
+        // three clicks away on another page. What it opens is a modal, so the library stays behind it
+        // and the search is over as soon as the song has been added.
+        Button spotifyButton = new Button("SPOTIFY");
+        spotifyButton.setTooltip(new Tooltip(
+                "Search Spotify and add a track, with its album, genre and your rating"));
+        spotifyButton.setOnAction(e -> {
+            if (onSpotifySearch != null) {
+                onSpotifySearch.run();
+            }
+        });
+
         Button editButton = new Button("EDIT");
         editButton.setTooltip(new Tooltip("Edit the selected song"));
         editButton.setOnAction(e -> onEdit());
@@ -205,7 +228,7 @@ public class LibraryView extends BorderPane {
         editButton.disableProperty().bind(table.getSelectionModel().selectedItemProperty().isNull());
         deleteButton.disableProperty().bind(table.getSelectionModel().selectedItemProperty().isNull());
 
-        HBox actions = new HBox(8, addButton, editButton, deleteButton);
+        HBox actions = new HBox(8, addButton, spotifyButton, editButton, deleteButton);
         actions.setAlignment(Pos.CENTER_LEFT);
 
         Region spacer = new Region();
@@ -614,6 +637,18 @@ public class LibraryView extends BorderPane {
      */
     public void setOnSongActivated(java.util.function.Consumer<Song> handler) {
         this.onSongActivated = handler;
+    }
+
+    /**
+     * Registers what the SPOTIFY button opens.
+     *
+     * @param handler run when the button is pressed, or {@code null} to do nothing - in which case the
+     *                button is still there and still does nothing, which is deliberate: this view is
+     *                also built by tests with no session behind it, and a header that changed shape
+     *                depending on whether Spotify was wired up would be two layouts to check
+     */
+    public void setOnSpotifySearch(Runnable handler) {
+        this.onSpotifySearch = handler;
     }
 
     private HBox buildStatusBar() {

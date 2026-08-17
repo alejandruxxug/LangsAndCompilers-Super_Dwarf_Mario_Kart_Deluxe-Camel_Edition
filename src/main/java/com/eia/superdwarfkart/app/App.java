@@ -42,6 +42,7 @@ import com.eia.superdwarfkart.playback.AlphabeticalMode;
 import com.eia.superdwarfkart.playback.ArrivalOrderMode;
 import com.eia.superdwarfkart.playback.PlaybackEngine;
 import com.eia.superdwarfkart.spotify.SpotifyBinary;
+import com.eia.superdwarfkart.spotify.SpotifyCatalog;
 import com.eia.superdwarfkart.spotify.SpotifyConfig;
 import com.eia.superdwarfkart.spotify.SpotifySession;
 import com.eia.superdwarfkart.playback.PlaybackListener;
@@ -67,6 +68,7 @@ import com.eia.superdwarfkart.ui.RunnerView;
 import com.eia.superdwarfkart.ui.MoodCustomizerView;
 import com.eia.superdwarfkart.ui.MoodOverlayRenderer;
 import com.eia.superdwarfkart.ui.SettingsView;
+import com.eia.superdwarfkart.ui.ShutdownScreen;
 import com.eia.superdwarfkart.ui.SideRail;
 import com.eia.superdwarfkart.ui.Theme;
 import com.eia.superdwarfkart.ui.visualizer.OperationCounter;
@@ -205,6 +207,25 @@ public class App extends Application {
     private static final KeyCode COMPACT_KEY = KeyCode.F8;
 
     /**
+     * Function key that gives the runner the whole screen, and nothing else on it.
+     *
+     * <p><strong>Only the runner.</strong> Presentation mode already hands the whole <em>window</em>
+     * to the visualizer, and this is the same idea for the game taken one step further: no title bar,
+     * no side rail, no meters, no playback bar, no window frame, and no desktop either. The road is
+     * the only thing on the display.
+     *
+     * <p>F11 because that is what every other application on the machine uses for it, and because
+     * every other function key here is already spoken for. It <em>starts</em> the race if one is not
+     * running, since a fullscreen kart player with no kart in it would be a blank screen: the key
+     * names what the user wants to see rather than a state they have to reach first.
+     *
+     * <p>Escape leaves, which is what the user asked for and what every other frameless thing in this
+     * application already means by it. The toolkit's own fullscreen exit key is switched off in favour
+     * of handling it here - see {@link #enterFullscreenRace()} for why that is not the same key twice.
+     */
+    private static final KeyCode FULLSCREEN_KEY = KeyCode.F11;
+
+    /**
      * Where into the track the runner is drawn for its screenshot, in seconds.
      *
      * <p>Far enough in that a track which opens quietly has got going.
@@ -252,6 +273,29 @@ public class App extends Application {
     private PlayHistory history;
     private Button viewToggle;
     private boolean racing;
+
+    /** Whether the runner currently has the whole display to itself. See {@link #FULLSCREEN_KEY}. */
+    private boolean fullscreenRace;
+
+    /**
+     * The fanfare the machine makes as the cartridge goes in.
+     *
+     * <p>Constructed here and decoded on first play, which costs nothing until the cartridge lands.
+     */
+    private final com.eia.superdwarfkart.audio.SoundEffect bootFanfare =
+            new com.eia.superdwarfkart.audio.SoundEffect(AppConfig.SOUND_BOOT);
+
+    /** The screen shown while the daemon is being stopped, or {@code null} before the user quits. */
+    private ShutdownScreen shutdownScreen;
+
+    /** Set once a quit has been asked for, so a second press cannot start a second teardown. */
+    private boolean shuttingDown;
+
+    /** Guards {@link #stopDrawing()}, which the quit path and {@code stop()} both reach. */
+    private boolean stoppedDrawing;
+
+    /** Guards {@link #releaseResources}, for the same reason. */
+    private boolean releasedResources;
 
     /** Set when the user chose the library by hand, so pressing play does not overrule them. */
     private boolean libraryPinned;
@@ -350,7 +394,16 @@ public class App extends Application {
         // Recorded from the engine rather than from a song change, so a song scrolled past in the
         // library does not appear in the history as though it had been listened to.
         history = new PlayHistory();
-        engine.setOnPlayCounted(history::record);
+        engine.setOnPlayCounted(song -> {
+            // The fanfare is fifteen seconds long and the boot sequence is two, so it deliberately
+            // rings on over the library exactly as a console's does over a game's first screen. What
+            // it must not do is play *underneath the music*: the moment a song starts there are two
+            // things making noise and the older one gives way. This is the exact hook for it - the
+            // application boots paused and no song has ever played, so the first play is always a
+            // counted one and can never be a resume that would slip past.
+            bootFanfare.stop();
+            history.record(song);
+        });
         // A streamed song that cannot open is nearly always the daemon not being up yet. Handled
         // rather than logged: before this, playing one with Spotify unconnected did nothing at all
         // and said nothing anywhere.
@@ -389,6 +442,7 @@ public class App extends Application {
 
         libraryView = new LibraryView(library, libraryRepository, scores, courseIndex);
         libraryView.setOnSongActivated(song -> player.select(song));
+        libraryView.setOnSpotifySearch(this::openSpotifySearch);
         courseIndex.setOnUpdated(Platform::runLater, libraryView::refreshBadges);
         // Moving off a song is the moment its analysis has either finished or been abandoned, so
         // that is when the index is asked to look at it again. Cheaper and far more reliable than
@@ -488,6 +542,11 @@ public class App extends Application {
         // window looks the same on macOS and on Windows and neither breaks the theme.
         shell = new BorderPane();
         shell.getStyleClass().add("pixel-window");
+        // No frame while the boot screen is up. It draws no title bar for the same reason - a console
+        // with the power just switched on is not a window yet - and an amber border around a black
+        // screen is the software's colour scheme arriving before the software does. Taken off in
+        // finishBooting, along with everything else that is the application rather than the machine.
+        shell.getStyleClass().add("no-frame");
         // Built now - it wires the window's drag and its buttons - but not attached yet. The boot
         // screen gets the whole window: it is a console with the power just switched on, and a
         // title bar across the top of that is the application admitting it was a window all along.
@@ -518,6 +577,16 @@ public class App extends Application {
         bootScreen = new BootScreen(assets);
         bootScreen.setOnInserted(this::finishBooting);
         bootScreen.setOnLoading(this::bootLoadSpotify);
+        // The noise a console makes when a cartridge goes into a live slot. Fired from the boot
+        // screen rather than played by it: opening an output line is audio/'s business, and this is
+        // also what keeps a screenshot silent - previewAt runs none of the sequence's side effects.
+        bootScreen.setOnGlitch(bootFanfare::play);
+        // The animation is exactly as long as the sound, measured rather than written down - so the
+        // picture and the fanfare end together and neither is cut off by the other. Decoding here is a
+        // few hundred kilobytes of MPEG on the way to a screen that has not been drawn yet, and it is
+        // what the smoke test's `boot fanfare` line reads too. A missing sound leaves the boot screen on
+        // its own fallback length rather than turning the sequence into a different, shorter thing.
+        bootScreen.setSequenceSeconds(bootFanfare.lengthSeconds());
         // There is no title bar to drag by while this is up, so the black itself is the handle. The
         // cartridge consumes its own presses, so dragging it never moves the window.
         PixelDialog.dragBy(bootScreen, stage);
@@ -543,6 +612,13 @@ public class App extends Application {
         stage.initStyle(StageStyle.TRANSPARENT);
         stage.setTitle(AppConfig.APP_NAME);
         stage.setScene(scene);
+        // Anything asking the window to close goes through the shutdown screen rather than straight
+        // out. There is no system close button on an undecorated stage, but the platform can still ask
+        // - Cmd-Q on macOS does - and that path used to freeze for as long as the daemon took to die.
+        stage.setOnCloseRequest(event -> {
+            event.consume();
+            requestQuit();
+        });
         // Filling the screen from the start, because the boot screen is a console powering up and a
         // console does not power up in a window. MAIN_WIDTH and MAIN_HEIGHT stay as the size the
         // window restores to, and the layout has to be right at both - which is what the maximise
@@ -615,8 +691,9 @@ public class App extends Application {
             return;
         }
         booting = false;
-        // The title bar arrives with the application, not before it.
+        // The title bar and the window frame arrive with the application, not before it.
         shell.setTop(header);
+        shell.getStyleClass().remove("no-frame");
         overlay.setContent(root);
         // Now the layers arrive, with the application.
         applyMood(state.getMood());
@@ -759,11 +836,36 @@ public class App extends Application {
                 // button either, and a window with no visible way to shut it needs an invisible
                 // one - Escape, which is what every other frameless window here uses to say no.
                 if (event.getCode() == KeyCode.ESCAPE) {
-                    Platform.exit();
+                    requestQuit();
+                    return;
+                }
+                // Anything else skips the rest of the sequence, once the cartridge is in. Fifteen
+                // seconds of fanfare is an event on the first launch and a wait on the tenth, and
+                // somebody demonstrating this will start it many times - every console this is dressed
+                // as let you press through its own logo. Escape keeps meaning "no" rather than "hurry
+                // up", which is why it is handled first and returns.
+                if (bootScreen.skip()) {
+                    event.consume();
                 }
                 return;
             }
-            if (event.getCode() == STRUCTURE_KEY) {
+            // Fullscreen is the runner and nothing else, so while it is up the keys that would swap
+            // in something else are dead. Not because they would throw - because they would work:
+            // F6 would put the library into a pane that is not on screen and leave the road showing,
+            // which reads as a key that did nothing while quietly having done something. Same shape
+            // of early return as the boot screen's above, and for the same reason. The driving keys
+            // are untouched: the runner installs those as its own scene filter.
+            if (fullscreenRace) {
+                if (event.getCode() == KeyCode.ESCAPE || event.getCode() == FULLSCREEN_KEY) {
+                    exitFullscreenRace();
+                    event.consume();
+                }
+                return;
+            }
+            if (event.getCode() == FULLSCREEN_KEY) {
+                enterFullscreenRace();
+                event.consume();
+            } else if (event.getCode() == STRUCTURE_KEY) {
                 toggleStructureColumn();
                 event.consume();
             } else if (event.getCode() == PRESENTATION_KEY) {
@@ -1036,7 +1138,10 @@ public class App extends Application {
         Button quit = new Button("X");
         quit.getStyleClass().addAll("window-button", "close-button");
         quit.setTooltip(new Tooltip("Close"));
-        quit.setOnAction(event -> Platform.exit());
+        // Not Platform.exit(). Shutting down takes real time - the go-librespot child gets a five
+        // second grace period before it is killed - and doing that with the window already gone is
+        // what made closing the application look like a hang. See requestQuit().
+        quit.setOnAction(event -> requestQuit());
 
         // Same rule as the three view toggles beside them: a focusable button in the header answers
         // the first space bar of the session instead of play/pause, and these three sit at the end
@@ -1113,6 +1218,126 @@ public class App extends Application {
             updateViewToggle();
         }
         root.setCenter(view);
+    }
+
+    /**
+     * Opens the Spotify search modal over the library, and selects whatever it added.
+     *
+     * <p>Called by the library's own SPOTIFY button through a callback, so that view never learns a
+     * streaming service exists. What happens afterwards is what makes this an addition to the
+     * <em>library</em> rather than to a page of its own: the song is selected in the table, so the
+     * details panel is showing it and the rating slider is on it, and the course badge is looked at
+     * again because a streamed track earns one as soon as it has been played once.
+     */
+    private void openSpotifySearch() {
+        java.util.Optional<Song> added = com.eia.superdwarfkart.ui.SpotifySearchDialog.show(
+                mainStage, library, spotify);
+        added.ifPresent(song -> {
+            libraryView.showInDetails(song);
+            libraryView.refreshBadges();
+        });
+    }
+
+    /**
+     * Gives the runner the whole display: no window, no interface, just the road.
+     *
+     * <p><strong>It starts the race if one is not running.</strong> F11 says what the user wants to
+     * look at rather than naming a state they have to reach first, and a fullscreen kart player with
+     * no kart in it is a black screen with a rank of D in the corner.
+     *
+     * <p>The runner is moved into the overlay pane's slot rather than left in {@link #root}, which is
+     * the same move {@link #togglePresentation()} makes and for the same reason: the mood's layers
+     * live in that pane, so the road keeps its wallpaper and its scanlines instead of losing them at
+     * the moment the game is filling the screen. The header comes off because in true fullscreen a
+     * title bar is the one thing on the display that is not the game, and the shell drops its border
+     * because a window frame around a whole screen is the edge of a window that is not there.
+     *
+     * <p><strong>The toolkit's own fullscreen exit key is switched off, and Escape is handled here
+     * instead.</strong> They are the same keystroke and they are not the same thing: the toolkit's
+     * would take the stage out of fullscreen and leave every one of the changes above in place - no
+     * title bar, no border, a runner parented to the wrong pane and a window that cannot be moved or
+     * closed. That is the {@code scene.setRoot} trap in a different costume, so there is exactly one
+     * way out of this mode and {@link #exitFullscreenRace()} is it. The hint the toolkit would print
+     * over the top goes with it; the road already prints its own controls line.
+     */
+    private void enterFullscreenRace() {
+        if (fullscreenRace || mainStage == null) {
+            return;
+        }
+        // A node cannot sit in two places at once, and the visualizer is holding the slot.
+        if (presenting) {
+            togglePresentation();
+        }
+        if (!racing) {
+            toggleRace();
+        }
+
+        root.setCenter(null);
+        overlay.setContent(runner);
+        shell.setTop(null);
+        shell.getStyleClass().add("no-frame");
+
+        mainStage.setFullScreenExitKeyCombination(javafx.scene.input.KeyCombination.NO_MATCH);
+        mainStage.setFullScreenExitHint("");
+        if (!smokeTest()) {
+            mainStage.setFullScreen(true);
+        }
+        fullscreenRace = true;
+
+        runner.requestFocus();
+    }
+
+    /**
+     * @return whether this launch is a smoke test
+     *
+     *         <p><strong>{@link Stage#setFullScreen} is skipped during one, and this is why.</strong>
+     *         On macOS it enters a <em>nested event loop</em> and does not return until the platform's
+     *         own fullscreen transition has finished - and the smoke test runs synchronously on the
+     *         interface thread inside a synthesised key event, so that transition can never complete.
+     *         Measured: the run deadlocked inside {@code MacApplication._enterNestedEventLoopImpl} and
+     *         printed not one line after {@code window shrink}. A nested loop also pumps the event
+     *         queue, which would re-enter the check that is running.
+     *
+     *         <p>So the one call that belongs to the window system is left out and everything this
+     *         application actually decides - which pane holds the road, whether the title bar comes
+     *         off, whether the frame goes, whether the other shortcuts are dead, and whether all four
+     *         come back - is still driven and still asserted. Same shape of exemption as
+     *         {@code setMaximized} and the go-librespot download, and reported out loud rather than
+     *         quietly skipped.
+     */
+    private static boolean smokeTest() {
+        return Boolean.getBoolean(SMOKE_TEST_PROPERTY);
+    }
+
+    /**
+     * Puts the window back exactly as it was.
+     *
+     * <p>Every one of the four things {@link #enterFullscreenRace()} changed is undone here, which is
+     * why that is the only way in and this is the only way out. The race itself carries on - leaving
+     * fullscreen is not leaving the road, and a run that ended because somebody pressed Escape to get
+     * their window back would be a run lost to a keystroke about window management.
+     */
+    private void exitFullscreenRace() {
+        if (!fullscreenRace || mainStage == null) {
+            return;
+        }
+        fullscreenRace = false;
+        if (!smokeTest()) {
+            // Skipped for the same reason the other half is - see smokeTest().
+            mainStage.setFullScreen(false);
+        }
+
+        overlay.setContent(root);
+        root.setCenter(runner);
+        shell.setTop(header);
+        shell.getStyleClass().remove("no-frame");
+
+        runner.requestFocus();
+    }
+
+    /** @return whether the runner currently has the whole display */
+    private boolean isFullscreenRace() {
+        return fullscreenRace;
     }
 
     /**
@@ -1205,7 +1430,10 @@ public class App extends Application {
 
         miniPlayer = new MiniPlayerView(state, player, engine, assets, beatmaps, miniStage);
         miniPlayer.setOnExpand(this::expandFromCompanion);
-        miniPlayer.setOnQuit(Platform::exit);
+        // Through the same path as the header's close button, so quitting from either window shows the
+        // shutdown screen. This strip is 224 pixels wide and has nowhere to draw one, so requestQuit
+        // brings the main window back for it.
+        miniPlayer.setOnQuit(this::requestQuit);
 
         Scene scene = new Scene(miniPlayer);
         // The stage is transparent, so the window's visible edge is the border the strip draws.
@@ -1440,6 +1668,7 @@ public class App extends Application {
         boolean headerOk = reportHeader(scene);
         boolean foldOk = reportStructureFold(scene);
         boolean shrinkOk = reportWindowShrink(scene);
+        boolean fullscreenOk = reportFullscreenRace(scene);
 
         reportAudio();
         reportBeatmap();
@@ -1506,6 +1735,9 @@ public class App extends Application {
         if (!shrinkOk) {
             failures.add("window shrink");
         }
+        if (!fullscreenOk) {
+            failures.add("race fullscreen");
+        }
         if (!foldOk) {
             failures.add("dsa fold");
         }
@@ -1528,7 +1760,16 @@ public class App extends Application {
             writeScreenshotIfRequested(scene);
             engine.pause();
             captureEveryView(scene);
-            Platform.exit();
+            // Out through the application's own quit path rather than a bare Platform.exit(), which is
+            // the only way to exercise it: the teardown now runs on a thread of its own behind a
+            // shutdown screen, and the failure mode of getting that wrong is a process that never
+            // exits. A smoke test that closed itself by a different route than the close button uses
+            // would report nothing about the route the user takes - and if this deadlocks, the run
+            // hangs here and says so, which is exactly what happened when Stage.setFullScreen was
+            // called from inside this method.
+            System.out.println("[smoke] shutdown          : going out through the quit path, "
+                    + "as the close button does");
+            requestQuit();
         });
         close.play();
     }
@@ -1598,20 +1839,85 @@ public class App extends Application {
         // The glitch and the loading bar cannot be photographed by waiting for them: this method
         // holds the interface thread, so the sequence's own timer never ticks. Both are asked for at
         // a stated instant instead, the way the companion window's spinning record is.
-        bootScreen.previewAt(0.35, 0);
+        // The white flash first, and it needs its own shot: it lasts FLASH_SECONDS of a GLITCH_SECONDS
+        // tear, so a picture taken a third of the way through the glitch is taken after the flash is
+        // already over - which is a photograph of the tear claiming to be a photograph of the flash.
+        bootScreen.previewGlitch(0.05);
+        layoutNow(scene);
+        captureIfRequested(scene, "boot-flash");
+
+        bootScreen.previewGlitch(0.35);
         layoutNow(scene);
         captureIfRequested(scene, "boot-glitch");
-        // previewAt draws a moment; it deliberately runs none of the sequence's side effects, or a
-        // screenshot would start a daemon. So the caption the real boot sets is put here by hand -
-        // otherwise the one shot of this phase shows the line blank and proves nothing about it.
-        bootScreen.setStatus("LOADING GO-LIBRESPOT...");
-        bootScreen.previewAt(1, 0.55);
-        layoutNow(scene);
-        captureIfRequested(scene, "boot-loading");
 
-        // And the real thing, past the threshold, run to its end by hand for the same reason.
+        // Then the show, one movement at a time. **Every one of these is a fade**, which is the single
+        // most unphotographable thing there is: a still of the wrong instant is a still of an empty
+        // screen and looks exactly like a screen that failed to draw. The instants are chosen to be the
+        // middle of each movement rather than its edges, so what is in the shot is the movement rather
+        // than the gap between two of them. previewShow runs none of the sequence's side effects, so
+        // none of this starts a daemon or plays fifteen seconds of audio into a build log - which is
+        // also why the caption the real boot sets is put here by hand.
+        bootScreen.setStatus("GO-LIBRESPOT READY " + WAITING_FOR_THE_SOUND);
+        for (BootScreen.Movement movement : BootScreen.Movement.values()) {
+            bootScreen.previewShow(movement.instant());
+            layoutNow(scene);
+            captureIfRequested(scene, movement.label());
+        }
+
+        // The cartridge has to be *gone* by now, and this is the one thing on this screen a screenshot
+        // cannot settle: the sliver that used to be left over hung below the pane's own bottom edge,
+        // which is off the shot on a tall window and visible on a short one. Read off the node instead.
+        boolean cartridgeGone = !bootScreen.cartridgeHandle().isVisible();
+
+        // The sequence's length, which is the whole of what was asked for: the animation runs for as long
+        // as the fanfare rather than for a number written down beside it. Reported against the sound's
+        // own measured duration, so the two drifting apart is visible rather than assumed.
+        double fanfareSeconds = bootFanfare.lengthSeconds();
+        boolean lengthsAgree = fanfareSeconds <= 0
+                || Math.abs(bootScreen.sequenceSeconds() - fanfareSeconds) < 0.05;
+        System.out.printf("[smoke] boot sequence     : %.1f s of animation against %.1f s of fanfare%s%n",
+                bootScreen.sequenceSeconds(), fanfareSeconds,
+                lengthsAgree ? "" : "  THE PICTURE AND THE SOUND WILL NOT END TOGETHER");
+
+        System.out.println("[smoke] boot cartridge in : "
+                + (cartridgeGone ? "gone from the screen once it is in the machine"
+                        : "STILL ON SCREEN BEHIND THE LOADING BAR"));
+
+        // The name is the joke and this is the one screen with room for it at a size worth reading.
+        // Measured rather than looked at, because a splash that silently fell back to its minimum
+        // still draws perfectly well - it just stops being a splash.
+        BootScreen.Splash splash = BootScreen.splashAt(scene.getWidth());
+        boolean splashFits = splash.fits(scene.getWidth());
+        System.out.printf("[smoke] boot splash       : %.0fpx over %d lines, widest %d chars = %.0f px "
+                        + "in %.0f%s%n",
+                splash.size(), splash.lines(), splash.widestChars(), splash.widthPixels(),
+                scene.getWidth(), splashFits ? "" : "  DOES NOT FIT");
+
+        // The fanfare is the one thing here that fails completely silently: a missing or undecodable
+        // resource sounds exactly like a sound that was never triggered. Decoded without playing it,
+        // because a build log is not a place to play fifteen seconds of audio.
+        boolean fanfareOk = bootFanfare.isReady();
+        System.out.printf("[smoke] boot fanfare      : %s%n", fanfareOk
+                ? String.format("%s decodes, %.1f s", AppConfig.SOUND_BOOT,
+                        bootFanfare.lengthSeconds())
+                : AppConfig.SOUND_BOOT + " WILL NOT DECODE - the boot will be silent");
+
+        // And the real thing, past the threshold. The seat itself is a Timeline whose onFinished starts
+        // the sequence, and no pulse will arrive to run it, so this exercises the drag's routing and the
+        // skip below is what actually gets to the end.
         fireDrag(handle, travel);
-        bootScreen.settle();
+
+        // Which is the check for the skip, and it has to be done from inside a running sequence - the
+        // previews above left the screen part way through the show, which is exactly where a user in a
+        // hurry presses a key. **A skip that did nothing would be invisible**: the sequence would simply
+        // run its own length, which is what it does anyway, so nothing would look wrong for fifteen
+        // seconds. It is also how this method finishes, so a broken skip fails the whole boot check
+        // rather than being reported beside it.
+        boolean skipped = bootScreen.skip();
+        System.out.println("[smoke] boot skip         : "
+                + (skipped ? "any key cuts the sequence short and hands the window over"
+                        : "SKIP DID NOTHING - a 15 s boot with no way past it"));
+
         layoutNow(scene);
         boolean booted = bootScreen.isBooted() && !booting;
         boolean libraryUp = scene.getRoot().lookup(".library-view") != null;
@@ -1619,7 +1925,8 @@ public class App extends Application {
                 + (booted && libraryUp ? "seated, machine started, library shown"
                         : booted ? "started but THE LIBRARY DID NOT APPEAR" : "DID NOTHING"));
 
-        return refused && booted && libraryUp && labelled;
+        return refused && booted && libraryUp && labelled && cartridgeGone && splashFits
+                && fanfareOk && lengthsAgree && skipped;
     }
 
     /**
@@ -1801,6 +2108,73 @@ public class App extends Application {
                 grewWithIt ? "" : "  DID NOT GROW",
                 fitsAgain ? "" : "  STUCK WIDE - THE WINDOW WILL CROP IT");
         return grewWithIt && fitsAgain;
+    }
+
+    /**
+     * Drives F11 and Escape at the real scene, and reports what the window actually did.
+     *
+     * <p><strong>Nothing else can see any of this.</strong> A screenshot of a fullscreen race and a
+     * screenshot of a windowed one differ only by the size of the image, and the smoke test does not
+     * even maximise; the interesting quantities are all state - whether the stage went fullscreen at
+     * all, whether the road ended up in the pane the layers are drawn on, whether the title bar came
+     * off, and whether every one of those came back on the way out. The last of those is the one worth
+     * the most: an exit that restored the stage and forgot the header would leave a window with no way
+     * to move or close it, which is the {@code scene.setRoot} trap this application has already been
+     * caught by once.
+     *
+     * <p>It is driven with a real key event rather than by calling the methods, because a shortcut
+     * wired into the wrong phase of event delivery is a routing fault that looks perfect from the
+     * inside - and this one has to survive the early return the mode installs for every other key.
+     *
+     * <p><strong>The one thing not exercised is {@code Stage.setFullScreen} itself</strong>, which is
+     * skipped during a smoke test - it enters a nested event loop on macOS and deadlocks a run that is
+     * holding the interface thread. See {@link #smokeTest()}, and read the printed line: it says so
+     * rather than implying the platform was asked and agreed.
+     *
+     * @param scene the scene to fire keys at
+     * @return whether the mode was entered, left, and left cleanly
+     */
+    private boolean reportFullscreenRace(Scene scene) {
+        boolean wasRacing = racing;
+        Node centreBefore = overlay.getContent();
+
+        fireKey(scene, FULLSCREEN_KEY);
+        layoutNow(scene);
+        boolean entered = fullscreenRace;
+        boolean roadHasTheWindow = overlay.getContent() == runner;
+        boolean barGone = shell.getTop() == null;
+        boolean frameGone = shell.getStyleClass().contains("no-frame");
+        boolean startedRace = racing;
+
+        // Every other shortcut has to be dead while this is up: F6 would swap the library into a pane
+        // that is not on screen and leave the road showing, which is the shape of fault that reads as
+        // a key doing nothing while quietly having done something.
+        fireKey(scene, RACE_KEY);
+        boolean othersIgnored = fullscreenRace && overlay.getContent() == runner;
+
+        fireKey(scene, KeyCode.ESCAPE);
+        layoutNow(scene);
+        boolean left = !fullscreenRace && !mainStage.isFullScreen();
+        boolean restored = shell.getTop() == header && overlay.getContent() == centreBefore
+                && !shell.getStyleClass().contains("no-frame");
+
+        // Back to whatever the window was doing before, since this is the middle of a longer run.
+        if (racing != wasRacing) {
+            toggleRace();
+        }
+        layoutNow(scene);
+
+        System.out.println("[smoke] race fullscreen   : F11 "
+                + (entered ? "gave the road the display" : "DID NOTHING")
+                + (startedRace ? " (started the race)" : "")
+                + ", " + (barGone && frameGone ? "title bar and frame off"
+                        : barGone ? "bar off but THE FRAME STAYED" : "THE TITLE BAR STAYED")
+                + ", " + (othersIgnored ? "F6 correctly ignored" : "F6 CHANGED THE VIEW UNDER IT")
+                + ", ESC " + (left ? "left" : "DID NOT LEAVE")
+                + (restored ? " and put both back" : " AND LEFT THE WINDOW WITHOUT ITS BAR")
+                + "  (the stage's own setFullScreen is skipped here - it deadlocks a synchronous run)");
+        return entered && roadHasTheWindow && barGone && frameGone
+                && othersIgnored && left && restored;
     }
 
     /**
@@ -2093,13 +2467,13 @@ public class App extends Application {
             return;
         }
         if (!spotify.isAvailable()) {
-            bootScreen.setStatus(SpotifyBinary.isSupportedPlatform()
-                    ? "GO-LIBRESPOT NOT INSTALLED"
-                    : "GO-LIBRESPOT UNSUPPORTED HERE");
+            bootScreen.setStatus((SpotifyBinary.isSupportedPlatform()
+                    ? "GO-LIBRESPOT NOT INSTALLED "
+                    : "GO-LIBRESPOT UNSUPPORTED HERE ") + WAITING_FOR_THE_SOUND);
             return;
         }
         if (spotify.isConnected()) {
-            bootScreen.setStatus("GO-LIBRESPOT READY");
+            bootScreen.setStatus("GO-LIBRESPOT READY " + WAITING_FOR_THE_SOUND);
             return;
         }
         bootScreen.setStatus("LOADING GO-LIBRESPOT...");
@@ -2118,13 +2492,29 @@ public class App extends Application {
             return;
         }
         bootScreen.setStatus(switch (spotify.state()) {
-            case CONNECTED -> "GO-LIBRESPOT READY";
-            case AWAITING_LOGIN -> "GO-LIBRESPOT NEEDS A LOGIN";
-            case FAILED -> "GO-LIBRESPOT DID NOT START";
-            case UNAVAILABLE -> "GO-LIBRESPOT NOT INSTALLED";
+            // Every one of these is a *finished* state, and the bar is still running - so the caption
+            // says what is actually being waited for rather than leaving a stale "READY" up while the
+            // screen appears to be doing something. It is honest about it: the work is done and the
+            // fanfare is the only reason the screen is still there, and the line under this one says
+            // any key gets past it.
+            case CONNECTED -> "GO-LIBRESPOT READY " + WAITING_FOR_THE_SOUND;
+            case AWAITING_LOGIN -> "GO-LIBRESPOT NEEDS A LOGIN " + WAITING_FOR_THE_SOUND;
+            case FAILED -> "GO-LIBRESPOT DID NOT START " + WAITING_FOR_THE_SOUND;
+            case UNAVAILABLE -> "GO-LIBRESPOT NOT INSTALLED " + WAITING_FOR_THE_SOUND;
+            // The one state that genuinely is still working.
             case STARTING, READY_TO_CONNECT -> "LOADING GO-LIBRESPOT...";
         });
     }
+
+    /**
+     * What the boot caption says once there is nothing left to load.
+     *
+     * <p>The bar has always been a beat rather than a measurement, and it now runs for the length of the
+     * fanfare - so once the daemon has resolved, one way or the other, the only thing still holding the
+     * screen up is the music. Saying so is better than a "READY" that sits there while the bar carries
+     * on filling, which reads as a machine that has lost track of what it was doing.
+     */
+    private static final String WAITING_FOR_THE_SOUND = "- WAITING FOR THE EPIC SOUND TO FINISH";
 
     /**
      * The streamed song that is waiting for the daemon to finish coming up, or {@code null}.
@@ -2346,11 +2736,38 @@ public class App extends Application {
                     + "(catalogue search off)");
             return;
         }
+        // The limit the interface actually asks for. Spotify refuses anything above ten outright while
+        // its own documentation says fifty, and a diagnostic that asked for a different number than the
+        // interface is not testing the interface - that is what hid that fault for a whole session.
         List<com.eia.superdwarfkart.spotify.SpotifyTrack> found =
-                spotify.searchTracks("the beatles", 50);
+                spotify.searchTracks("the beatles", SpotifyCatalog.MAX_SEARCH_LIMIT);
         String problem = spotify.searchProblem();
         System.out.println("[smoke] spotify search    : " + found.size() + " results"
                 + (found.isEmpty() ? "  PROBLEM: " + problem : "  e.g. " + found.get(0)));
+        if (found.isEmpty()) {
+            return;
+        }
+
+        // The genre lookup, and this line is worth more for what it says when it comes back empty than
+        // for what it says when it works. Measured on 2026-08-17: v1/artists/{id} on an application
+        // token answers 200 with *no genres key at all* - not an empty array, absent - so on a Client
+        // Credentials token there is currently no route from Spotify to a genre, and the reference still
+        // documents the field. The add dialog's real answer is the library's own knowledge of the
+        // artist; this request is the upgrade for the day Spotify sends the field again. Printed rather
+        // than asserted, because an empty answer is now the correct one and failing the build on it
+        // would be a red light nobody can act on.
+        com.eia.superdwarfkart.spotify.SpotifyTrack first = found.get(0);
+        List<String> tags = spotify.artistGenres(first.artistId());
+        System.out.println("[smoke] spotify genre     : " + first.artist()
+                + (first.artistId() == null ? " carries no artist id" : "")
+                + " -> " + (tags.isEmpty()
+                        ? "Spotify sends no genres field any more (measured); "
+                                + "the dialog falls back to the library"
+                        : String.join(", ", tags) + "  = "
+                                + com.eia.superdwarfkart.model.Genre.fromTags(tags).displayName()));
+        System.out.println("[smoke] library genre     : "
+                + first.artist() + " -> " + library.genreForArtist(first.artist()).displayName()
+                + "  (what the add dialog actually pre-fills with)");
     }
 
     /**
@@ -3046,6 +3463,79 @@ public class App extends Application {
         miniStage.sizeToScene();
 
         expandFromCompanion();
+
+        // The Spotify add dialog, with a track picked so the form is in the shot. It is the largest new
+        // surface in this change and it is a form in a fixed-width font, which is exactly where a
+        // caption runs off the side while nothing anywhere reports it.
+        sideRail.select(Destination.LIBRARY);
+        layoutNow(scene);
+        captureSpotifyDialog(destination);
+
+        // Last of all, because it is the screen the application ends on. Photographed rather than
+        // waited for, and with nothing torn down: the real one goes up when the user quits and the
+        // window is gone a second or two later, so this is the only way to look at it - and running
+        // the actual teardown here would close the sound card out from under every check above.
+        captureShutdown(scene, destination);
+    }
+
+    /**
+     * Photographs the library's Spotify add dialog with a track picked.
+     *
+     * <p>The results are made up here rather than searched for, and deliberately so: this is a layout
+     * check, and a layout check that depended on a network round trip would be a layout check that
+     * silently stopped running whenever the machine was offline or the credentials were unset. The
+     * titles are long on purpose - the widest thing in this dialog is a result row, and it is the row
+     * that decides how wide the window comes out.
+     *
+     * <p>The track carries no artist id, so no genre lookup is made and nothing here touches Spotify.
+     *
+     * @param destination the screenshot path the run was given
+     */
+    private void captureSpotifyDialog(String destination) {
+        List<com.eia.superdwarfkart.spotify.SpotifyTrack> results = List.of(
+                new com.eia.superdwarfkart.spotify.SpotifyTrack(
+                        "spotify:track:1", "Crimewave", "Crystal Castles", null,
+                        "Crystal Castles", java.time.Duration.ofSeconds(258), null, 2008),
+                new com.eia.superdwarfkart.spotify.SpotifyTrack(
+                        "spotify:track:2", "Crimewave (Crystal Castles vs. HEALTH)",
+                        "Crystal Castles, HEALTH", null, "Crystal Castles",
+                        java.time.Duration.ofSeconds(213), null, 2008),
+                new com.eia.superdwarfkart.spotify.SpotifyTrack(
+                        "spotify:track:3", "Untrust Us", "Crystal Castles", null,
+                        "Crystal Castles", java.time.Duration.ofSeconds(191), null, 2008));
+
+        com.eia.superdwarfkart.ui.SpotifySearchDialog.capture(mainStage, library, spotify, results,
+                dialogScene -> writeScreenshot(dialogScene, derivedPath(destination, "spotify-add")));
+    }
+
+    /**
+     * Photographs the shutdown screen without shutting anything down.
+     *
+     * <p>The sweep is asked for at a stated instant, exactly as the boot screen's glitch is: this
+     * method holds the interface thread, so the screen's own frame loop never ticks and a live one
+     * would be photographed at whatever the first frame happened to be. The caption is set by hand for
+     * the same reason it is on the boot screen - the real one is written by the teardown thread as each
+     * step starts, and none of that runs here.
+     *
+     * <p>The window is put back afterwards. A screenshot must not leave the application in a state it
+     * cannot leave, and the checks above have not finished with it.
+     *
+     * @param scene       the scene to capture
+     * @param destination the screenshot path the run was given
+     */
+    private void captureShutdown(Scene scene, String destination) {
+        Node was = overlay.getContent();
+        ShutdownScreen screen = new ShutdownScreen();
+        screen.setStatus("STOPPING GO-LIBRESPOT");
+        shell.setTop(null);
+        overlay.setContent(screen);
+        layoutNow(scene);
+        screen.previewAt(0.45);
+        writeScreenshot(scene, derivedPath(destination, "shutdown"));
+
+        overlay.setContent(was);
+        shell.setTop(header);
+        layoutNow(scene);
     }
 
     /**
@@ -3148,14 +3638,105 @@ public class App extends Application {
     }
 
     /**
-     * Releases everything that outlives the window.
+     * Starts a visible shutdown: puts a screen up, then tears down off the interface thread.
      *
-     * <p>The playback thread is a daemon and the frame timers stop with the toolkit, so nothing
-     * here keeps the process alive on its own - but the sound card is a shared system resource and
-     * is handed back explicitly. Called by JavaFX on every ordinary exit path.
+     * <p><strong>This exists because {@code stop()} on its own looked exactly like a crash.</strong>
+     * JavaFX runs {@code Application.stop()} on the interface thread <em>after</em> the last window is
+     * hidden, and the slowest thing in it is by far the go-librespot child: it is asked to exit
+     * politely and then given a five second grace period before it is killed. So closing the
+     * application made the window vanish and then left the process sitting in the dock, unresponsive,
+     * for up to five seconds - on macOS long enough to earn a spinning cursor. Nothing was wrong and
+     * there was no way at all to tell that from outside.
+     *
+     * <p>So the order is inverted. The window <em>stays up</em>, shows {@link ShutdownScreen}, and the
+     * teardown runs on a thread of its own; the interface thread is free the whole time, so the window
+     * still paints, still moves and still reports which step it is on. {@link Platform#exit()} is
+     * called at the end, which then reaches {@code stop()} and finds both halves already done.
+     *
+     * <p><strong>What makes the background half safe is ground rule 3, not luck.</strong> Everything
+     * {@link #releaseResources} touches lives in {@code playback/}, {@code audio/}, {@code analysis/}
+     * and {@code spotify/}, none of which may import {@code javafx} - so none of it can reach the
+     * scene graph however it is called. The parts that <em>are</em> the scene graph, which is every
+     * {@code AnimationTimer} plus filing the run in progress, stay on the interface thread in
+     * {@link #stopDrawing()} and happen before the screen goes up.
+     *
+     * <p>There is deliberately no way to cancel. By the time this is on screen the audio line is
+     * closing, and a shutdown that could be called off would be a state every view behind it would
+     * have to know about.
      */
-    @Override
-    public void stop() {
+    private void requestQuit() {
+        if (shuttingDown) {
+            return;
+        }
+        shuttingDown = true;
+        // Whatever else happens, the fanfare is not still playing over a shutdown screen.
+        bootFanfare.stop();
+
+        // Something has to be on screen to draw this on. The companion strip may be the only window
+        // showing and it is 224 pixels wide, so the main one comes back for it - shown before the
+        // companion is hidden, because JavaFX exits when the last window goes and that would close
+        // the application at exactly the moment it is trying to say it is closing.
+        if (mainStage != null && !mainStage.isShowing()) {
+            mainStage.show();
+        }
+        if (miniStage != null && miniStage.isShowing()) {
+            miniPlayer.stop();
+            miniStage.hide();
+        }
+        if (fullscreenRace) {
+            exitFullscreenRace();
+        }
+
+        stopDrawing();
+
+        // No title bar: there is nothing left to minimise or maximise, and a close button on a
+        // screen that is already closing can only be a second press that does harm. No layers
+        // either - this screen and the boot screen are the machine rather than the mood, and an
+        // ABOVE_CONTENT scanline layer would be the one thing still drawn in somebody's palette.
+        shell.setTop(null);
+        if (overlay != null) {
+            overlay.setMood(null, null);
+        }
+        shutdownScreen = new ShutdownScreen();
+        overlay.setContent(shutdownScreen);
+        shutdownScreen.start();
+
+        long began = System.nanoTime();
+        Thread teardown = new Thread(() -> {
+            releaseResources(step -> Platform.runLater(() -> {
+                if (shutdownScreen != null) {
+                    shutdownScreen.setStatus(step);
+                }
+            }));
+            Platform.runLater(() -> {
+                if (shutdownScreen != null) {
+                    shutdownScreen.stop();
+                }
+                // The whole justification for this screen, in one number: however long this says, the
+                // window was painting and answering the whole time rather than sitting frozen.
+                LOG.info(String.format("Shut down in %.0f ms",
+                        (System.nanoTime() - began) / 1e6));
+                Platform.exit();
+            });
+        }, "sdmk-shutdown");
+        // Daemon, so a teardown that somehow wedged could never be the thing keeping the JVM alive -
+        // which would turn a five second wait into a process that never exits at all.
+        teardown.setDaemon(true);
+        teardown.start();
+    }
+
+    /**
+     * Stops every frame loop and files the run in progress.
+     *
+     * <p>Interface thread only: an {@code AnimationTimer} may only be stopped from it, and
+     * {@code runner.stop()} writes the score board. Guarded, because both {@link #requestQuit()} and
+     * {@link #stop()} reach here and on the ordinary path both of them run.
+     */
+    private void stopDrawing() {
+        if (stoppedDrawing) {
+            return;
+        }
+        stoppedDrawing = true;
         if (meters != null) {
             meters.stop();
         }
@@ -3170,31 +3751,77 @@ public class App extends Application {
         if (beatmapTimeline != null) {
             beatmapTimeline.stop();
         }
-        if (beatmaps != null) {
-            beatmaps.close();
-        }
-        if (courseIndex != null) {
-            courseIndex.close();
-        }
         if (playbackBar != null) {
             playbackBar.stopClock();
         }
         if (visualizer != null) {
             visualizer.stop();
         }
+        if (overlay != null) {
+            overlay.stop();
+        }
+    }
+
+    /**
+     * Hands back everything that outlives the window, reporting each step as it starts.
+     *
+     * <p>Safe on any thread, and that is a property of the layering rather than of this method: not
+     * one of these classes may import {@code javafx} (ground rule 3, enforced by
+     * {@code LayeringTest}), so none of them can touch the scene graph whichever thread calls them.
+     *
+     * <p>The playback thread is a daemon and the frame timers stop with the toolkit, so nothing here
+     * keeps the process alive on its own - but the sound card is a shared system resource and is
+     * handed back explicitly, and the go-librespot child is a whole separate process.
+     *
+     * @param report given a short caption for each step, in progress order; it lands on the interface
+     *               thread by the caller's arrangement, not this method's
+     */
+    private void releaseResources(java.util.function.Consumer<String> report) {
+        if (releasedResources) {
+            return;
+        }
+        releasedResources = true;
+
+        report.accept("CLOSING THE AUDIO OUTPUT");
         if (engine != null) {
             engine.close();
         }
+
+        report.accept("STOPPING THE ANALYSER");
+        if (beatmaps != null) {
+            beatmaps.close();
+        }
+        if (courseIndex != null) {
+            courseIndex.close();
+        }
+
+        // Last, and by a wide margin the slowest: this kills the go-librespot child, politely and
+        // then not. An orphaned daemon holds a Spotify session and keeps the API port bound, so the
+        // next launch finds the port taken and Spotify silently does not work with nothing on screen
+        // saying why. There is a shutdown hook behind this for the paths that never reach here.
+        report.accept("STOPPING GO-LIBRESPOT");
         if (spotifyView != null) {
             spotifyView.shutdown();
         }
-        // Last, and it matters that it happens at all: this kills the go-librespot child. An
-        // orphaned daemon holds a Spotify session and keeps the API port bound, so the next launch
-        // finds the port taken and Spotify silently does not work, with nothing on screen saying
-        // why. There is a shutdown hook behind this for the paths that never reach here.
         if (spotify != null) {
             spotify.close();
         }
+
+        report.accept("GOODBYE");
+    }
+
+    /**
+     * Releases everything that outlives the window.
+     *
+     * <p>Called by JavaFX on every exit path, including the ones that never went through
+     * {@link #requestQuit()} - a smoke test's own {@code Platform.exit()}, or the platform closing the
+     * application from outside. Both halves are guarded, so on the ordinary path this finds the work
+     * already done and returns.
+     */
+    @Override
+    public void stop() {
+        stopDrawing();
+        releaseResources(step -> { });
     }
 
     /**

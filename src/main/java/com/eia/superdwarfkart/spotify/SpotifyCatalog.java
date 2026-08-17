@@ -59,6 +59,14 @@ public final class SpotifyCatalog {
     static final String SEARCH_ENDPOINT = "https://api.spotify.com/v1/search";
 
     /**
+     * Where an artist's genres are read from.
+     *
+     * <p>Derived from {@link #SEARCH_ENDPOINT} rather than written out, so a test pointing this class
+     * at a stub server gets both endpoints for one override.
+     */
+    static final String ARTISTS_PATH = "artists/";
+
+    /**
      * The most results {@code v1/search} will accept in one page.
      *
      * <p><strong>Ten, measured — and Spotify's own documentation says fifty.</strong> The reference
@@ -284,6 +292,64 @@ public final class SpotifyCatalog {
             return List.of();
         }
         return SpotifyTrack.listFrom(response.path("tracks").path("items"));
+    }
+
+    /**
+     * Reads the genres Spotify files an artist under.
+     *
+     * <p><strong>A second call, because a track object has no genre in it.</strong> Spotify keeps
+     * genres on the artist and not on the track or the album, so this is the only way to arrive at
+     * one - and it is why it is done for a single track at the moment the user opens it rather than
+     * for every row of a result page. Ten searches would otherwise become eleven requests, and an
+     * imported playlist would become one request per song for a field the user is about to be shown a
+     * dropdown for anyway.
+     *
+     * <p>The tags are Spotify's own free text - {@code "witch house"}, {@code "electropop"},
+     * {@code "sertanejo universitario"} - and are turned into one of ours by
+     * {@link com.eia.superdwarfkart.model.Genre#fromTags}. An artist with no genres recorded is
+     * completely ordinary, especially for a small one, and comes back as an empty list rather than as
+     * a failure.
+     *
+     * @param artistId the artist's Spotify id, or {@code null}
+     * @return the tags, in the order Spotify gave them; empty for anything that did not work
+     */
+    public List<String> artistGenres(String artistId) {
+        if (artistId == null || artistId.isBlank() || !isConfigured()) {
+            return List.of();
+        }
+        String bearer = accessToken();
+        if (bearer == null) {
+            return List.of();
+        }
+
+        JsonNode response = get(artistUrl(artistId.trim()), bearer);
+        if (response == null) {
+            return List.of();
+        }
+        List<String> genres = new java.util.ArrayList<>();
+        for (JsonNode genre : response.path("genres")) {
+            String tag = genre.asText("");
+            if (!tag.isBlank()) {
+                genres.add(tag);
+            }
+        }
+        return genres;
+    }
+
+    /**
+     * Builds the address of an artist, beside whatever {@code searchEndpoint} is.
+     *
+     * <p>Alongside rather than absolute, so a test that redirected {@code v1/search} at a stub server
+     * gets {@code v1/artists} redirected with it. Two independently overridable endpoints would be
+     * two chances for a test to exercise the live service by accident.
+     *
+     * @param artistId the artist's id, already trimmed
+     * @return the full address
+     */
+    private String artistUrl(String artistId) {
+        int lastSlash = searchEndpoint.lastIndexOf('/');
+        String base = lastSlash < 0 ? searchEndpoint : searchEndpoint.substring(0, lastSlash + 1);
+        return base + ARTISTS_PATH + artistId;
     }
 
     /**

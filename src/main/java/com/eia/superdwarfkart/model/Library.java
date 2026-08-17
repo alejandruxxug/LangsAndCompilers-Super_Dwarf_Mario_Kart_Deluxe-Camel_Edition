@@ -290,6 +290,50 @@ public class Library {
         return distinct(Song::getAlbum);
     }
 
+    /**
+     * What this library already says an artist's genre is.
+     *
+     * <p><strong>This exists because Spotify stopped answering the question.</strong> Its Web API used
+     * to file genres against the artist, which is what the add dialog looked them up from; measured
+     * against the live service on 2026-08-17, {@code v1/artists/{id}} on an application token now
+     * returns HTTP 200 with <em>no {@code genres} field at all</em> - the key is absent, not empty -
+     * for The Beatles, Ariana Grande and Don Diablo alike, and the album object carries none either.
+     * So the best remaining answer is the one already in front of the user: if they have filed three
+     * songs by this artist as Electronic, the fourth is almost certainly Electronic too.
+     *
+     * <p>Matched case-insensitively on the whole credit, so {@code "Crystal Castles"} and
+     * {@code "Crystal Castles, HEALTH"} are deliberately <em>different</em> artists here - a feature
+     * credit is a different act and guessing across them would be worse than not guessing.
+     *
+     * <p>The most common answer wins rather than the first, because one mis-filed song should not
+     * decide it; {@link Genre#UNKNOWN} songs do not vote, since "nobody has said" is not an opinion.
+     *
+     * @param artist the artist credit to look up; {@code null} or blank gives {@link Genre#UNKNOWN}
+     * @return the genre this artist's songs are mostly filed under, or {@link Genre#UNKNOWN} when the
+     *         library has nothing to say
+     */
+    public Genre genreForArtist(String artist) {
+        if (artist == null || artist.isBlank()) {
+            return Genre.UNKNOWN;
+        }
+        java.util.Map<Genre, Integer> votes = new java.util.EnumMap<>(Genre.class);
+        for (Song song : songs) {
+            if (song.getGenre() == Genre.UNKNOWN || !artist.equalsIgnoreCase(song.getArtist())) {
+                continue;
+            }
+            votes.merge(song.getGenre(), 1, Integer::sum);
+        }
+        Genre best = Genre.UNKNOWN;
+        int bestVotes = 0;
+        for (var vote : votes.entrySet()) {
+            if (vote.getValue() > bestVotes) {
+                best = vote.getKey();
+                bestVotes = vote.getValue();
+            }
+        }
+        return best;
+    }
+
     /** @return every genre actually in use, in enum order, for the filter controls */
     public List<Genre> genresInUse() {
         List<Genre> found = new ArrayList<>();

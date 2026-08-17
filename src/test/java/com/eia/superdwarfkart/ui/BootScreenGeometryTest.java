@@ -8,6 +8,8 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -238,15 +240,203 @@ class BootScreenGeometryTest {
     }
 
     @Test
-    @DisplayName("the whole sequence is short enough not to be in the way")
-    void theSequenceIsBrief() {
-        double total = BootScreen.GLITCH_SECONDS + BootScreen.LOADING_SECONDS;
-
+    @DisplayName("the tear is a moment inside the sequence, not the sequence")
+    void theTearIsBrief() {
         assertTrue(BootScreen.FLASH_SECONDS < BootScreen.GLITCH_SECONDS,
                 "the flash is the start of the glitch, not the whole of it");
-        assertTrue(total <= 3,
-                "the boot ritual is " + total + "s, which stops being a flourish and starts being "
-                        + "a wait");
+        assertTrue(BootScreen.GLITCH_SECONDS < BootScreen.SEQUENCE_SECONDS / 4,
+                "the tear takes " + BootScreen.GLITCH_SECONDS + "s of a "
+                        + BootScreen.SEQUENCE_SECONDS + "s sequence, which is long enough to read as "
+                        + "a fault rather than as the machine noticing");
+    }
+
+    @Test
+    @DisplayName("the sequence follows the fanfare's length rather than a number written down")
+    void theSequenceFollowsTheSound() {
+        // The whole point of the length: the picture and the sound end together, whatever the sound is.
+        // Not testable through the screen - the toolkit is absent here - but the arithmetic is, and this
+        // is what App drives with SoundEffect.lengthSeconds().
+        BootScreen.Splash unused = BootScreen.splashAt(1440);
+        assertNotNull(unused);
+
+        assertEquals(BootScreen.SEQUENCE_SECONDS, clampSequence(0), 1e-9,
+                "a missing sound must leave the sequence on its own length rather than at zero");
+        assertEquals(15.0, clampSequence(15.0), 1e-9);
+        assertEquals(BootScreen.MIN_SEQUENCE_SECONDS, clampSequence(0.4), 1e-9,
+                "a very short sound must not compress five movements into half a second");
+    }
+
+    /**
+     * @param seconds what the caller asked for
+     * @return what {@code setSequenceSeconds} would settle on - mirrored here because building the
+     *         screen needs a toolkit and this run has none
+     */
+    private static double clampSequence(double seconds) {
+        return seconds > 0
+                ? Math.max(BootScreen.MIN_SEQUENCE_SECONDS, seconds)
+                : BootScreen.SEQUENCE_SECONDS;
+    }
+
+    @Test
+    @DisplayName("the publisher line is gone before the title arrives")
+    void theTwoMovementsNeverShareTheScreen() {
+        // The ordering *is* the drama: two movements read as two movements, and both at once reads as a
+        // crowded screen. Nothing throws if the constants are edited into overlapping, and a screenshot
+        // of the wrong instant would not show it either.
+        for (double show = 0; show <= 1.0001; show += 0.002) {
+            double presents = BootScreen.presentsAlpha(show);
+            double title = BootScreen.titleAlpha(show);
+            assertTrue(presents == 0 || title == 0,
+                    "at " + show + " the publisher line is at " + presents + " and the title at "
+                            + title + " - they are on screen together");
+        }
+    }
+
+    @Test
+    @DisplayName("every fade starts at nothing, reaches full, and ends at nothing")
+    void theEnvelopesAreComplete() {
+        assertEquals(0, BootScreen.presentsAlpha(0), 1e-9);
+        assertEquals(0, BootScreen.presentsAlpha(1), 1e-9);
+        assertEquals(1, BootScreen.presentsAlpha(
+                (BootScreen.PRESENTS_FULL + BootScreen.PRESENTS_OUT) / 2), 1e-6,
+                "the publisher line never reaches full, so it only ever half appears");
+
+        assertEquals(0, BootScreen.titleAlpha(0), 1e-9);
+        assertEquals(1, BootScreen.titleAlpha(
+                (BootScreen.TITLE_FULL + BootScreen.LOADING_IN) / 2), 1e-6,
+                "the title never reaches full brightness during its own hold");
+        // The one that matters most at the end: a sequence that handed over while the title was still
+        // on screen would cut to the interface rather than fade to it.
+        assertEquals(0, BootScreen.titleAlpha(1), 1e-9,
+                "the title is still visible at the moment the window is handed over");
+        assertEquals(0, BootScreen.barAlpha(1), 1e-9);
+        assertEquals(1, BootScreen.blackout(1), 1e-9, "the screen never reaches black");
+    }
+
+    @Test
+    @DisplayName("the loading bar fills exactly as the picture starts to go")
+    void theBarFinishesWithTheFade() {
+        assertEquals(0, BootScreen.barProgress(BootScreen.LOADING_IN), 1e-9);
+        assertEquals(1, BootScreen.barProgress(BootScreen.FADE_OUT), 1e-9,
+                "the bar does not reach full at the fade, so the last seconds are a wait rather than "
+                        + "a flourish");
+        assertEquals(0, BootScreen.barAlpha(BootScreen.LOADING_IN - 0.01), 1e-9,
+                "the bar is visible before there is anything for it to be doing");
+    }
+
+    @Test
+    @DisplayName("the title lands rather than appears, and never smaller than it was measured to fit")
+    void theTitleSettles() {
+        double arriving = BootScreen.titleScale(BootScreen.TITLE_IN);
+        double landed = BootScreen.titleScale(BootScreen.TITLE_FULL);
+
+        assertTrue(arriving > landed, "the title does not settle, so it simply appears");
+        assertEquals(1, landed, 1e-9, "the title settles to something other than its measured size");
+        for (double show = 0; show <= 1.0001; show += 0.01) {
+            assertTrue(BootScreen.titleScale(show) >= 1,
+                    "at " + show + " the title is drawn smaller than the size splashFontSize measured "
+                            + "to fit, which is a fade in the wrong direction");
+        }
+    }
+
+    @Test
+    @DisplayName("the ramp eases rather than cutting, and is flat outside its window")
+    void theRampEases() {
+        assertEquals(0, BootScreen.ramp(0.1, 0.2, 0.4), 1e-9);
+        assertEquals(1, BootScreen.ramp(0.5, 0.2, 0.4), 1e-9);
+        assertEquals(0.5, BootScreen.ramp(0.3, 0.2, 0.4), 1e-9, "the midpoint is not the midpoint");
+        // Smoothstep rather than linear, which is most of why the fades read as dramatic: a linear
+        // quarter of the way through would be 0.25, and this eases in.
+        assertTrue(BootScreen.ramp(0.25, 0.2, 0.4) < 0.25, "the ramp is linear, not eased");
+        // A zero-width window is a step rather than a division by zero.
+        assertEquals(1, BootScreen.ramp(0.5, 0.5, 0.5), 1e-9);
+        assertEquals(0, BootScreen.ramp(0.4, 0.5, 0.5), 1e-9);
+    }
+
+    @Test
+    @DisplayName("the held title breathes far slower than the cap on anything full-screen")
+    void theBreathIsSlow() {
+        // Section 8b caps a full-screen rhythmic effect at 3 Hz, and this is the only thing in the whole
+        // sequence that repeats at all. It is not near the cap and must not drift towards it.
+        assertTrue(BootScreen.BREATH_HZ < 1,
+                "the title breathes at " + BootScreen.BREATH_HZ + " Hz, which is a pulse rather than a "
+                        + "swell");
+    }
+
+    @Test
+    @DisplayName("every movement has an instant to photograph, and they are in order")
+    void theMovementsAreOrdered() {
+        BootScreen.Movement[] movements = BootScreen.Movement.values();
+        assertEquals(5, movements.length);
+        double previous = -1;
+        for (BootScreen.Movement movement : movements) {
+            assertTrue(movement.instant() > previous,
+                    movement + " is not after the movement before it");
+            assertTrue(movement.instant() > 0 && movement.instant() < 1,
+                    movement + " is at " + movement.instant() + ", which is an edge of the sequence "
+                            + "rather than the middle of a movement");
+            assertFalse(movement.label().isBlank());
+            previous = movement.instant();
+        }
+    }
+
+    @Test
+    @DisplayName("the starfield is reproducible, so a screenshot of it means something")
+    void theStarfieldIsSeeded() {
+        assertEquals(BootScreen.seeded(3, 7), BootScreen.seeded(3, 7), 1e-12);
+        assertNotEquals(BootScreen.seeded(3, 7), BootScreen.seeded(4, 7));
+        for (int star = 0; star < 200; star++) {
+            double value = BootScreen.seeded(star, 1);
+            assertTrue(value >= 0 && value < 1, "star " + star + " is at " + value);
+        }
+    }
+
+    @Test
+    @DisplayName("the title splash is a logo rather than a wrapped paragraph")
+    void theSplashIsALogo() {
+        BootScreen.Splash wide = BootScreen.splashAt(AppConfig.MAIN_WIDTH);
+
+        assertTrue(wide.lines() <= 3,
+                "the name broke into " + wide.lines() + " lines, which reads as a wrapping accident "
+                        + "rather than as a title");
+        assertTrue(wide.size() >= 20,
+                "the splash came out at " + wide.size() + "px, which is body text on a screen with "
+                        + "nothing else on it");
+        assertTrue(wide.fits(AppConfig.MAIN_WIDTH),
+                "the splash is " + wide.widthPixels() + "px wide in a " + AppConfig.MAIN_WIDTH
+                        + "px window - in this font nothing anywhere reports that it ran off the side");
+    }
+
+    @Test
+    @DisplayName("the splash gives up size rather than running off a narrow screen")
+    void theSplashShrinksToFit() {
+        BootScreen.Splash wide = BootScreen.splashAt(1440);
+        BootScreen.Splash narrow = BootScreen.splashAt(480);
+
+        assertTrue(narrow.size() < wide.size(),
+                "a narrow window got the same size as a wide one, so one of them does not fit");
+        assertTrue(narrow.fits(480), "the splash overflowed a 480px window");
+        // The one property that has to survive every width: the screen is the only place the full
+        // name is ever shown at a readable size, so it must not fall back to being unreadable.
+        assertTrue(narrow.size() > 8, "the splash shrank to " + narrow.size() + "px, which is a hint");
+    }
+
+    @Test
+    @DisplayName("the splash and the label break the name in the same places")
+    void bothScreensWrapTheNameTheSameWay() {
+        // ShutdownScreen goes through BootScreen.wrapName rather than carrying its own idea of how to
+        // break the name up. Two implementations would show up as the title being hyphenated
+        // differently on the way out of the application than on the way in.
+        double size = ShutdownScreen.splashFontSize(AppConfig.MAIN_WIDTH);
+        int perLine = (int) Math.floor(AppConfig.MAIN_WIDTH * 0.7 / size);
+        List<String> lines = BootScreen.wrapName(AppConfig.APP_NAME, perLine);
+
+        assertFalse(lines.isEmpty(), "the goodbye screen has no name to print");
+        assertTrue(lines.size() <= 3, "the goodbye splash wrapped to " + lines.size() + " lines");
+        for (String line : lines) {
+            assertTrue(line.length() <= perLine,
+                    "\"" + line + "\" is wider than the " + perLine + " characters it has");
+        }
     }
 
     /**

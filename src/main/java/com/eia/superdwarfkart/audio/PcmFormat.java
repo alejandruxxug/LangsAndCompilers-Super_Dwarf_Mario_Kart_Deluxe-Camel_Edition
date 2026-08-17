@@ -66,7 +66,41 @@ public final class PcmFormat {
             throw new AudioException("Could not read " + audioFile.getFileName()
                     + ": " + e.getMessage(), e);
         }
-        return convert(encoded, audioFile);
+        return convert(encoded, String.valueOf(audioFile.getFileName()));
+    }
+
+    /**
+     * Opens an already-open stream as {@link #PLAYBACK_FORMAT}.
+     *
+     * <p>The same two-stage conversion as {@link #open(Path)}, for audio that is not a file on disk -
+     * a sound effect bundled in the jar has no path, and copying it out to a temporary file just to
+     * be allowed to decode it would be a second decode path to keep in step with this one.
+     *
+     * <p><strong>The stream has to support {@code mark} and {@code reset}</strong>, because that is
+     * how a decoder probes for its own format: it reads a header, decides, and rewinds. It is wrapped
+     * in a {@link java.io.BufferedInputStream} here so a caller handing over a bare stream still
+     * works. Verified against the resolved jars with the boot fanfare, which the MPEG provider reads
+     * this way and converts to the playback format in a single step.
+     *
+     * @param source the encoded audio; closed by the returned stream
+     * @param name   what to call it in an error message
+     * @return a stream delivering {@link #PLAYBACK_FORMAT}
+     * @throws AudioException if the stream is not audio this build can read, or cannot be converted
+     */
+    public static AudioInputStream open(java.io.InputStream source, String name) {
+        if (source == null) {
+            throw new AudioException("No audio stream: " + name);
+        }
+        AudioInputStream encoded;
+        try {
+            encoded = AudioSystem.getAudioInputStream(
+                    new java.io.BufferedInputStream(source));
+        } catch (UnsupportedAudioFileException e) {
+            throw new AudioException("Not an audio format this build can play: " + name, e);
+        } catch (IOException e) {
+            throw new AudioException("Could not read " + name + ": " + e.getMessage(), e);
+        }
+        return convert(encoded, name);
     }
 
     /**
@@ -85,11 +119,11 @@ public final class PcmFormat {
      * else brings.
      *
      * @param encoded   the file's own stream
-     * @param audioFile the file, for the error message
+     * @param audioFile what to call the source in an error message
      * @return a stream delivering {@link #PLAYBACK_FORMAT}
      * @throws AudioException if no combination of installed providers can get there
      */
-    private static AudioInputStream convert(AudioInputStream encoded, Path audioFile) {
+    private static AudioInputStream convert(AudioInputStream encoded, String audioFile) {
         AudioFormat source = encoded.getFormat();
         if (AudioSystem.isConversionSupported(PLAYBACK_FORMAT, source)) {
             return AudioSystem.getAudioInputStream(PLAYBACK_FORMAT, encoded);
@@ -99,14 +133,14 @@ public final class PcmFormat {
         if (!AudioSystem.isConversionSupported(decoded, source)) {
             closeQuietly(encoded);
             throw new AudioException("No decoder can turn " + source.getEncoding()
-                    + " at " + describe(source) + " into 16-bit PCM: " + audioFile.getFileName());
+                    + " at " + describe(source) + " into 16-bit PCM: " + audioFile);
         }
 
         AudioInputStream pcm = AudioSystem.getAudioInputStream(decoded, encoded);
         if (!AudioSystem.isConversionSupported(PLAYBACK_FORMAT, pcm.getFormat())) {
             closeQuietly(pcm);
             throw new AudioException("Cannot resample " + describe(pcm.getFormat()) + " to "
-                    + describe(PLAYBACK_FORMAT) + ": " + audioFile.getFileName());
+                    + describe(PLAYBACK_FORMAT) + ": " + audioFile);
         }
         return AudioSystem.getAudioInputStream(PLAYBACK_FORMAT, pcm);
     }

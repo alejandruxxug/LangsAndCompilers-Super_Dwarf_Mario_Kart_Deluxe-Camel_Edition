@@ -51,12 +51,18 @@ class SpotifyCatalogTest {
     private volatile String tokenBody =
             "{\"access_token\":\"stub-token\",\"token_type\":\"Bearer\",\"expires_in\":3600}";
 
+    /** What the artist endpoint answers with; the genre lookup the add dialog makes. */
+    private volatile int artistStatus = 200;
+    private volatile String artistBody =
+            "{\"id\":\"0gxyHStUsqpMadRV0Di1Qt\",\"name\":\"Rick Astley\","
+                    + "\"genres\":[\"new romantic\",\"dance pop\"]}";
+
     private static final String TRACKS_JSON = """
             {"tracks":{"items":[
               {"uri":"spotify:track:4uLU6hMCjMI75M1A2tKUQC",
                "name":"Never Gonna Give You Up",
                "duration_ms":213573,
-               "artists":[{"name":"Rick Astley"}],
+               "artists":[{"name":"Rick Astley","id":"0gxyHStUsqpMadRV0Di1Qt"}],
                "album":{"name":"Whenever You Need Somebody",
                         "release_date":"1987-11-12",
                         "images":[{"url":"https://i.example/640.jpg","width":640,"height":640},
@@ -83,6 +89,14 @@ class SpotifyCatalogTest {
             String query = exchange.getRequestURI().getRawQuery();
             requested.add("/v1/search" + (query == null ? "" : "?" + query));
             respond(exchange, searchStatus, searchBody, searchRetryAfter);
+        });
+
+        // Registered at the path the catalogue derives from the search endpoint rather than at one
+        // written out here: if artistUrl stopped putting it beside v1/search, the request would arrive
+        // somewhere with no handler and this stub would 404 rather than quietly agreeing.
+        server.createContext("/v1/artists/", exchange -> {
+            requested.add(exchange.getRequestURI().getPath());
+            respond(exchange, artistStatus, artistBody, null);
         });
 
         server.start();
@@ -131,7 +145,56 @@ class SpotifyCatalogTest {
         // The details panel is ~250px wide, so the 64px thumbnail arrives visibly blurred and the
         // 640px one is four times more than anything draws. See PREFERRED_COVER_WIDTH.
         assertEquals("https://i.example/300.jpg", track.coverUrl());
+        // Carried so the genre can be looked up: a track object has no genre in it, and this is the
+        // only thing in it that identifies whose artist page to ask.
+        assertEquals("0gxyHStUsqpMadRV0Di1Qt", track.artistId());
         assertNull(catalog.lastProblem());
+    }
+
+    // ------------------------------------------------------------------
+    // The genre lookup, which is the whole of what the add dialog knows that a track object does not
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("an artist's genres are read from v1/artists beside the search endpoint")
+    void anArtistsGenresAreRead() {
+        List<String> genres = catalog.artistGenres("0gxyHStUsqpMadRV0Di1Qt");
+
+        assertEquals(List.of("new romantic", "dance pop"), genres);
+        // The path is derived from the search endpoint rather than written out, so a test pointing this
+        // class at a stub gets both redirected for one override. Asserted, because getting it wrong
+        // would send a live request from a unit test.
+        assertTrue(requested.contains("/v1/artists/0gxyHStUsqpMadRV0Di1Qt"),
+                "the artist call did not land beside v1/search: " + requested);
+    }
+
+    @Test
+    @DisplayName("an artist with no genres recorded is an empty list, not a failure")
+    void anArtistWithNoGenres() {
+        // Completely ordinary for a small artist, and it must read as "nobody has said" rather than as
+        // something having gone wrong - the dialog's genre box simply stays on UNKNOWN.
+        artistBody = "{\"id\":\"x\",\"name\":\"Somebody\",\"genres\":[]}";
+
+        assertTrue(catalog.artistGenres("x").isEmpty());
+        assertNull(catalog.lastProblem());
+    }
+
+    @Test
+    @DisplayName("a track with no artist id costs no network call at all")
+    void noArtistIdIsNoRequest() {
+        assertTrue(catalog.artistGenres(null).isEmpty());
+        assertTrue(catalog.artistGenres("  ").isEmpty());
+        assertTrue(requested.isEmpty(),
+                "a lookup with nothing to look up still went to Spotify: " + requested);
+    }
+
+    @Test
+    @DisplayName("a refused artist call is an empty list rather than an exception")
+    void arefusedArtistCallIsEmpty() {
+        artistStatus = 404;
+        artistBody = "{\"error\":{\"status\":404,\"message\":\"non existing id\"}}";
+
+        assertTrue(catalog.artistGenres("nope").isEmpty());
     }
 
     @Test

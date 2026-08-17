@@ -37,20 +37,29 @@ import java.util.List;
  * application comes up. It replaces a modal dialog that asked whether to start playing - inserting
  * the cartridge <em>is</em> that answer, and a second question straight afterwards is one too many.
  *
- * <p><strong>The application's name is on the cartridge, not on the screen.</strong> That is what a
- * cartridge is: the label is where the title goes, and printing it over the top as well would be
- * the one place in this application where the name appeared twice at once. It is measured onto the
- * artwork's own dark panel by {@link SpriteSheet#darkRegion}, wrapped on the separators it already
- * has, so replacement art with a differently-placed label needs no change here.
+ * <p><strong>The application's name is on the cartridge while the cartridge is on screen, and on the
+ * screen once it is not.</strong> That is what a cartridge is: the label is where the title goes, so
+ * during the drag it is measured onto the artwork's own dark panel by {@link SpriteSheet#darkRegion},
+ * wrapped on the separators the name already has, and replacement art with a differently-placed
+ * label needs no change here. Once the cartridge is <em>in</em> the machine there is no label left to
+ * read, and the loading screen prints the name across itself as a splash instead - which is where a
+ * console has always put a title. The two can never appear at once, which was the whole reason the
+ * splash did not exist before.
+ *
+ * <p><strong>The colours do not come from the active mood.</strong> They come from
+ * {@link Palette#hardware()} - black ground, white light, nothing else - because at this point the
+ * system has not started: a mood is something the software chose, and a boot screen in somebody's
+ * colour scheme is the console admitting it was running all along. The flash at the moment of contact
+ * is white for the same reason, rather than nearly white in whichever direction the palette leans.
  *
  * <p>Four phases, in one timer:
  *
  * <ol>
  *   <li><strong>Insert</strong> - black, the cartridge, and the prompt. Nothing moves on its own.</li>
- *   <li><strong>Glitch</strong> - a flash and about half a second of tearing, which is what a
+ *   <li><strong>Glitch</strong> - a white flash and about half a second of tearing, which is what a
  *       console did when a cartridge went into a live slot. It is deliberately brief.</li>
- *   <li><strong>Loading</strong> - a bar, because a machine that has just been handed a cartridge
- *       has something to read off it.</li>
+ *   <li><strong>Loading</strong> - the title and a bar, because a machine that has just been handed a
+ *       cartridge has something to read off it.</li>
  *   <li><strong>Done</strong> - the window is handed over.</li>
  * </ol>
  *
@@ -66,10 +75,20 @@ public class BootScreen extends Pane {
     private enum Phase {
         /** Waiting for the user to put the cartridge in. */
         INSERT,
-        /** The machine noticing. */
+        /** The machine noticing: the flash and the tear. */
         GLITCH,
-        /** The machine reading. */
-        LOADING,
+        /**
+         * The machine introducing itself, for as long as the fanfare runs.
+         *
+         * <p>One phase rather than five, with a single normalised progress through it and every
+         * element's opacity, size and position a pure function of that number - see
+         * {@link #presentsAlpha}, {@link #titleAlpha}, {@link #titleScale}, {@link #seamWidth},
+         * {@link #rayAlpha}, {@link #barAlpha}, {@link #barProgress} and {@link #blackout}. The
+         * alternative is a chain of phases each with its own clock, which is five places for the
+         * sequence to get out of step with itself and nowhere to ask "what does it look like at
+         * eleven seconds".
+         */
+        SHOW,
         /** Handed over. */
         DONE
     }
@@ -102,8 +121,120 @@ public class BootScreen extends Pane {
     /** How long the picture tears for, in seconds. */
     static final double GLITCH_SECONDS = 0.55;
 
-    /** How long the loading bar runs for, in seconds. */
-    static final double LOADING_SECONDS = 1.8;
+    /**
+     * How long the whole start-up sequence runs for, in seconds, when nothing tells it otherwise.
+     *
+     * <p><strong>The number the fanfare actually measures, not a number somebody liked.</strong>
+     * {@code App} calls {@link #setSequenceSeconds} with the decoded length of
+     * {@code AppConfig.SOUND_BOOT}, so the animation is exactly as long as the sound it is set to and
+     * stays that way if the sound is replaced. This constant is what it falls back to when the audio is
+     * missing or will not decode - the sequence is the feature and the sound accompanies it, so it runs
+     * to the same length either way rather than becoming a different, shorter thing in silence.
+     */
+    static final double SEQUENCE_SECONDS = 15.0;
+
+    /**
+     * The shortest sequence that still has room for all of it.
+     *
+     * <p>Every stage below is a <em>fraction</em> of the show, so a very short sound would compress the
+     * publisher line, the swell, the hold and the bar into something that flickers past - and at that
+     * point the fades stop reading as fades. Clamped rather than scaled indefinitely.
+     */
+    static final double MIN_SEQUENCE_SECONDS = 4.0;
+
+    // ------------------------------------------------------------------
+    // Where each movement of the sequence sits, as a fraction of the show
+    // ------------------------------------------------------------------
+    //
+    // Fractions rather than seconds, so the whole thing follows the length of the fanfare instead of
+    // being cut short by it or leaving it playing over a finished screen. The numbers come off the
+    // audio's own measured envelope (quarter-second RMS blocks over the decoded fanfare): a quiet
+    // opening chime to 2.75s, the big hit at 3.00-4.25s, a sustained passage to 9.0s, a decay to
+    // 14.0s, then silence. Divided by the 14.45s show that follows the tear, those land where the
+    // constants below put them - which is why the title arrives *on* the swell rather than near it.
+
+    /** When the publisher line starts to appear. */
+    static final double PRESENTS_IN = 0.02;
+
+    /** When it is fully up. */
+    static final double PRESENTS_FULL = 0.05;
+
+    /** When it starts to leave. */
+    static final double PRESENTS_OUT = 0.13;
+
+    /** When it is gone - before the title starts, so the two are never on screen together. */
+    static final double PRESENTS_GONE = 0.165;
+
+    /** When the title starts to fade up. This is where the fanfare's big hit lands. */
+    static final double TITLE_IN = 0.17;
+
+    /** When the title is fully up and has settled to its own size. */
+    static final double TITLE_FULL = 0.30;
+
+    /** When the loading bar fades in under it, as the fanfare begins to decay. */
+    static final double LOADING_IN = 0.58;
+
+    /** When everything begins to fade to black, as the fanfare dies. */
+    static final double FADE_OUT = 0.93;
+
+    /** How much larger than its resting size the title arrives at, so it settles rather than appears. */
+    static final double TITLE_OVERSHOOT = 0.14;
+
+    /** How many rays sweep out of the centre as the title lands. */
+    static final int RAYS = 16;
+
+    /** How far through the show the rays have finished. */
+    static final double RAYS_DONE = 0.36;
+
+    /**
+     * How many times a second the held title breathes.
+     *
+     * <p><strong>Well under the 3 Hz cap</strong> §8b puts on anything full-screen and rhythmic, and
+     * deliberately not near it: this is a slow swell to keep a five-second hold from reading as a frozen
+     * frame, not a pulse. Nothing else in the sequence repeats at all.
+     */
+    static final double BREATH_HZ = 0.4;
+
+    /** How much of the title's brightness the breath takes, at most. */
+    private static final double BREATH_DEPTH = 0.12;
+
+    /** How many stars drift behind the held title. */
+    private static final int STARS = 90;
+
+    /** How bright the stars get, at most. One pixel each, and they must not compete with the title. */
+    private static final double STAR_ALPHA = 0.38;
+
+    /** How far down the screen a star travels over the whole show, as a multiple of its height. */
+    private static final double STAR_DRIFT = 0.55;
+
+    /** How bright a ray is at its strongest. */
+    private static final double RAY_ALPHA = 0.16;
+
+    /**
+     * How far out a ray starts, as a share of its own length.
+     *
+     * <p>Wedges that converge on a single point put a solid grey disc behind the title - see
+     * {@link #drawRays}. This leaves the middle clear.
+     */
+    private static final double RAY_INNER = 0.30;
+
+    /** How tall the seam of light grows, in pixels, before it thins away under the title. */
+    private static final double SEAM_HEIGHT = 6;
+
+    /** How visible the skip hint is. It is a way out, not an instruction. */
+    private static final double SKIP_HINT_ALPHA = 0.55;
+
+    /** Size of the line before the title, in pixels. */
+    private static final double PRESENTS_SIZE = 11;
+
+    /**
+     * The line the machine shows before the title.
+     *
+     * <p>The structural equivalent of a console's own first screen, which names whoever made the
+     * hardware before the game names itself. This is a Data Structures project for Universidad EIA, so
+     * that is what it says - and it is deliberately small, dim and gone before the title arrives.
+     */
+    private static final String PRESENTS_LINE = "UNIVERSIDAD EIA";
 
     /** How many horizontal bands the picture is torn into. */
     static final int TEAR_BANDS = 22;
@@ -134,6 +265,35 @@ public class BootScreen extends Pane {
 
     /** Smallest size the name is printed on the label at, in pixels. */
     private static final double LABEL_SIZE_MIN = 5;
+
+    /** Largest size the name is splashed across the loading screen at, in pixels. */
+    private static final double SPLASH_SIZE_MAX = 44;
+
+    /** Smallest size the splash is allowed to shrink to before it stops being a splash. */
+    private static final double SPLASH_SIZE_MIN = 10;
+
+    /** How much of the screen's width the splash may take. */
+    private static final double SPLASH_WIDTH_SHARE = 0.8;
+
+    /**
+     * How many lines the splash may run to.
+     *
+     * <p>Three, because a title is a title and not a paragraph. The name breaks on its own
+     * underscores into seven runs, so given enough lines it would happily come out as a narrow column
+     * of them at the largest size on offer - which is the one arrangement that reads as a wrapping
+     * accident rather than as a logo.
+     */
+    private static final int SPLASH_MAX_LINES = 3;
+
+    /**
+     * Clear space under the splash before the LOADING caption, in pixels.
+     *
+     * <p>Measured off the picture rather than reasoned about. Without it the caption's own baseline sat
+     * fourteen pixels under the splash's, which is inside the descender space of a 44px glyph: nothing
+     * technically overlapped, and the caption still read as having been tucked into the bottom of the
+     * title rather than placed under it.
+     */
+    private static final double SPLASH_GAP = 28;
 
     /** Width of the drawn rims, in pixels. */
     private static final double RIM = 3;
@@ -175,8 +335,17 @@ public class BootScreen extends Pane {
 
     private Runnable onInserted;
 
-    /** Run when the loading bar starts, so the caller can begin whatever the bar is standing for. */
+    /** Run when the show starts, so the caller can begin whatever the bar is standing for. */
     private Runnable onLoading;
+
+    /**
+     * Run at the instant the cartridge seats, which is where the fanfare belongs.
+     *
+     * <p>A callback rather than the sound itself: playing audio is {@code audio/}'s business, and a
+     * view that opened an output line would be the one place in this application where a screen made
+     * a noise. It is also what keeps {@link #previewAt} silent - a screenshot must not play a sound.
+     */
+    private Runnable onGlitch;
 
     /**
      * The line under the bar, naming what is being loaded.
@@ -191,12 +360,22 @@ public class BootScreen extends Pane {
     private AnimationTimer sequence;
     private Phase phase = Phase.INSERT;
 
-    /** When the glitch began, in seconds on the wall clock. */
+    /** When the current phase began, in seconds on the wall clock. */
     private double phaseStarted;
 
-    /** How far through the glitch and the loading bar the sequence is, 0 to 1 each. */
+    /** How far through the tear the sequence is, 0 to 1. */
     private double glitchProgress;
-    private double loadingProgress;
+
+    /** How far through the show the sequence is, 0 to 1. Everything after the tear is a function of it. */
+    private double showProgress;
+
+    /**
+     * How long the show runs for, in seconds.
+     *
+     * <p>Set from the fanfare's own decoded length so the picture and the sound end together. See
+     * {@link #SEQUENCE_SECONDS} for what it falls back to.
+     */
+    private double sequenceSeconds = SEQUENCE_SECONDS;
 
     /** How far the cartridge has to travel to seat, in pixels. Recomputed on every layout pass. */
     private double travel = FALLBACK_TRAVEL;
@@ -232,6 +411,16 @@ public class BootScreen extends Pane {
 
         getChildren().addAll(back, cartridge, plate, front);
 
+        // A Pane does not clip its children, and the cartridge is deliberately taller than the
+        // travel it makes - so near full insertion its foot hangs below this pane's own bottom edge,
+        // where the three canvases end and nothing can paint over it. That left a sliver of cartridge
+        // visible under the loading screen: everything else went black and the one thing that had
+        // just gone into the machine was still on screen. Clipped to the pane, the slot swallows it.
+        javafx.scene.shape.Rectangle bounds = new javafx.scene.shape.Rectangle();
+        bounds.widthProperty().bind(widthProperty());
+        bounds.heightProperty().bind(heightProperty());
+        setClip(bounds);
+
         insertion.addListener((observable, was, now) -> requestLayout());
     }
 
@@ -258,6 +447,49 @@ public class BootScreen extends Pane {
      */
     public void setOnLoading(Runnable action) {
         this.onLoading = action;
+    }
+
+    /**
+     * Sets what to fire at the instant the cartridge seats and the picture tears.
+     *
+     * <p>This is where the boot fanfare goes. It runs once, from {@link #startSequence()}, so
+     * {@link #settle()} and {@link #previewAt} - the two ways the smoke test drives this screen -
+     * never trigger it: a screenshot must not make a noise, and a check that ran the whole sequence
+     * silently is worth more than one that plays fifteen seconds of audio into a build log.
+     *
+     * @param action run once, as the glitch begins; {@code null} to do nothing
+     */
+    public void setOnGlitch(Runnable action) {
+        this.onGlitch = action;
+    }
+
+    /**
+     * Sets how long the whole start-up sequence runs for.
+     *
+     * <p>Called with the fanfare's own decoded length, so <strong>the animation is exactly as long as
+     * the sound</strong> rather than a number written down beside it. Every stage of the show is a
+     * fraction of this, so replacing the audio with something longer or shorter re-times the sequence
+     * and nothing else has to change - and the picture can never finish while the sound is still
+     * playing, which is the one way a fanfare reads as having been cut off.
+     *
+     * @param seconds the total length including the tear, clamped to at least
+     *                {@link #MIN_SEQUENCE_SECONDS}; anything not positive restores
+     *                {@link #SEQUENCE_SECONDS}
+     */
+    public void setSequenceSeconds(double seconds) {
+        this.sequenceSeconds = seconds > 0
+                ? Math.max(MIN_SEQUENCE_SECONDS, seconds)
+                : SEQUENCE_SECONDS;
+    }
+
+    /** @return how long the whole sequence runs for, in seconds */
+    public double sequenceSeconds() {
+        return sequenceSeconds;
+    }
+
+    /** @return how long the show after the tear runs for, in seconds */
+    public double showSeconds() {
+        return Math.max(0.1, sequenceSeconds - GLITCH_SECONDS);
     }
 
     /**
@@ -352,6 +584,227 @@ public class BootScreen extends Pane {
         return unit * TEAR_AMPLITUDE * width * decay;
     }
 
+    // ------------------------------------------------------------------
+    // The show's envelopes - every one a pure function of how far through it is
+    // ------------------------------------------------------------------
+    //
+    // Static and side-effect free for the same reason the tear is: none of this can be photographed
+    // and none of it can be waited for. A still of a fade is a still of something at one opacity, and
+    // the smoke test holds the interface thread so the sequence's own timer never ticks. These are
+    // what a test can actually reach, and what previewShow() asks for at a stated instant.
+
+    /**
+     * Ramps from 0 to 1 across a window, and is flat outside it.
+     *
+     * <p><strong>Smoothstep rather than linear</strong>, which is most of why the fades read as
+     * dramatic rather than as opacity being animated: a linear fade starts and stops abruptly at both
+     * ends, and the eye catches the corner. This eases in and out of every transition.
+     *
+     * @param value where we are
+     * @param from  where the ramp starts
+     * @param to    where it ends; equal to or below {@code from} makes this a step
+     * @return 0 before, 1 after, eased between
+     */
+    static double ramp(double value, double from, double to) {
+        if (!(to > from)) {
+            return value >= to ? 1 : 0;
+        }
+        double t = Math.clamp((value - from) / (to - from), 0, 1);
+        return t * t * (3 - 2 * t);
+    }
+
+    /**
+     * How visible the publisher line is.
+     *
+     * <p>Up, held, and away again <strong>before {@link #TITLE_IN}</strong>, so it and the title are
+     * never on screen at once. That ordering is the whole of what makes this read as two movements
+     * rather than as one crowded screen, and {@code BootScreenGeometryTest} asserts it rather than
+     * leaving it to whoever next edits the constants.
+     *
+     * @param show how far through the show, 0 to 1
+     * @return opacity, 0 to 1
+     */
+    static double presentsAlpha(double show) {
+        return ramp(show, PRESENTS_IN, PRESENTS_FULL)
+                * (1 - ramp(show, PRESENTS_OUT, PRESENTS_GONE));
+    }
+
+    /**
+     * How visible the title is.
+     *
+     * <p>Fades up on the fanfare's big hit, holds for the whole sustained passage, and goes out with
+     * everything else at the end. This is the fade the sequence is built around.
+     *
+     * @param show how far through the show, 0 to 1
+     * @return opacity, 0 to 1
+     */
+    static double titleAlpha(double show) {
+        return ramp(show, TITLE_IN, TITLE_FULL) * (1 - blackout(show));
+    }
+
+    /**
+     * How large the title is drawn, as a multiple of its resting size.
+     *
+     * <p>It arrives {@link #TITLE_OVERSHOOT} too big and settles, which is what makes it <em>land</em>
+     * instead of appearing. Only ever at or above 1, so it never shrinks below the size
+     * {@link #splashFontSize} measured to fit - a title that faded in already overflowing the screen
+     * and then shrank into it would be a fade in the wrong direction.
+     *
+     * @param show how far through the show, 0 to 1
+     * @return the scale, 1 or more
+     */
+    static double titleScale(double show) {
+        return 1 + TITLE_OVERSHOOT * (1 - ramp(show, TITLE_IN, TITLE_FULL));
+    }
+
+    /**
+     * How wide the seam of light behind the title is, as a fraction of the screen.
+     *
+     * <p>A line at the centre that opens out sideways, which is the cheapest dramatic reveal there is
+     * and the one that suits a hard-edged interface: no blur, no gradient, one rectangle.
+     *
+     * @param show how far through the show, 0 to 1
+     * @return 0 to 1
+     */
+    static double seamWidth(double show) {
+        return ramp(show, TITLE_IN, TITLE_IN + (TITLE_FULL - TITLE_IN) * 0.45);
+    }
+
+    /**
+     * How visible the rays sweeping out of the centre are.
+     *
+     * <p>Brightest as the title lands and gone by {@link #RAYS_DONE}, so they are the arrival rather
+     * than a permanent decoration. Deliberately not a repeating sweep - see {@link #BREATH_HZ} for the
+     * only thing here that repeats at all.
+     *
+     * @param show how far through the show, 0 to 1
+     * @return opacity, 0 to 1
+     */
+    static double rayAlpha(double show) {
+        double in = ramp(show, TITLE_IN, TITLE_IN + 0.03);
+        return in * (1 - ramp(show, TITLE_IN + 0.03, RAYS_DONE));
+    }
+
+    /**
+     * How far out the rays have swept, as a multiple of the screen's half-diagonal.
+     *
+     * @param show how far through the show, 0 to 1
+     * @return 0 to 1
+     */
+    static double raySweep(double show) {
+        return ramp(show, TITLE_IN, RAYS_DONE);
+    }
+
+    /**
+     * How visible the loading bar is.
+     *
+     * @param show how far through the show, 0 to 1
+     * @return opacity, 0 to 1
+     */
+    static double barAlpha(double show) {
+        return ramp(show, LOADING_IN, LOADING_IN + 0.05) * (1 - blackout(show));
+    }
+
+    /**
+     * How full the loading bar is.
+     *
+     * <p>It reaches full exactly at {@link #FADE_OUT}, so the machine finishes reading as the picture
+     * starts to go - rather than filling early and sitting there, which would make the rest of the
+     * sequence look like a wait rather than a flourish.
+     *
+     * @param show how far through the show, 0 to 1
+     * @return 0 to 1
+     */
+    static double barProgress(double show) {
+        return Math.clamp((show - LOADING_IN) / (FADE_OUT - LOADING_IN), 0, 1);
+    }
+
+    /**
+     * How much of the screen has gone back to black at the end.
+     *
+     * @param show how far through the show, 0 to 1
+     * @return 0 for none, 1 for entirely black
+     */
+    static double blackout(double show) {
+        return ramp(show, FADE_OUT, 1);
+    }
+
+    /**
+     * The movements of the show, and the instant in each one worth photographing.
+     *
+     * <p>Exists so a caller can walk the whole sequence without the timing constants having to become
+     * public for its benefit, and so the list of moments lives beside the timings rather than being
+     * copied into the smoke test where the two could drift.
+     *
+     * <p>Each instant is the <strong>middle</strong> of its movement rather than either edge. Every one
+     * of these is a fade, and a still of the edge of a fade is a still of an empty screen - which looks
+     * exactly like a screen that failed to draw, and is the one picture that would be believed.
+     */
+    public enum Movement {
+
+        /** The publisher line, up and gone before the title. */
+        PRESENTS("boot-presents", midpoint(PRESENTS_FULL, PRESENTS_OUT)),
+
+        /** The title fading up on the fanfare's big hit. */
+        TITLE("boot-title", midpoint(TITLE_IN, TITLE_FULL)),
+
+        /** The long hold, with the title full and the stars drifting. */
+        HOLD("boot-hold", midpoint(TITLE_FULL, LOADING_IN)),
+
+        /** The bar filling under it as the fanfare decays. */
+        LOADING("boot-loading", midpoint(LOADING_IN, FADE_OUT)),
+
+        /** Everything going back to black. */
+        FADE("boot-fade", midpoint(FADE_OUT, 1));
+
+        private final String label;
+        private final double instant;
+
+        Movement(String label, double instant) {
+            this.label = label;
+            this.instant = instant;
+        }
+
+        /** @return a name for a screenshot file */
+        public String label() {
+            return label;
+        }
+
+        /** @return how far through the show this movement is best seen, 0 to 1 */
+        public double instant() {
+            return instant;
+        }
+    }
+
+    /**
+     * @param from the start of a movement, as a fraction of the show
+     * @param to   its end
+     * @return the instant half way between them
+     */
+    private static double midpoint(double from, double to) {
+        return (from + to) / 2;
+    }
+
+    /**
+     * A reproducible number in {@code [0, 1)} from two small seeds.
+     *
+     * <p>The **SplitMix64 finalizer**, the same mixer {@link #tearOffset} uses and for the same reason:
+     * the starfield has to come out identical on every run and on every future runtime, so a library
+     * generator - free to change its algorithm - is the wrong tool. FNV-1a was measured to be wrong for
+     * this shape of input; see {@link #tearOffset}.
+     *
+     * @param a the first seed
+     * @param b the second seed
+     * @return a value in {@code [0, 1)}
+     */
+    static double seeded(int a, int b) {
+        long z = a * 0x9E3779B97F4A7C15L + b * 0xBF58476D1CE4E5B9L + 0x94D049BB133111EBL;
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        z = z ^ (z >>> 31);
+        return (z >>> 11) / (double) (1L << 53);
+    }
+
     /**
      * Breaks the application's name into lines that fit the cartridge's label.
      *
@@ -427,6 +880,78 @@ public class BootScreen extends Pane {
         return LABEL_SIZE_MIN;
     }
 
+    /**
+     * Picks the size the name is splashed across the loading screen at.
+     *
+     * <p>The same arithmetic as {@link #labelFontSize} against a different constraint: there the
+     * limit was a label much taller than it was wide, and here it is the screen's width against a
+     * ceiling on how many lines a title may be. On this window the name comes out as two lines at the
+     * largest size on offer, which is a logo; give it more lines and it would come out as seven short
+     * ones at the same size, which is a wrapping accident.
+     *
+     * @param width the screen's width, in pixels
+     * @param name  the name to splash
+     * @return the size, in whole pixels
+     */
+    static double splashFontSize(double width, String name) {
+        if (!(width > 0) || name == null || name.isEmpty()) {
+            return SPLASH_SIZE_MIN;
+        }
+        double room = width * SPLASH_WIDTH_SHARE;
+        for (double size = SPLASH_SIZE_MAX; size > SPLASH_SIZE_MIN; size -= 1) {
+            int perLine = (int) Math.floor(room / size);
+            if (perLine < 1) {
+                continue;
+            }
+            if (wrapName(name, perLine).size() <= SPLASH_MAX_LINES) {
+                return size;
+            }
+        }
+        return SPLASH_SIZE_MIN;
+    }
+
+    /**
+     * The splash as it will actually be drawn at a given width.
+     *
+     * <p>Exists so the smoke test can measure the splash without {@link #splashFontSize} and
+     * {@link #wrapName} having to become public for its benefit. A splash that silently fell back to
+     * {@link #SPLASH_SIZE_MIN} still draws perfectly well - it just stops being a splash - and the
+     * only way to notice that is to read the numbers.
+     *
+     * @param size        the size it is drawn at, in pixels
+     * @param lines       how many lines it wraps to
+     * @param widestChars the longest line's length in characters
+     */
+    public record Splash(double size, int lines, int widestChars) {
+
+        /** @return how wide the splash comes out, in pixels; the font advances one em per glyph */
+        public double widthPixels() {
+            return widestChars * size;
+        }
+
+        /**
+         * @param width the screen's width, in pixels
+         * @return whether the splash fits and is still large enough to be one
+         */
+        public boolean fits(double width) {
+            return size > SPLASH_SIZE_MIN && widthPixels() <= width;
+        }
+    }
+
+    /**
+     * Works out how the name will be splashed at a given width.
+     *
+     * @param width the screen's width, in pixels
+     * @return the measurements, never {@code null}
+     */
+    public static Splash splashAt(double width) {
+        double size = splashFontSize(width, AppConfig.APP_NAME);
+        List<String> lines = wrapName(AppConfig.APP_NAME,
+                (int) Math.floor(width * SPLASH_WIDTH_SHARE / size));
+        int widest = lines.stream().mapToInt(String::length).max().orElse(0);
+        return new Splash(size, lines.size(), widest);
+    }
+
     // ------------------------------------------------------------------
     // State a caller can ask about
     // ------------------------------------------------------------------
@@ -466,9 +991,12 @@ public class BootScreen extends Pane {
      *
      * <p><strong>Required rather than a convenience.</strong> The smoke test runs synchronously
      * inside {@code start()}, so no pulse ever arrives while it is running: the seat timeline would
-     * never advance and neither would the glitch or the loading bar, and the screen would sit at
-     * whatever fraction the last synthesised drag left it at, forever. Same reason
+     * never advance and neither would the tear or the show, and the screen would sit at whatever
+     * fraction the last synthesised drag left it at, forever. Same reason
      * {@code StructureView.settle()} exists for the screenshots.
+     *
+     * <p>It is also what {@link #skip()} runs on, so a user in a hurry and a smoke test take exactly
+     * the same path out.
      */
     public void settle() {
         stopSeatAnimation();
@@ -481,24 +1009,67 @@ public class BootScreen extends Pane {
     }
 
     /**
-     * Puts the sequence at a chosen moment and draws it, without a running clock.
+     * Cuts the sequence short and hands the window over.
      *
-     * <p>The glitch is unphotographable for the same reason a spinning disk is: the frame loop
-     * cannot run while the smoke test holds the interface thread, so the only way to get a picture
-     * of it is to ask for one at a stated instant. Mirrors {@code MiniPlayerView.previewAt}.
+     * <p><strong>A fifteen-second boot needs a way past it, and that is not a compromise on the
+     * sequence.</strong> The whole point of running for the length of the fanfare is that the first
+     * launch is an event; the third launch of an afternoon is a wait, and somebody demonstrating the
+     * application will start it many times. Every console this is dressed as let you press a button
+     * through its own logo.
+     *
+     * <p>Refused while the cartridge is still outside the machine: there is nothing to skip yet, and a
+     * key that booted the application without the gesture would make the gesture optional.
+     *
+     * @return whether there was anything to skip
+     */
+    public boolean skip() {
+        if (phase == Phase.INSERT || phase == Phase.DONE) {
+            return false;
+        }
+        settle();
+        return true;
+    }
+
+    /**
+     * Puts the tear at a chosen moment and draws it, without a running clock.
+     *
+     * <p>The glitch is unphotographable for the same reason a spinning disk is: the frame loop cannot
+     * run while the smoke test holds the interface thread, so the only way to get a picture of it is to
+     * ask for one at a stated instant. Mirrors {@code MiniPlayerView.previewAt}.
      *
      * @param glitch how far through the tearing, 0 to 1
-     * @param loading how far through the loading bar, 0 to 1
      */
-    public void previewAt(double glitch, double loading) {
-        this.phase = loading > 0 ? Phase.LOADING : Phase.GLITCH;
+    public void previewGlitch(double glitch) {
+        this.phase = Phase.GLITCH;
         this.glitchProgress = Math.clamp(glitch, 0, 1);
-        this.loadingProgress = Math.clamp(loading, 0, 1);
+        this.showProgress = 0;
+        redrawPreview();
+    }
+
+    /**
+     * Puts the show at a chosen moment and draws it, without a running clock.
+     *
+     * <p>Every movement of the show is a fade, and <strong>a fade is the single most unphotographable
+     * thing there is</strong>: a still of one is a still of something at an opacity, and a still of the
+     * wrong instant is a still of an empty screen that looks exactly like a screen that failed to draw.
+     * So the moments worth having are asked for by number - which is also the only way to get more than
+     * one of them out of a run that holds the interface thread from beginning to end.
+     *
+     * @param show how far through the show, 0 to 1
+     */
+    public void previewShow(double show) {
+        this.phase = Phase.SHOW;
+        this.glitchProgress = 1;
+        this.showProgress = Math.clamp(show, 0, 1);
+        redrawPreview();
+    }
+
+    /** Draws a previewed moment. */
+    private void redrawPreview() {
         insertion.set(1);
-        // Asked for explicitly, because a Parent only lays out when something marked it dirty and
-        // none of the fields above are observable. Without this a second preview silently redraws
-        // the first one - which looks like the phase never changed rather than like the canvas was
-        // never asked to.
+        // Asked for explicitly, because a Parent only lays out when something marked it dirty and none
+        // of the fields above are observable. Without this a second preview silently redraws the first
+        // one - which looks like the phase never changed rather than like the canvas was never asked to.
         requestLayout();
         applyCss();
         layout();
@@ -586,11 +1157,16 @@ public class BootScreen extends Pane {
     // ------------------------------------------------------------------
 
     /**
-     * Starts the glitch, then the loading bar, then hands the window over.
+     * Starts the tear, then the show, then hands the window over.
      *
      * <p>One timer for both phases rather than a chain of transitions, so there is a single place
      * that knows how far through the sequence the machine is and a single place that can be stopped.
-     * It runs on wall time: nothing here is synchronised to audio, because nothing is playing yet.
+     *
+     * <p><strong>It runs on wall time, and that is not the same as being synchronised to the
+     * fanfare.</strong> The two are set to the same <em>length</em> - {@link #setSequenceSeconds} takes
+     * the sound's own decoded duration - so they finish together, which is all the agreement this needs.
+     * Actually driving the picture off the audio's position would mean reading a clock from a line this
+     * screen does not own and cannot see, for a sound that is deliberately allowed to outlive the boot.
      */
     private void startSequence() {
         if (phase != Phase.INSERT) {
@@ -598,6 +1174,14 @@ public class BootScreen extends Pane {
         }
         phase = Phase.GLITCH;
         phaseStarted = now();
+        // Before the first frame of the tear rather than after it: the flash and the sound are the
+        // same event, and a fanfare that started a frame late would read as a sound effect rather
+        // than as the machine coming on.
+        Runnable fanfare = onGlitch;
+        onGlitch = null;
+        if (fanfare != null) {
+            fanfare.run();
+        }
         stopSequence();
         sequence = new AnimationTimer() {
             @Override
@@ -618,19 +1202,20 @@ public class BootScreen extends Pane {
         if (phase == Phase.GLITCH) {
             glitchProgress = Math.clamp(elapsed / GLITCH_SECONDS, 0, 1);
             if (glitchProgress >= 1) {
-                phase = Phase.LOADING;
+                phase = Phase.SHOW;
                 phaseStarted = seconds;
-                loadingProgress = 0;
-                // The one moment anything real is started. Fired here rather than on insertion so
-                // the work begins as the bar does, and the caption has something true to say.
+                showProgress = 0;
+                // The one moment anything real is started. Fired as the show begins rather than on
+                // insertion, so the work is under way while the machine is introducing itself and the
+                // caption under the bar has something true to say by the time the bar appears.
                 Runnable started = onLoading;
                 if (started != null) {
                     started.run();
                 }
             }
-        } else if (phase == Phase.LOADING) {
-            loadingProgress = Math.clamp(elapsed / LOADING_SECONDS, 0, 1);
-            if (loadingProgress >= 1) {
+        } else if (phase == Phase.SHOW) {
+            showProgress = Math.clamp(elapsed / showSeconds(), 0, 1);
+            if (showProgress >= 1) {
                 stopSequence();
                 phase = Phase.DONE;
                 handOver();
@@ -689,6 +1274,16 @@ public class BootScreen extends Pane {
                 + insertion.get() * travel);
         cartridge.relocate(cartridgeX, cartridgeY);
 
+        // The cartridge is only on screen while it is still outside the machine. Past that it is
+        // *inside* - the glitch draws its own torn copy of the artwork, which is the picture breaking
+        // up rather than the object still sitting there, and the loading screen has no cartridge on it
+        // at all. Decided here rather than at each phase transition because there are four ways into a
+        // phase (the drag, settle(), previewAt() and the sequence's own timer) and this is the one
+        // place all four pass through.
+        boolean stillOutside = phase == Phase.INSERT;
+        cartridge.setVisible(stillOutside);
+        plate.setVisible(stillOutside);
+
         double mouthWidth = Math.round(cartridgeWidth * inletShare());
         drawBack(width, height, mouthY, mouthWidth);
         drawPlate(width, height, cartridgeX, cartridgeY, cartridgeWidth, cartridgeHeight);
@@ -704,7 +1299,7 @@ public class BootScreen extends Pane {
      * light room rather than a black rectangle somebody forgot to theme.
      */
     private void drawBack(double width, double height, double mouthY, double mouthWidth) {
-        Palette palette = Palette.active();
+        Palette palette = Palette.hardware();
         GraphicsContext gc = back.getGraphicsContext2D();
         gc.setImageSmoothing(false);
         gc.setFill(palette.color(PaletteRole.SHADOW));
@@ -745,7 +1340,7 @@ public class BootScreen extends Pane {
         double size = labelFontSize(textWidth, labelHeight - 2 * inset, AppConfig.APP_NAME);
         List<String> lines = wrapName(AppConfig.APP_NAME, (int) Math.floor(textWidth / size));
 
-        Palette palette = Palette.active();
+        Palette palette = Palette.hardware();
         gc.setTextAlign(TextAlignment.CENTER);
         gc.setFont(Fonts.pixel(size));
         gc.setFill(palette.color(PaletteRole.PRIMARY));
@@ -781,8 +1376,8 @@ public class BootScreen extends Pane {
             drawGlitch(gc, width, height, cartridgeX, cartridgeY, cartridgeWidth, cartridgeHeight);
             return;
         }
-        if (phase == Phase.LOADING) {
-            drawLoading(gc, width, height);
+        if (phase == Phase.SHOW) {
+            drawShow(gc, width, height);
             return;
         }
         if (phase == Phase.DONE) {
@@ -794,7 +1389,7 @@ public class BootScreen extends Pane {
     /** The slot's near lip, which is what swallows the cartridge's foot as it descends. */
     private void drawSlot(GraphicsContext gc, double width, double height,
             double mouthY, double mouthWidth) {
-        Palette palette = Palette.active();
+        Palette palette = Palette.hardware();
         double mouthX = Math.round((width - mouthWidth) / 2);
         double lipY = mouthY + MOUTH_HEIGHT;
 
@@ -819,7 +1414,7 @@ public class BootScreen extends Pane {
 
     /** The instruction, which fades out as soon as the gesture has been started. */
     private void drawPrompt(GraphicsContext gc, double width, double height, double lit) {
-        Palette palette = Palette.active();
+        Palette palette = Palette.hardware();
         gc.setTextAlign(TextAlignment.CENTER);
         double centreX = Math.round(width / 2);
 
@@ -842,7 +1437,7 @@ public class BootScreen extends Pane {
      */
     private void drawGlitch(GraphicsContext gc, double width, double height,
             double cartridgeX, double cartridgeY, double cartridgeWidth, double cartridgeHeight) {
-        Palette palette = Palette.active();
+        Palette palette = Palette.hardware();
 
         gc.setFill(palette.color(PaletteRole.SHADOW));
         gc.fillRect(0, 0, width, height);
@@ -886,56 +1481,268 @@ public class BootScreen extends Pane {
         }
     }
 
-    /** The machine reading the cartridge: a caption and a bar. */
-    private void drawLoading(GraphicsContext gc, double width, double height) {
-        Palette palette = Palette.active();
+    /**
+     * The machine introducing itself: the whole start-up sequence after the tear.
+     *
+     * <p>Five movements over one clock, in the order a console does them - a publisher line, the title
+     * arriving on the fanfare's big hit, a hold, the bar, and a fade to black. Every element's opacity,
+     * size and position is a pure function of {@link #showProgress}, so this method only decides
+     * <em>where</em> things go and never <em>when</em>.
+     *
+     * <p>Drawn back to front over a black ground each frame: stars, the seam, the rays, the title, the
+     * bar, then the blackout over the lot. Nothing here is a gradient and nothing is anti-aliased - the
+     * drama is all in hard-edged blocks and in the easing.
+     */
+    private void drawShow(GraphicsContext gc, double width, double height) {
+        Palette palette = Palette.hardware();
+        double show = showProgress;
 
         gc.setFill(palette.color(PaletteRole.SHADOW));
         gc.fillRect(0, 0, width, height);
 
+        gc.setTextAlign(TextAlignment.CENTER);
+        double centreX = Math.round(width / 2);
+        double centreY = Math.round(height * 0.42);
+
+        drawStars(gc, palette, width, height, show);
+        drawRays(gc, palette, width, height, centreX, centreY, show);
+        drawSeam(gc, palette, width, centreY, show);
+        drawTitle(gc, palette, width, centreY, show);
+        drawBar(gc, palette, width, height, show);
+
+        // Last, over everything, which is what makes it a fade to black rather than five things each
+        // fading on their own and arriving at slightly different times.
+        double gone = blackout(show);
+        if (gone > 0) {
+            gc.setFill(palette.color(PaletteRole.SHADOW, gone));
+            gc.fillRect(0, 0, width, height);
+        }
+    }
+
+    /**
+     * The publisher line, up and away again before the title arrives.
+     *
+     * <p>Small and dim, exactly as a console's first screen is: it is not the title and must not compete
+     * with the one that follows it. {@link #presentsAlpha} guarantees they never share the screen.
+     */
+    private void drawPresents(GraphicsContext gc, Palette palette, double width, double centreY,
+            double show) {
+        double alpha = presentsAlpha(show);
+        if (alpha <= 0) {
+            return;
+        }
+        gc.setFont(Fonts.pixel(PRESENTS_SIZE));
+        gc.setFill(palette.color(PaletteRole.TEXT_DIM, alpha));
+        gc.fillText(PRESENTS_LINE, Math.round(width / 2), Math.round(centreY));
+    }
+
+    /**
+     * A drifting field of single pixels behind the held title.
+     *
+     * <p><strong>Seeded, not random</strong>, by the same SplitMix64 finalizer the tear uses and for the
+     * same reason: an effect nobody can reproduce is an effect nobody can check, and every frame of this
+     * screen is drawn by {@code previewShow} rather than by a running clock during a smoke test.
+     *
+     * <p>They exist because a five-second hold on a static frame reads as the application having frozen
+     * at exactly the moment it is meant to look most alive - the same problem the companion window's
+     * spinning record solves. They drift slowly and they are one pixel each, so they cannot compete with
+     * the title.
+     */
+    private void drawStars(GraphicsContext gc, Palette palette, double width, double height,
+            double show) {
+        double alpha = Math.min(titleAlpha(show), STAR_ALPHA);
+        if (alpha <= 0) {
+            return;
+        }
+        gc.setFill(palette.color(PaletteRole.TEXT_DIM, alpha));
+        for (int star = 0; star < STARS; star++) {
+            double x = seeded(star, 1) * width;
+            // Downwards, at a speed of its own, wrapping - so the field never runs out.
+            double drift = (seeded(star, 2) * 0.5 + 0.5) * STAR_DRIFT;
+            double y = ((seeded(star, 3) + show * drift) % 1) * height;
+            gc.fillRect(Math.round(x), Math.round(y), 1, 1);
+        }
+    }
+
+    /**
+     * Wedges sweeping out of the centre as the title lands.
+     *
+     * <p>Hard-edged triangles rather than a soft glow, because everything else on this screen is hard
+     * edged and a blurred one would be the odd one out. They are gone by {@link #RAYS_DONE}: this is the
+     * moment of arrival, not a permanent decoration, and a spinning starburst behind a title is where
+     * this sort of thing stops being dramatic and starts being a screensaver.
+     */
+    private void drawRays(GraphicsContext gc, Palette palette, double width, double height,
+            double centreX, double centreY, double show) {
+        double alpha = rayAlpha(show);
+        if (alpha <= 0) {
+            return;
+        }
+        double sweep = raySweep(show);
+        double half = Math.hypot(width, height) / 2;
+        // **They start at a radius rather than at the point, and that is not a detail.** Sixteen wedges
+        // all converging on one pixel fill the middle of the screen with solid grey - which is a blob
+        // with spikes on it rather than light coming from behind the title, and it is precisely where
+        // the title has to be readable. Starting them out at RAY_INNER leaves the centre clear.
+        double inner = half * RAY_INNER * sweep;
+        double outer = half * sweep;
+        double spread = Math.PI / RAYS * 0.45;
+
+        gc.setFill(palette.color(PaletteRole.TEXT_PRIMARY, alpha * RAY_ALPHA));
+        for (int ray = 0; ray < RAYS; ray++) {
+            // Turning very slowly, so the burst is arriving rather than stamped on. Slow enough that it
+            // never reads as a spin - a rotating starburst is where this stops being an arrival.
+            double angle = ray * 2 * Math.PI / RAYS + show * 0.35;
+            gc.fillPolygon(
+                    new double[] {
+                        centreX + Math.cos(angle - spread) * inner,
+                        centreX + Math.cos(angle - spread) * outer,
+                        centreX + Math.cos(angle + spread) * outer,
+                        centreX + Math.cos(angle + spread) * inner},
+                    new double[] {
+                        centreY + Math.sin(angle - spread) * inner,
+                        centreY + Math.sin(angle - spread) * outer,
+                        centreY + Math.sin(angle + spread) * outer,
+                        centreY + Math.sin(angle + spread) * inner},
+                    4);
+        }
+    }
+
+    /**
+     * The seam of light the title is revealed out of: a line at the centre that opens sideways.
+     *
+     * <p>The cheapest dramatic reveal there is and the one that suits this interface - one rectangle, no
+     * blur, no gradient. It thickens as it opens and then thins away again under the title, so what is
+     * left behind is the title rather than a band it is sitting in.
+     */
+    private void drawSeam(GraphicsContext gc, Palette palette, double width, double centreY,
+            double show) {
+        double open = seamWidth(show);
+        if (open <= 0) {
+            return;
+        }
+        // **Gone before the title is legible, and that is a correction rather than a preference.** It
+        // sits at the same height as the middle of the title block, so while both are half-way up the
+        // line runs straight through the words and reads as a strikethrough. Fading it out over the
+        // first part of the title's own fade-in means the two hand over rather than overlap: the seam
+        // opens, the title comes up out of it, the seam is gone. Caught by looking at the picture.
+        double alpha = (1 - ramp(show, TITLE_IN + 0.02, midpoint(TITLE_IN, TITLE_FULL)))
+                * (1 - blackout(show));
+        if (alpha <= 0) {
+            return;
+        }
+        double seamW = Math.round(width * open);
+        double seamH = Math.max(1, Math.round(SEAM_HEIGHT * open));
+        gc.setFill(palette.color(PaletteRole.TEXT_PRIMARY, alpha));
+        gc.fillRect(Math.round((width - seamW) / 2), Math.round(centreY - seamH / 2), seamW, seamH);
+    }
+
+    /**
+     * The title, fading up and settling to its size.
+     *
+     * <p><strong>This is the only place the name is shown at a size worth its length.</strong> The
+     * cartridge's label is 48% of a cartridge, the title bar shares a strip with three toggles and the
+     * companion window is measured to have room for none of it - so the one screen with nothing else on
+     * it is where a 43-character joke gets to be the point. It is safe here precisely because the
+     * cartridge has gone into the machine by now: while the label was on screen this would have been the
+     * name printed twice at once.
+     *
+     * <p>Broken on the name's own separators by {@link #wrapName} and sized by {@link #splashFontSize},
+     * so it is the same object as the cartridge's label rather than a second idea of how to lay the name
+     * out. <strong>The wrap is computed at the resting size and never at the scaled one</strong>: wrapping
+     * against the size it is momentarily drawn at would re-break the title mid-fade, so the line count
+     * would change while it was arriving and the block would jump.
+     */
+    private void drawTitle(GraphicsContext gc, Palette palette, double width, double centreY,
+            double show) {
+        double alpha = titleAlpha(show);
+        drawPresents(gc, palette, width, centreY, show);
+        if (alpha <= 0) {
+            return;
+        }
+
+        double resting = splashFontSize(width, AppConfig.APP_NAME);
+        List<String> lines = wrapName(AppConfig.APP_NAME,
+                (int) Math.floor(width * SPLASH_WIDTH_SHARE / resting));
+        double size = resting * titleScale(show);
+        double lineHeight = size * 1.35;
+        double block = lines.size() * lineHeight;
+
+        // A slow swell while it is held, so the long middle of the sequence is not a frozen frame. Well
+        // under the 3 Hz cap on anything full-screen and rhythmic - see BREATH_HZ.
+        double held = ramp(show, TITLE_FULL, TITLE_FULL + 0.04);
+        double breath = 1 - held * BREATH_DEPTH
+                * (0.5 - 0.5 * Math.cos(show * showSeconds() * BREATH_HZ * 2 * Math.PI));
+
+        gc.setFont(Fonts.pixel(size));
+        gc.setFill(palette.color(PaletteRole.TEXT_PRIMARY, alpha * breath));
+        double first = centreY - block / 2 + size;
+        for (int i = 0; i < lines.size(); i++) {
+            gc.fillText(lines.get(i), Math.round(width / 2),
+                    Math.round(first + i * lineHeight));
+        }
+
+        // The version under it, arriving a beat later so the two do not appear as one block.
+        double versionAlpha = ramp(show, TITLE_FULL - 0.04, TITLE_FULL + 0.06) * (1 - blackout(show));
+        if (versionAlpha > 0) {
+            gc.setFont(Fonts.pixel(HINT_SIZE));
+            gc.setFill(palette.color(PaletteRole.TEXT_DIM, versionAlpha));
+            gc.fillText("v" + AppConfig.APP_VERSION, Math.round(width / 2),
+                    Math.round(centreY + block / 2 + SPLASH_GAP));
+        }
+    }
+
+    /**
+     * The loading bar and the caption naming what is being loaded.
+     *
+     * <p>Filled in whole blocks rather than as a smooth sweep, which is what makes it read as 8-bit
+     * rather than as a web page. It reaches full at {@link #FADE_OUT}, so the machine finishes reading as
+     * the picture starts to go; the caption under it reports the daemon actually coming up, which is the
+     * one thing at startup that genuinely takes a moment.
+     */
+    private void drawBar(GraphicsContext gc, Palette palette, double width, double height,
+            double show) {
+        double alpha = barAlpha(show);
+        if (alpha <= 0) {
+            return;
+        }
+
         double barWidth = Math.round(Math.min(width * 0.42, 520));
         double barHeight = 22;
         double barX = Math.round((width - barWidth) / 2);
-        double barY = Math.round(height * 0.54);
+        double barY = Math.round(height * 0.76);
 
-        gc.setTextAlign(TextAlignment.CENTER);
-        gc.setFont(Fonts.pixel(PROMPT_SIZE));
-        gc.setFill(palette.color(PaletteRole.PRIMARY));
-        gc.fillText("LOADING", Math.round(width / 2), Math.round(barY - 30));
-
-        gc.setFill(palette.shaded(PaletteRole.SHADOW, 0.5));
+        gc.setFill(palette.color(PaletteRole.SHADOW, alpha).interpolate(
+                palette.shaded(PaletteRole.SHADOW, 0.5), alpha));
         gc.fillRect(barX, barY, barWidth, barHeight);
 
-        // Filled in whole blocks rather than as a smooth sweep, which is what makes it read as 8-bit
-        // rather than as a web page. The bar is still a beat rather than a measurement - the library
-        // was loaded long before it ran - but it is no longer standing for nothing: the caption
-        // beneath it reports the daemon actually coming up, which is the one thing at startup that
-        // genuinely takes a moment.
         double block = 10;
         int blocks = (int) Math.floor(barWidth / block);
-        int lit = (int) Math.round(blocks * loadingProgress);
-        gc.setFill(palette.color(PaletteRole.PRIMARY));
+        int lit = (int) Math.round(blocks * barProgress(show));
+        gc.setFill(palette.color(PaletteRole.PRIMARY, alpha));
         for (int i = 0; i < lit; i++) {
             gc.fillRect(barX + i * block + 1, barY + 3, block - 2, barHeight - 6);
         }
 
-        gc.setStroke(palette.color(PaletteRole.OUTLINE));
+        gc.setStroke(palette.color(PaletteRole.OUTLINE, alpha));
         gc.setLineWidth(RIM);
         gc.strokeRect(barX - RIM / 2, barY - RIM / 2, barWidth + RIM, barHeight + RIM);
 
-        // What is actually being loaded, under the bar. ACCENT rather than TEXT_DIM: this is the
-        // only line on the screen that changes while the bar runs, and a reader has about a second
-        // and a half to notice it.
+        // ACCENT rather than TEXT_DIM: this is the only line on the screen that changes while the bar
+        // runs, and it is the whole evidence that anything is actually happening.
         String reporting = status;
         if (!reporting.isEmpty()) {
             gc.setFont(Fonts.pixel(HINT_SIZE));
-            gc.setFill(palette.color(PaletteRole.ACCENT));
+            gc.setFill(palette.color(PaletteRole.ACCENT, alpha));
             gc.fillText(reporting, Math.round(width / 2), Math.round(barY + barHeight + 24));
         }
 
+        // How to get past all this, said once the bar is up rather than over the title. A fifteen second
+        // ritual is an event the first time and a wait the tenth, and somebody demonstrating this will
+        // start it many times - see skip().
         gc.setFont(Fonts.pixel(HINT_SIZE));
-        gc.setFill(palette.color(PaletteRole.TEXT_DIM));
-        gc.fillText(AppConfig.APP_NAME_SHORT, Math.round(width / 2),
+        gc.setFill(palette.color(PaletteRole.TEXT_DIM, alpha * SKIP_HINT_ALPHA));
+        gc.fillText("PRESS ANY KEY TO SKIP", Math.round(width / 2),
                 Math.round(barY + barHeight + 48));
     }
 

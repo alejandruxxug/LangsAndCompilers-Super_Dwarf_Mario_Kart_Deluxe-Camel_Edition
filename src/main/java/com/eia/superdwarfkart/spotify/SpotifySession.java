@@ -246,6 +246,22 @@ public final class SpotifySession implements AutoCloseable {
     }
 
     /**
+     * Reads the genres Spotify files a track's artist under.
+     *
+     * <p>Only over the catalogue route. The daemon's {@code /web-api} proxy could serve it too, but it
+     * borrows librespot's globally shared client id and is rate-limited by strangers - and unlike a
+     * search, this is a request nobody asked for out loud: it happens because a track was opened, and
+     * spending a contended quota on a field that has a perfectly good default is the wrong trade. With
+     * no catalogue configured the genre box simply comes up on {@code UNKNOWN}.
+     *
+     * @param artistId the artist's Spotify id, or {@code null}
+     * @return Spotify's own free-text tags, or an empty list
+     */
+    public java.util.List<String> artistGenres(String artistId) {
+        return catalog.isConfigured() ? catalog.artistGenres(artistId) : java.util.List.of();
+    }
+
+    /**
      * Explains why the last search came back empty, or {@code null} when it simply matched nothing.
      *
      * @return a sentence for the interface, or {@code null}

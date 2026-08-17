@@ -227,6 +227,53 @@ class LibraryTest {
     }
 
     @Test
+    @DisplayName("tells the add dialog what an artist's genre already is, since Spotify no longer will")
+    void reportsAnArtistsUsualGenre() {
+        library.add(rainbow);
+        library.add(moo);
+        library.add(bowser);
+
+        assertEquals(Genre.SOUNDTRACK, library.genreForArtist("Koji Kondo"));
+        assertEquals(Genre.CHIPTUNE, library.genreForArtist("Nintendo Sound Team"));
+        // Case-insensitive, because the credit is typed by a person or copied off a search result.
+        assertEquals(Genre.SOUNDTRACK, library.genreForArtist("koji kondo"));
+    }
+
+    @Test
+    @DisplayName("the most common answer wins, so one mis-filed song does not decide it")
+    void theUsualGenreIsAVote() {
+        library.add(rainbow);
+        library.add(moo);
+        Song slip = song("Rainbow Road Remix", "Koji Kondo", "Mario Kart 64", Genre.POP);
+        library.add(slip);
+
+        assertEquals(Genre.SOUNDTRACK, library.genreForArtist("Koji Kondo"));
+    }
+
+    @Test
+    @DisplayName("UNKNOWN songs do not vote, because \"nobody has said\" is not an opinion")
+    void unknownDoesNotVote() {
+        library.add(song("First", "Newcomer", "", Genre.UNKNOWN));
+        library.add(song("Second", "Newcomer", "", Genre.UNKNOWN));
+        library.add(song("Third", "Newcomer", "", Genre.METAL));
+
+        assertEquals(Genre.METAL, library.genreForArtist("Newcomer"));
+    }
+
+    @Test
+    @DisplayName("an artist the library has never seen is UNKNOWN rather than a guess")
+    void anUnknownArtistIsUnknown() {
+        library.add(rainbow);
+
+        assertEquals(Genre.UNKNOWN, library.genreForArtist("Somebody Else"));
+        assertEquals(Genre.UNKNOWN, library.genreForArtist(""));
+        assertEquals(Genre.UNKNOWN, library.genreForArtist(null));
+        // A feature credit is a different act, and guessing across the two would be worse than not
+        // guessing: this deliberately does not match on a substring of the credit.
+        assertEquals(Genre.UNKNOWN, library.genreForArtist("Koji Kondo, Somebody"));
+    }
+
+    @Test
     @DisplayName("a removed listener stops hearing about changes")
     void listenerCanBeRemoved() {
         List<String> events = new ArrayList<>();

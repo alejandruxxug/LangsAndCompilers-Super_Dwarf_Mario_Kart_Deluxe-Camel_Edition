@@ -692,6 +692,25 @@
     -fx-border-width: 3;
 }
 
+/*
+ * The main window with its frame put away. Two screens ask for this and they ask for the same thing:
+ *
+ *   - true fullscreen (F11), where the runner has the whole display. The frame is what tells you
+ *     where a window ends, so on a screen with no window on it there is nothing for it to be the
+ *     edge of, and three pixels of border around a road is then the only thing on the display that
+ *     is not the game.
+ *   - the boot screen, which is a console with the power just switched on. It draws no title bar for
+ *     the same reason, and an amber frame around it would be the software's colour scheme showing up
+ *     before the software has started - which is exactly what that screen is built not to do.
+ *
+ * Dropped rather than recoloured, and put back the moment the application proper is on screen.
+ * Remember that a border is part of a region's insets: left here it would also inset the contents by
+ * three pixels a side.
+ */
+.pixel-window.no-frame {
+    -fx-border-width: 0;
+}
+
 .pixel-window-error {
     -fx-border-color: -role-negative;
 }
@@ -1301,6 +1320,14 @@
 .history-entry:hover {
     -fx-background-color: -ui-face-hover;
     -fx-text-fill: -role-primary;
+}
+
+/* A search result in the Spotify add dialog: a history row that can be picked and stay picked.
+   -ui-selected is the same ground the library table marks a selected row with, which is what makes
+   the choice read as a selection rather than as a button someone is hovering. */
+.result-row:selected {
+    -fx-background-color: -ui-selected;
+    -fx-text-fill: -role-text-primary;
 }
 
 .settings-caption {

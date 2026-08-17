@@ -217,6 +217,54 @@ public class PixelDialog {
         return accepted;
     }
 
+    /**
+     * Shows the dialog without waiting for it, and hands back its scene.
+     *
+     * <p><strong>For photographing a dialog, and nothing else.</strong> Layout overflow in a
+     * fixed-width pixel font is invisible to every unit test - a caption that ran off the side still
+     * draws, still throws nothing and still looks deliberate - so the only check for it is a picture,
+     * and {@link #showAndWait()} cannot be photographed because it does not return until the dialog is
+     * closed. The stage is still modal; what changes is only that the caller is not blocked.
+     *
+     * @return the dialog's scene, laid out and on screen
+     */
+    public Scene showForCapture() {
+        stage.sizeToScene();
+        centerOnOwner();
+        stage.show();
+        shell.applyCss();
+        shell.layout();
+        return stage.getScene();
+    }
+
+    /** Closes the dialog from code, as the cancel button would. */
+    public void close() {
+        cancel();
+    }
+
+    /**
+     * Resizes the open window around contents that have changed size.
+     *
+     * <p>{@link #showAndWait()} sizes the window to its contents once, on the way up. A dialog whose
+     * body grows afterwards - a search that came back with ten rows where the last one had two, a form
+     * that appeared once something was picked - gets no second pass on its own: a toolkit does not
+     * shrink a window because its contents stopped filling it, and it will happily clip contents that
+     * outgrew it. That is the same fault the companion window's compact strip had to fix with
+     * {@code sizeToScene}, in a different window.
+     *
+     * <p>The layout pass has to come first, or the window is sized against the previous contents.
+     * Deliberately does not re-centre: a window that jumped every time a result list changed length
+     * would be worse than one that grows downwards from where the user left it.
+     */
+    public void resizeToContent() {
+        if (!stage.isShowing()) {
+            return;
+        }
+        shell.applyCss();
+        shell.layout();
+        stage.sizeToScene();
+    }
+
     /** Positions the dialog over the middle of its owner, or the screen if it has none. */
     private void centerOnOwner() {
         Window owner = stage.getOwner();
