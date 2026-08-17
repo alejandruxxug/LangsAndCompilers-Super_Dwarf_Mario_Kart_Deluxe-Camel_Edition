@@ -45,17 +45,55 @@ class MoodsTest {
     class TheSet {
 
         @Test
-        @DisplayName("ships the dark and light moods the bonus is delivered as")
+        @DisplayName("ships the dark and light moods the bonus is delivered as, and the eight tracks")
         void shipsBoth() {
-            assertEquals(List.of("dark", "light"), Moods.builtIns().stream().map(Mood::id).toList());
+            assertEquals(
+                    List.of("dark", "light", "peach_circuit", "sunset_wilds", "sky_garden",
+                            "boo_lake", "snow_land", "yoshi_desert", "ribbon_road",
+                            "bowser_castle"),
+                    Moods.builtIns().stream().map(Mood::id).toList());
+        }
+
+        /**
+         * Ten reads as a system and two reads as a setting, which is the entire argument for
+         * building the importer and the palette builder before hand-picking a colour. If this ever
+         * drops back towards two, the switcher has stopped being a feature.
+         */
+        @Test
+        @DisplayName("ships enough moods for the switcher to read as a system")
+        void shipsEnoughToReadAsASystem() {
+            assertTrue(Moods.builtIns().size() >= 10,
+                    "only " + Moods.builtIns().size() + " moods ship");
         }
 
         @Test
         @DisplayName("resolves a stored id, and treats an unknown one as absent rather than fatal")
         void resolvesById() {
             assertSame(Moods.LIGHT, Moods.byId("light").orElseThrow());
-            assertTrue(Moods.byId("sunset_wilds").isEmpty(), "an unknown mood must not resolve");
+            assertSame(Moods.SUNSET_WILDS, Moods.byId("sunset_wilds").orElseThrow());
+            assertTrue(Moods.byId("rainbow_road").isEmpty(), "an unknown mood must not resolve");
             assertTrue(Moods.byId(null).isEmpty(), "a missing stored choice must not throw");
+        }
+
+        /**
+         * The application opens in the look it has always had. The mood system's own notes name
+         * {@code PEACH_CIRCUIT} as the default preset, and this is the deliberate departure from
+         * them: changing which mood a first launch comes up in would be a change to what the
+         * application <em>is</em>, made as a side effect of adding nine more looks.
+         */
+        @Test
+        @DisplayName("still opens in the dark mood the application has always had")
+        void defaultIsUnchanged() {
+            assertSame(Moods.DARK, Moods.defaultMood());
+        }
+
+        @Test
+        @DisplayName("treats every shipped mood as uneditable, so there is always a way back")
+        void builtInsAreProtectedFromEditing() {
+            for (Mood mood : Moods.builtIns()) {
+                assertTrue(Moods.isBuiltIn(mood.id()), mood + " is not recognised as a built-in");
+            }
+            assertFalse(Moods.isBuiltIn("my_mood"));
         }
 
         @Test

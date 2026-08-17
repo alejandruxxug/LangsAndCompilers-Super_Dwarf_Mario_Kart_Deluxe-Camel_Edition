@@ -172,6 +172,21 @@ public final class AppConfig {
         return appHome().resolve("settings.json");
     }
 
+    /**
+     * Returns the folder holding the user's own moods, one directory per mood.
+     *
+     * <p>A directory rather than a file because a mood is not only a palette: it carries its layer
+     * definitions, any imported artwork and any tiles drawn in the pixel editor, and all of that
+     * has to travel together when somebody zips one up and hands it over. The built-in presets are
+     * <em>not</em> here - they are code, so a user cannot break one and there is always a known-good
+     * mood to fall back to.
+     *
+     * @return the moods folder; not guaranteed to exist yet
+     */
+    public static Path moodsDir() {
+        return appHome().resolve("moods");
+    }
+
     // ------------------------------------------------------------------
     // Spotify
     // ------------------------------------------------------------------

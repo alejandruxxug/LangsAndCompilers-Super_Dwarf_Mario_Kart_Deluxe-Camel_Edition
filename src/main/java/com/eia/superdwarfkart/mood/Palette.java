@@ -3,6 +3,7 @@ package com.eia.superdwarfkart.mood;
 import javafx.scene.paint.Color;
 
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -18,9 +19,9 @@ import java.util.Objects;
  * it, which keeps every reader safe without any locking.
  *
  * <p>{@link #active()} is a static holder rather than an injected dependency, matching the way
- * {@code Theme} and {@code AssetRegistry} are already reached in this project. When the mood
- * system arrives it sets the active palette from the mood stored in {@code AppState}, and the
- * drawing code does not change.
+ * {@code Theme} and {@code AssetRegistry} are already reached in this project. The mood system
+ * sets it from the mood stored in {@code AppState}, and the drawing code did not change when it
+ * arrived - which was the whole prediction ground rule 7 was made on.
  */
 public final class Palette {
 
@@ -132,6 +133,67 @@ public final class Palette {
     }
 
     /**
+     * Returns a copy with one role recoloured.
+     *
+     * <p>The customizer's whole edit path. Immutable rather than a setter for the reason stated
+     * above: the render loop reads this from another thread, and a palette that could be half-way
+     * through an edit is a frame drawn in two moods at once.
+     *
+     * @param role  the role to change; must not be {@code null}
+     * @param color the new colour, snapped on the way in
+     * @return the new palette
+     */
+    public Palette withColor(PaletteRole role, Color color) {
+        Map<PaletteRole, Color> copy = new EnumMap<>(colors);
+        copy.put(Objects.requireNonNull(role, "role must not be null"), color);
+        return new Palette(name, copy);
+    }
+
+    /**
+     * Returns a copy under a different name.
+     *
+     * @param newName the name to use
+     * @return the new palette
+     */
+    public Palette renamed(String newName) {
+        return new Palette(newName, colors);
+    }
+
+    /**
+     * Returns the sixteen colours by role.
+     *
+     * @return a copy of the mapping, safe to modify
+     */
+    public Map<PaletteRole, Color> asMap() {
+        return new EnumMap<>(colors);
+    }
+
+    /**
+     * Builds a palette from sixteen colours in {@link PaletteRole} declaration order.
+     *
+     * <p>Declaration order is the format an imported {@code .gpl} or {@code .hex} lands on, so this
+     * is what {@link PaletteImporter} and {@link MoodRepository} both go through rather than each
+     * writing the same loop.
+     *
+     * @param name   the palette's name
+     * @param colors exactly {@link PaletteRole#COUNT} colours
+     * @return the palette
+     * @throws IllegalArgumentException if the wrong number of colours is supplied
+     */
+    public static Palette of(String name, List<Color> colors) {
+        Objects.requireNonNull(colors, "colors must not be null");
+        if (colors.size() != PaletteRole.COUNT) {
+            throw new IllegalArgumentException("A palette holds exactly " + PaletteRole.COUNT
+                    + " colours, not " + colors.size());
+        }
+        Map<PaletteRole, Color> mapped = new EnumMap<>(PaletteRole.class);
+        for (PaletteRole role : PaletteRole.values()) {
+            mapped.put(role, colors.get(role.ordinal()));
+        }
+        return new Palette(name, mapped);
+    }
+
+    /**
      * Returns the palette every view currently draws with.
      *
      * @return the active palette, never {@code null}
@@ -143,8 +205,13 @@ public final class Palette {
     /**
      * Installs a palette as the one every view draws with.
      *
-     * <p>Views must redraw themselves afterwards; this does not notify anyone, because until the
-     * mood system exists there is nothing to change it at runtime.
+     * <p>Views must redraw themselves afterwards; this deliberately notifies nobody. A mood change
+     * goes through {@code ui/Theme} and {@code App.applyMood}, which know which views only repaint
+     * when their picture changes and have to be told; a notification here would be a second path to
+     * the same thing, free to disagree with the first.
+     *
+     * <p>{@code MoodReactivity} also installs palettes through here, several times a second on a
+     * reactive mood - which is exactly why this stays as cheap as a field assignment.
      *
      * @param palette the palette to install; {@code null} restores the default
      */

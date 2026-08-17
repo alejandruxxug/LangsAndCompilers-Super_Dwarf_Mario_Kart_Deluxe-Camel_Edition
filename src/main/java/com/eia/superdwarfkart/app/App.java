@@ -28,8 +28,14 @@ import com.eia.superdwarfkart.model.Song;
 import com.eia.superdwarfkart.persistence.LibraryRepository;
 import com.eia.superdwarfkart.persistence.PersistenceException;
 import com.eia.superdwarfkart.persistence.Repository;
+import com.eia.superdwarfkart.mood.GbaColor;
 import com.eia.superdwarfkart.mood.Mood;
+import com.eia.superdwarfkart.mood.MoodRepository;
 import com.eia.superdwarfkart.mood.Moods;
+import com.eia.superdwarfkart.mood.PaletteImporter;
+import com.eia.superdwarfkart.mood.PaletteRole;
+import com.eia.superdwarfkart.mood.PixelTile;
+import com.eia.superdwarfkart.mood.ProceduralLayer;
 import com.eia.superdwarfkart.persistence.ScoreRepository;
 import com.eia.superdwarfkart.persistence.SettingsRepository;
 import com.eia.superdwarfkart.playback.AlphabeticalMode;
@@ -58,6 +64,8 @@ import com.eia.superdwarfkart.ui.PixelDialog;
 import com.eia.superdwarfkart.ui.PlaybackBar;
 import com.eia.superdwarfkart.ui.RacerSelectView;
 import com.eia.superdwarfkart.ui.RunnerView;
+import com.eia.superdwarfkart.ui.MoodCustomizerView;
+import com.eia.superdwarfkart.ui.MoodOverlayRenderer;
 import com.eia.superdwarfkart.ui.SettingsView;
 import com.eia.superdwarfkart.ui.SideRail;
 import com.eia.superdwarfkart.ui.Theme;
@@ -88,6 +96,7 @@ import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 import javafx.util.Duration;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 import java.util.logging.Logger;
@@ -214,6 +223,18 @@ public class App extends Application {
     private HistoryView historyView;
     private RacerSelectView racerSelect;
     private MoodSelectView moodSelect;
+    private MoodCustomizerView moodCustomizer;
+    private MoodRepository moods;
+
+    /**
+     * The two canvases the mood's overlay layers are drawn on, with the interface between them.
+     *
+     * <p>It holds whatever the window is showing, so the layers reach the library, the runner, the
+     * structure visualiser and presentation mode without any of them knowing it exists. Everything
+     * that used to call {@code shell.setCenter} now sets this pane's content instead - swapping the
+     * shell's centre would take the layers away with the view.
+     */
+    private MoodOverlayRenderer overlay;
     private SettingsView settingsView;
     private SpotifyView spotifyView;
     private SpotifySession spotify;
@@ -289,6 +310,9 @@ public class App extends Application {
 
         // Read and applied before a single view is built, so the first frame the user sees is
         // already in their mood rather than flashing the default one and correcting itself.
+        // Before the settings are read, because the stored mood id is resolved against this: a
+        // mood the user built has to be restorable exactly as readily as a preset.
+        moods = new MoodRepository(AppConfig.moodsDir());
         settings = new SettingsRepository();
         restoreSettings();
 
@@ -405,8 +429,11 @@ public class App extends Application {
         historyView = new HistoryView(library, history);
         historyView.setOnSongActivated(song -> player.select(song));
         racerSelect = new RacerSelectView(state, assets);
-        moodSelect = new MoodSelectView(state);
-        settingsView = new SettingsView();
+        moodSelect = new MoodSelectView(state, moods);
+        moodCustomizer = new MoodCustomizerView(state, moods);
+        moodCustomizer.setOnMoodsChanged(() -> moodSelect.refresh());
+        moodSelect.setOnCustomize(this::showCustomizer);
+        settingsView = new SettingsView(state);
 
         spotifyView = new SpotifyView(library, spotify);
         // A track added from Spotify joins the library like anything else, so the running order
@@ -455,13 +482,39 @@ public class App extends Application {
         // title bar across the top of that is the application admitting it was a window all along.
         buildHeader();
 
+        // The layers' pane goes in the shell's centre once, and everything that changes what is on
+        // screen sets its content. It draws the ground the root pane used to paint for itself:
+        // .root-pane is transparent now, because a layer behind an opaque pane is a layer nobody
+        // can see.
+        overlay = new MoodOverlayRenderer();
+        overlay.setMusicFeed(new MoodOverlayRenderer.MusicFeed() {
+            @Override
+            public double seconds() {
+                return engine.positionSeconds();
+            }
+
+            @Override
+            public double level() {
+                return Math.max(levels.leftRms(), levels.rightRms());
+            }
+
+            @Override
+            public double beat() {
+                return runner == null ? 0 : runner.beatPulseNow();
+            }
+        });
+
         bootScreen = new BootScreen(assets);
         bootScreen.setOnInserted(this::finishBooting);
         bootScreen.setOnLoading(this::bootLoadSpotify);
         // There is no title bar to drag by while this is up, so the black itself is the handle. The
         // cartridge consumes its own presses, so dragging it never moves the window.
         PixelDialog.dragBy(bootScreen, stage);
-        shell.setCenter(bootScreen);
+        shell.setCenter(overlay);
+        // The boot screen gets the window with no layers over it: a console with the power just
+        // switched on is not the moment for a starfield, and an ABOVE_CONTENT layer would draw over
+        // the cartridge. The mood is installed in finishBooting.
+        overlay.setContent(bootScreen);
         // Nothing behind the boot screen may draw. Five canvases started their timers as they were
         // constructed above, and an AnimationTimer does not stop because the node it paints cannot
         // be seen - the same fault the companion window and the F4 fold each had to fix.
@@ -472,6 +525,7 @@ public class App extends Application {
         scene.setFill(Color.TRANSPARENT);
         Theme.apply(scene);
         installShortcuts(scene);
+        installPaletteDrop(scene);
 
         // Before show(), which is the only time a stage will accept it. The title stays even though
         // nothing draws it any more: it is what the dock and the task switcher show.
@@ -496,6 +550,48 @@ public class App extends Application {
     }
 
     /**
+     * Accepts a palette file dropped anywhere on the window as "make a mood from this".
+     *
+     * <p>The shortest path there is from a Lospec page to a mood, and the whole argument for
+     * {@link PaletteImporter} rests on that path being short: choosing sixteen colours by eye takes
+     * an hour, and this takes as long as a drag. It is deliberately not restricted to the mood
+     * screen - somebody who has just downloaded a palette is looking at their downloads folder, not
+     * at this application's side rail.
+     *
+     * <p>The drop is refused unless the file is one this can read, so dragging an MP3 in still does
+     * what it always did.
+     */
+    private void installPaletteDrop(Scene scene) {
+        scene.setOnDragOver(event -> {
+            if (!booting && event.getDragboard().hasFiles()
+                    && event.getDragboard().getFiles().stream()
+                            .anyMatch(file -> PaletteImporter.canRead(file.toPath()))) {
+                event.acceptTransferModes(javafx.scene.input.TransferMode.COPY);
+            }
+            event.consume();
+        });
+        scene.setOnDragDropped(event -> {
+            boolean handled = false;
+            for (java.io.File file : event.getDragboard().getFiles()) {
+                if (PaletteImporter.canRead(file.toPath())) {
+                    // Through the customizer rather than through the repository directly: it is
+                    // what knows to name the mood, store it, apply it and say so, and a second copy
+                    // of that sequence here would be free to drift from the button's.
+                    moodCustomizer.importPalette(file.toPath());
+                    handled = true;
+                    break;
+                }
+            }
+            if (handled) {
+                sideRail.select(Destination.MOODS);
+                showCustomizer();
+            }
+            event.setDropCompleted(handled);
+            event.consume();
+        });
+    }
+
+    /**
      * Hands the window over to the application, once the cartridge is in.
      *
      * <p>Lands on the library, paused. Inserting the cartridge is the start ritual and asking a
@@ -510,7 +606,9 @@ public class App extends Application {
         booting = false;
         // The title bar arrives with the application, not before it.
         shell.setTop(header);
-        shell.setCenter(root);
+        overlay.setContent(root);
+        // Now the layers arrive, with the application.
+        applyMood(state.getMood());
         resumeMainViews();
     }
 
@@ -550,14 +648,23 @@ public class App extends Application {
      * rather than refusing to start (ground rule 5).
      */
     private void restoreSettings() {
-        Moods.byId(settings.moodId()).ifPresent(state::setMood);
+        // Through the repository rather than through Moods, so a mood the user built is restored
+        // as readily as a preset. An id this build has never heard of resolves to nothing and falls
+        // back, rather than refusing to start.
+        moods.byId(settings.moodId()).ifPresent(state::setMood);
         Racer.byName(settings.racerId()).ifPresent(state::setRacer);
         SpeedClass.byName(settings.speedClass()).ifPresent(state::setSpeedClass);
+        state.setReduceMotion(settings.reduceMotion());
 
         applyMood(state.getMood());
+        applyReduceMotion(state.isReduceMotion());
         state.moodProperty().addListener((observable, was, now) -> {
             applyMood(now);
             settings.setMoodId(now.id());
+        });
+        state.reduceMotionProperty().addListener((observable, was, now) -> {
+            applyReduceMotion(now);
+            settings.setReduceMotion(now);
         });
         state.racerProperty().addListener(
                 (observable, was, now) -> settings.setRacerId(now.name()));
@@ -581,6 +688,16 @@ public class App extends Application {
      */
     private void applyMood(Mood mood) {
         Theme.setPalette(mood.palette());
+
+        if (overlay != null) {
+            // Nothing while the boot screen is up: it is a console with the power just switched on,
+            // and an ABOVE_CONTENT layer would draw over the cartridge. finishBooting calls this
+            // again, which is when the layers arrive.
+            overlay.setMood(booting ? null : mood, moods.folderOf(mood.id()));
+        }
+        if (moodCustomizer != null) {
+            moodCustomizer.refresh();
+        }
 
         if (meters != null) {
             meters.redraw();
@@ -779,7 +896,7 @@ public class App extends Application {
             // Back above the complexity panel, where it came from - even when the column is folded
             // away, so that unfolding finds it there rather than empty.
             sideColumn.getChildren().add(0, visualizer);
-            shell.setCenter(root);
+            overlay.setContent(root);
             presenting = false;
             updateVisualizerDrawing();
             return;
@@ -787,7 +904,7 @@ public class App extends Application {
         // Detach from the main layout first: a node cannot sit in two places at once.
         sideColumn.getChildren().remove(visualizer);
         presentation.attach(visualizer);
-        shell.setCenter(presentation);
+        overlay.setContent(presentation);
         presenting = true;
         // F5 is how somebody folded out of the way reaches the visualizer for a question, so this
         // has to pick the timer back up rather than assume it was left running.
@@ -1164,11 +1281,49 @@ public class App extends Application {
      * thing closing the window does and is the right answer to the same question: collapsing to the
      * companion is leaving the race, because there is no longer a road to look at.
      */
+    /**
+     * Applies the accessibility switch everywhere it reaches.
+     *
+     * <p>Two places, and both of them matter: the mood's layers stop scrolling and a reactive mood
+     * stops following the music, and the runner stops zooming, washing and flashing on the beat.
+     * The mood system's own notes are explicit that this must reach {@code RunnerView} and not only
+     * {@code mood/} - on a 120 BPM track the runner's beat effects fire at 2 Hz, which is inside
+     * the 3 Hz cap only by luck.
+     *
+     * @param on whether motion is suppressed
+     */
+    private void applyReduceMotion(boolean on) {
+        if (overlay != null) {
+            overlay.setReduceMotion(on);
+        }
+        if (runner != null) {
+            runner.setReduceMotion(on);
+        }
+    }
+
+    /**
+     * Swaps the mood gallery for the customizer, without leaving the Moods destination.
+     *
+     * <p>The rail stays on MOODS: the customizer is a page of that destination rather than a
+     * destination of its own, and adding an eighth rail button for something reached once a session
+     * would cost every other button width it needs more.
+     */
+    private void showCustomizer() {
+        if (racing) {
+            toggleRace();
+        }
+        root.setCenter(moodCustomizer);
+        moodCustomizer.refresh();
+    }
+
     private void suspendMainViews() {
         meters.stop();
         beatmapTimeline.stop();
         playbackBar.stopClock();
         visualizer.stop();
+        if (overlay != null) {
+            overlay.stop();
+        }
         runnerWasRunning = runner.isRunning();
         if (runnerWasRunning) {
             runner.stop();
@@ -1179,6 +1334,9 @@ public class App extends Application {
     private void resumeMainViews() {
         meters.start();
         beatmapTimeline.start();
+        if (overlay != null) {
+            overlay.start();
+        }
         playbackBar.startClock();
         playbackBar.refresh();
         // Not an unconditional start: the column may have been folded away before the window was
@@ -1294,24 +1452,60 @@ public class App extends Application {
         }
 
         boolean spotifyOk = reportSpotify();
+        boolean moodsOk = reportMoods(scene);
 
-        boolean ok = stage.isShowing()
-                && stage.getStyle() == StageStyle.TRANSPARENT
-                && AppConfig.APP_NAME.equals(stage.getTitle())
-                && !scene.getStylesheets().isEmpty()
-                && pixelFont
-                && bootOk
-                && libraryViewPresent
-                && tablePresent
-                && visualizer.view() != null
-                && visualizer.view().modeId() == player.mode().id()
-                && arrowWorks
-                && tabWorks
-                && headerOk
-                && foldOk
-                && companionOk
-                && spotifyOk;
-        System.out.println("[smoke] RESULT            : " + (ok ? "PASS" : "FAIL"));
+        // Named rather than summed. A single FAIL over sixty lines of output is a red light
+        // nobody can act on - the whole point of this run is that it says what is wrong, and a
+        // verdict that makes the reader scroll back and re-derive it is half a check.
+        List<String> failures = new ArrayList<>();
+        if (!stage.isShowing()) {
+            failures.add("window not shown");
+        }
+        if (stage.getStyle() != StageStyle.TRANSPARENT) {
+            failures.add("window is decorated");
+        }
+        if (!AppConfig.APP_NAME.equals(stage.getTitle())) {
+            failures.add("window title");
+        }
+        if (scene.getStylesheets().isEmpty()) {
+            failures.add("no stylesheet");
+        }
+        if (!pixelFont) {
+            failures.add("8-bit font");
+        }
+        if (!bootOk) {
+            failures.add("boot screen");
+        }
+        if (!libraryViewPresent || !tablePresent) {
+            failures.add("library view");
+        }
+        if (visualizer.view() == null || visualizer.view().modeId() != player.mode().id()) {
+            failures.add("visualizer");
+        }
+        if (!arrowWorks) {
+            failures.add("arrow key");
+        }
+        if (!tabWorks) {
+            failures.add("tab key");
+        }
+        if (!headerOk) {
+            failures.add("header fit");
+        }
+        if (!foldOk) {
+            failures.add("dsa fold");
+        }
+        if (!companionOk) {
+            failures.add("companion window");
+        }
+        if (!spotifyOk) {
+            failures.add("spotify config");
+        }
+        if (!moodsOk) {
+            failures.add("moods");
+        }
+        boolean ok = failures.isEmpty();
+        System.out.println("[smoke] RESULT            : "
+                + (ok ? "PASS" : "FAIL - " + String.join(", ", failures)));
 
         PauseTransition close = new PauseTransition(Duration.seconds(2));
         close.setOnFinished(e -> {
@@ -1539,6 +1733,219 @@ public class App extends Application {
                 stopped ? "  (view stopped)" : "  VIEW STILL DRAWING WHILE HIDDEN",
                 cameBack && drawingAgain ? "" : "  DID NOT COME BACK");
         return widthGiven && stopped && cameBack && drawingAgain;
+    }
+
+    /**
+     * Installs every mood in turn and reports what each one actually costs to draw.
+     *
+     * <p><strong>Three claims here are invisible to everything else.</strong>
+     *
+     * <ul>
+     *   <li><em>A mood whose layers are all static runs no frame loop at all.</em> That is the whole
+     *       performance argument of the overlay system, and it is a property of the renderer at
+     *       runtime rather than of any definition - a layer that scrolls by accident, or a blend
+     *       mode that stops a run being flattenable, silently turns a free mood into one that blits
+     *       the whole canvas sixty times a second. No screenshot shows it and no unit test reaches
+     *       it, because a stopped {@code AnimationTimer} and a running one look identical.</li>
+     *   <li><em>Every built-in rasterises without throwing.</em> A layer definition that reads
+     *       perfectly and produces a zero-sized image, or names a tile that is not in the mood, only
+     *       fails when something asks it to draw.</li>
+     *   <li><em>"Reduce motion" actually stops the loop.</em> A switch that set a flag nobody read
+     *       would look exactly like this one, and the accessibility case is the one where a
+     *       half-working switch is worse than none.</li>
+     * </ul>
+     *
+     * <p>The per-frame figure carries the same caveat as the runner's, and for the same reason: a
+     * {@code Canvas} call records a command rather than painting a pixel, so this measures the cost
+     * of writing the frame down. It is the right number for comparing moods against each other,
+     * which is what it is for. The honest end-to-end figure is the frame interval under
+     * {@code -Dsdmk.diag}.
+     *
+     * @param scene the scene, so the pane can be laid out before it is measured
+     * @return whether every mood installed, rasterised and behaved as its layers describe
+     */
+    private boolean reportMoods(Scene scene) {
+        layoutNow(scene);
+        Mood before = state.getMood();
+        List<Mood> all = moods.all();
+        System.out.println("[smoke] moods             : " + Moods.builtIns().size()
+                + " built in, " + moods.userMoods().size() + " of the user's own");
+        System.out.println("[smoke] moods folder      : " + moods.storageLocation());
+
+        boolean ok = true;
+        String heaviest = "-";
+        double worstFrame = -1;
+        long worstRebuild = 0;
+
+        for (Mood mood : all) {
+            long start = System.nanoTime();
+            state.setMood(mood);
+            layoutNow(scene);
+            long rebuildMillis = (System.nanoTime() - start) / 1_000_000;
+            worstRebuild = Math.max(worstRebuild, rebuildMillis);
+
+            int live = overlay.liveLayerCount();
+            boolean looping = overlay.isRunning();
+            // The claim, stated as an equality rather than as a hope: a loop runs exactly when
+            // something needs redrawing, and never otherwise.
+            boolean loopMatchesLayers = looping == (live > 0 || mood.reactive());
+            ok &= loopMatchesLayers;
+
+            if (live > worstFrame) {
+                worstFrame = live;
+                heaviest = mood.id();
+            }
+
+            boolean valid = com.eia.superdwarfkart.mood.MoodValidator.isValid(mood.palette());
+            ok &= valid;
+
+            System.out.printf("[smoke]   %-15s : %d layers, %s%s%s%s%n",
+                    mood.id(),
+                    mood.layers().size(),
+                    live == 0 ? "all flattened, no frame loop" : live + " redrawn per frame",
+                    mood.reactive() ? ", reactive" : "",
+                    valid ? "" : "  PALETTE FAILS THE VALIDATOR",
+                    loopMatchesLayers ? "" : "  FRAME LOOP DISAGREES WITH THE LAYERS");
+        }
+
+        long still = all.stream().filter(mood -> !mood.needsAnimation()).count();
+        System.out.println("[smoke] moods that cost 0 : " + still + " of " + all.size()
+                + " are flattened to a still picture and never redrawn");
+        System.out.println("[smoke] mood rebuild      : worst " + worstRebuild
+                + " ms, paid on a mood change or a resize and never per frame");
+
+        // The number that has no blind spot in it, and the reason it is measured this way. A Canvas
+        // call records a command rather than painting a pixel, and on this machine the two are
+        // three orders of magnitude apart: Prism falls back to its software pipeline here, so a
+        // full-canvas fill is about ten milliseconds and fill rate is the whole budget.
+        // Scene.snapshot rasterises the window synchronously through that same pipeline, so the
+        // difference between two of them is what a mood genuinely costs a frame.
+        //
+        // Measured this way, the mood system's own notes ask for 58 fps with the heaviest mood and
+        // the game running - and that figure is unreachable here for a reason that predates this
+        // milestone by two: a frame with no layers at all already takes thirty milliseconds.
+        double plain = timeRasterisedFrames(scene, Moods.DARK);
+        final String heaviestId = heaviest;
+        Mood worst = all.stream().filter(mood -> mood.id().equals(heaviestId)).findFirst()
+                .orElse(Moods.BOWSER_CASTLE);
+        double withLayers = timeRasterisedFrames(scene, worst);
+        System.out.printf("[smoke] mood frame cost   : %.1f ms with no layers, %.1f ms on %s"
+                        + "  - drifting layers add %.1f ms, still ones add nothing%n",
+                plain, withLayers, worst.id(), withLayers - plain);
+
+        state.setMood(before);
+
+        // Reduce motion, on the heaviest mood there is, so there is something to stop.
+        Mood moving = all.stream().filter(mood -> mood.needsAnimation()).findFirst().orElse(null);
+        if (moving == null) {
+            System.out.println("[smoke] reduce motion     : no mood moves, so there is nothing to stop");
+        } else {
+            state.setMood(moving);
+            layoutNow(scene);
+            boolean loopedBefore = overlay.isRunning();
+            state.setReduceMotion(true);
+            boolean stopped = !overlay.isRunning() && runner.isReduceMotion();
+            state.setReduceMotion(false);
+            boolean restarted = overlay.isRunning();
+            ok &= loopedBefore && stopped && restarted;
+            System.out.println("[smoke] reduce motion     : " + moving.id() + " "
+                    + (loopedBefore ? "loops" : "DOES NOT LOOP") + " -> "
+                    + (stopped ? "stopped, and the runner's beat effects with it"
+                            : "STILL LOOPING") + " -> "
+                    + (restarted ? "loops again" : "DID NOT RESTART"));
+        }
+
+        ok &= reportMoodPersistence();
+
+        layoutNow(scene);
+        return ok;
+    }
+
+    /**
+     * Builds a mood the way the customizer does, writes it, reopens the folder and reads it back.
+     *
+     * <p>The unit tests cover this shape thoroughly over a temporary directory. What they cannot
+     * cover is <strong>this</strong> directory: whether the folder the running application actually
+     * points at exists, is writable, and gives the mood back. A mood that applied perfectly and was
+     * gone at the next launch would look like a mood that was never saved, and nothing in the
+     * session it was built in would say so.
+     *
+     * <p>Cleans up after itself, because a smoke test must not leave a mood in somebody's switcher.
+     *
+     * @return whether the round trip worked
+     */
+    private boolean reportMoodPersistence() {
+        String id = moods.uniqueId("smoke-check");
+        PaletteRole role = PaletteRole.ACCENT;
+        Color wanted = GbaColor.web("#39ce9c");
+
+        Mood built = Moods.PEACH_CIRCUIT.copyAs(id, "Smoke Check")
+                .withPalette(Moods.PEACH_CIRCUIT.palette().withColor(role, wanted))
+                .withTile("smoke", PixelTile.blank(8))
+                .withLayerAdded(ProceduralLayer.of(ProceduralLayer.Pattern.LCD_GRID, 0.2));
+
+        String outcome;
+        boolean ok = false;
+        try {
+            moods.save(built);
+            // Reopened rather than asked of the instance that just wrote it: the question is what
+            // is on disk, and an in-memory cache would answer for the copy in front of it.
+            Mood back = new MoodRepository(moods.storageLocation()).byId(id).orElse(null);
+            if (back == null) {
+                outcome = "SAVED BUT DID NOT COME BACK";
+            } else {
+                boolean colourKept = GbaColor.toHex(back.color(role))
+                        .equals(GbaColor.toHex(wanted));
+                boolean layerKept = back.layers().size() == built.layers().size();
+                boolean tileKept = back.tile("smoke") != null;
+                ok = colourKept && layerKept && tileKept;
+                outcome = ok
+                        ? "palette, " + back.layers().size() + " layer and its tile all came back"
+                        : "LOST" + (colourKept ? "" : " the edited colour")
+                                + (layerKept ? "" : " a layer") + (tileKept ? "" : " the tile");
+            }
+            moods.delete(id);
+        } catch (java.io.IOException | RuntimeException e) {
+            outcome = "FAILED - " + e.getMessage();
+        }
+
+        System.out.println("[smoke] mood round trip   : " + outcome);
+        return ok;
+    }
+
+    /**
+     * How long a frame takes to actually rasterise with a mood installed.
+     *
+     * <p>{@code Scene.snapshot} runs the whole window through Prism synchronously, which is the same
+     * pipeline the pulse uses - so this is the cost of the pixels rather than the cost of writing
+     * down what to draw. That distinction is worth more here than anywhere else in the application:
+     * this machine has <em>no working GPU</em> (see the project's own notes on
+     * {@code -Dprism.verbose}), so a full-canvas alpha fill costs about ten milliseconds and a
+     * measurement that only counted commands would report a layer stack as free while the window
+     * crawled.
+     *
+     * <p>It is not the frame <em>interval</em> - there is no vsync here, no layout pass and no
+     * competing timer - so it understates a real frame. What it measures honestly is the
+     * <em>difference</em> between two moods, which is the quantity the mood system is answerable
+     * for.
+     *
+     * @param scene the scene to rasterise
+     * @param mood  the mood to install first
+     * @return the mean milliseconds per rasterised frame
+     */
+    private double timeRasterisedFrames(Scene scene, Mood mood) {
+        state.setMood(mood);
+        layoutNow(scene);
+        // One outside the timing, so the first snapshot's allocation is not charged to the mood.
+        scene.snapshot(null);
+
+        int frames = 8;
+        long began = System.nanoTime();
+        for (int i = 0; i < frames; i++) {
+            overlay.repaint();
+            scene.snapshot(null);
+        }
+        return (System.nanoTime() - began) / 1_000_000d / frames;
     }
 
     /**
@@ -2487,6 +2894,39 @@ public class App extends Application {
         layoutAndCapture(scene, destination, "moods-light");
         sideRail.select(Destination.LIBRARY);
         layoutAndCapture(scene, destination, "library-light");
+
+        // Two presets whose overlay layers are the whole point of them, photographed over the
+        // library rather than over the mood screen: a layer is a property of the window, and a
+        // picture of it beside its own switcher would look like a swatch rather than like a look.
+        // Sunset Wilds is the banded, dithered gradient - a smooth version of that ramp is the
+        // fastest way to make this application look like it was built this decade - and Bowser
+        // Castle is scanlines drawn ABOVE the interface, which is the band the 0.35 cap exists for.
+        state.setMood(Moods.SUNSET_WILDS);
+        layoutAndCapture(scene, destination, "mood-sunset");
+        state.setMood(Moods.BOWSER_CASTLE);
+        layoutAndCapture(scene, destination, "mood-bowser");
+        // And the one whose artwork is a hand-drawn tile stored as palette indices, drifting.
+        state.setMood(Moods.SKY_GARDEN);
+        layoutAndCapture(scene, destination, "mood-sky");
+
+        // The customizer's two panels. Each exists only once its button has been pressed, so the
+        // gallery shot above says nothing whatsoever about either.
+        state.setMood(Moods.DARK);
+        sideRail.select(Destination.MOODS);
+        showCustomizer();
+        moodCustomizer.showPalette();
+        layoutAndCapture(scene, destination, "mood-customizer");
+        // The layer list, on a preset that has layers to list - the panel is otherwise a caption
+        // saying there are none, which is a picture of the empty case rather than of the feature.
+        state.setMood(Moods.SKY_GARDEN);
+        moodCustomizer.showLayers();
+        layoutAndCapture(scene, destination, "mood-layers");
+        state.setMood(Moods.DARK);
+        // Seeded with the Sky Garden clouds, because a picture of an empty grid is a picture of a
+        // grid. This is also the check that a built-in's tile is a perfectly ordinary tile.
+        moodCustomizer.showEditor(Moods.SKY_GARDEN.tile("clouds"));
+        layoutAndCapture(scene, destination, "pixel-editor");
+
         state.setMood(Moods.DARK);
         sideRail.select(Destination.LIBRARY);
 

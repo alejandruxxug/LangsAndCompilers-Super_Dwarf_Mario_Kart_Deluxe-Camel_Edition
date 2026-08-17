@@ -17,8 +17,8 @@ package com.eia.superdwarfkart.mood;
  * {@link #NEGATIVE} and {@link #HIGHLIGHT} carry meaning rather than decoration: a palette that
  * makes coins and obstacles look alike, or that flattens the traversal highlight into the
  * ordinary outline, throws nothing and looks fine in a screenshot. It fails live, in front of
- * the room. The validator that enforces their separation arrives with the mood system; the
- * roles are marked here so nothing built in the meantime uses them for decoration.
+ * the room. {@link MoodValidator} enforces their separation on every load and every edit, and
+ * renders a corrected substitute rather than the user's value when one of them fails.
  */
 public enum PaletteRole {
 

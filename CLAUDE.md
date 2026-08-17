@@ -77,6 +77,12 @@ live in `AppConfig` and are referenced everywhere instead of hardcoded strings:
    literals restyles the canvases and none of the controls, which does not read as a partly built
    feature — it reads as a broken one.
 
+   **Paid off in M11, and the prediction held exactly.** The mood system was new code rather than a
+   refactor: the sixteen roles, the palette, the accessor and the stylesheet pipeline were all
+   already there, so M11 built the layers, the customizer, the pixel editor, the validator, the
+   importer and the persistence and touched not one drawing call. The one CSS change it needed was
+   `.root-pane` giving up its background so a layer behind the content could be seen at all.
+
    **Still true after M7:** the runner is a full-screen canvas of road, sky, kerbs, sprites and a
    head-up display and it added **zero** hex literals — every one of them resolves through a role,
    and where two roles were too close together to tell apart the fix was a `Palette.mix` between
@@ -126,6 +132,9 @@ block (a bare `-D` on the Maven command line does **not** reach the app):
 | `-Dsdmk.diag=true` | Measure the runner's frame loop: achieved fps and frame-interval percentiles, the tick split, and the playback clock's own granularity. Prints a line every two seconds and draws a readout over the road. **`F3` toggles it live** (off → printed + overlay → printed only), which is the more useful of the two — a stutter somebody is watching can be measured while it happens. |
 | `-Djavafx.pulseLogger=true` | The toolkit's own per-phase frame log. Reach for this only when `sdmk.diag` says the frame interval is long but the tick is cheap, i.e. the time is going to the render thread or to layout rather than to anything this project wrote. |
 | `-Dsdmk.screenshot=out.png` | During a smoke test, snapshot the window to a PNG. This is the only way to check layout without a person watching. It also writes one shot per view beside it — `out-shuffle`, `-arrival`, `-alphabetical` (the three structure views), `-presentation`, `-history`, `-racers`, `-spotify`, `-settings`, `-moods`, `-moods-light`, `-library-light` (the light palette on the controls, where a bevel drawn the wrong way round shows), `-dsa-folded` (the table with the structure column folded away), `-race`, `-mini` / `-mini-compact`,
+**`-mood-sunset`, `-mood-bowser`, `-mood-sky`** (three presets whose overlay layers are the point of
+them, photographed over the library rather than beside their own switcher), **`-mood-customizer`**,
+**`-mood-layers`**, **`-pixel-editor`**,
 and **`-boot`, `-boot-partway`, `-boot-glitch`, `-boot-loading`** — the boot screen, which exists
 only until the cartridge goes in and is therefore photographed *first*, before any other check runs.
 The glitch and the loading bar are asked for at a stated instant through `BootScreen.previewAt`,
@@ -683,12 +692,16 @@ com.eia.superdwarfkart
 ├── persistence/  Repository<T> (interface), LibraryRepository, ScoreRepository
 ├── assets/       AssetRegistry, SpriteSheet, SpriteAnimation, RacerFrame
 ├── mood/         Palette, PaletteRole (enum), GbaColor            ← built in M4
-│                 Mood, MoodLayer, GradientLayer, ImageLayer,
-│                 ProceduralLayer, PixelTile, MoodRepository,
-│                 PaletteImporter, ImageQuantizer, MoodValidator   ← M11
+│                 PaletteCss                                       ← M9
+│                 Mood, Moods, MoodLayer (sealed), LayerStyle, ZBand,
+│                 LayerBlend, GradientLayer, GradientStop, ImageLayer,
+│                 ProceduralLayer, PixelTile, Bayer, MoodRepository,
+│                 PaletteImporter, PaletteBuilder, ImageQuantizer,
+│                 MoodValidator, MoodIssue, ColorMath, MoodReactivity ← M11
 └── ui/           MiniPlayerView, FullscreenView, LibraryView, BeatmapTimeline, RunnerView,
                   RacerSelectView, LevelMeterView, ComplexityPanel,
-                  MoodCustomizerView, PixelEditorView, MoodOverlayRenderer
+                  MoodSelectView, MoodCustomizerView, PixelEditorView,
+                  MoodOverlayRenderer, GbaColorPicker
     └── visualizer/  StructureView (base) -> RoadView (base) -> CircuitView,
                      StraightView;  BstView extends StructureView directly,
                      StructureVisualizer (swaps them),
@@ -1039,8 +1052,9 @@ All entities are placed **on beats**, never on a timer.
     *is* the star's own colour, so the star cannot move at all while the road is pulled towards it.
     That is the one that would go first if this were raised again.
   - The rate is the track's own beat and nothing else, so it is inside §8b's 3 Hz cap without needing
-    an oscillator of its own to clamp — and it must be wired to "Reduce motion" along with the rest
-    of the beat effects when M11 builds that switch.
+    an oscillator of its own to clamp. **M11 wired it to "Reduce motion" along with the rest**, and
+    it came for free: the surge is a function of the beat pulse, and that is one of the two things
+    the switch gates.
 - **The combo meter is ten 32×18 blocks standing up the right-hand edge**, centred on the height of
   the canvas, captioned `COMBO`, filling **upwards**, with the multiplier under it at 16px. Blocks
   rather than a continuous bar — the same convention the library's rating meter uses, and the
@@ -1750,6 +1764,9 @@ or by key; the registry decides which file that is. `RatingDisplay` used to hard
 
 ## 8b. The mood system — M11, the app reskins itself
 
+**Built. See "As built (2026-08-16, M11)" at the end of this section for what the design below
+turned into, what it cost, and the three places it was departed from on purpose.**
+
 A **mood** is a saved look: a **16-color GBA palette** plus an ordered stack of **overlay
 layers**. Selecting one restyles the whole app instantly and swaps the fullscreen background
 art. The user can build, save, import and share their own.
@@ -1924,6 +1941,14 @@ built.** `beatZoom`, the dip-and-lift wash and the pickup/bump flashes are all f
 120 BPM track the beat ones fire at 2 Hz — inside the 3 Hz cap, but only because the cap was
 respected by luck rather than by a check. "Reduce motion" must reach `RunnerView`, not only `mood/`.
 
+**Done, and through one flag rather than five.** `RunnerView.setReduceMotion` gates `beatPulse` and
+`eventWash`, which are the two places every full-screen effect is derived from — so the zoom, the
+wash, the combo surge, the horizon flash and both event flashes stop together and none of them can
+be missed by a later change. The road, the entities and the timing are untouched: the game plays
+identically. `AppState.reduceMotionProperty` is where the switch lives, because it is a property of
+the person watching rather than of a window, and `SettingsRepository` persists it — somebody who
+needs it needs it at every launch.
+
 ### Palette import — the highest-value 40 lines in this milestone
 
 `PaletteImporter` reads two text formats:
@@ -1991,6 +2016,172 @@ pane, the whole app is the preview.
   one.
 - Measure: **FPS must not drop below 58** with the heaviest built-in mood active and the game
   running. Report the number when M11 is done.
+
+---
+
+### As built (2026-08-16, M11)
+
+**Ten moods ship, and nine of them cost nothing per frame.** That sentence is the milestone: a mood
+whose layers all stand still is rasterised once when it is installed and the canvases are never
+touched again, so choosing Bowser Castle over Dark changes the whole look of the application and
+changes its frame cost by zero. 1017 tests, up from 698.
+
+**The layers reach the window through one pane, and everything that changes what is on screen sets
+its content.** `ui/MoodOverlayRenderer` is a `StackPane` holding a backdrop canvas, the interface,
+and an overlay canvas; `shell.setCenter` holds it once and `overlay.setContent(...)` is what the
+boot screen, the main layout and presentation mode each swap through. Swapping the shell's centre
+instead would take the layers away along with the view - the same shape of fault as `F5` taking the
+title bar with it.
+
+- **`.root-pane` gave up its backdrop, and it had to.** It painted the three-stop ramp the window
+  has always had; a layer drawn `BEHIND_CONTENT` is behind that pane, and a layer behind an opaque
+  pane is a layer nobody can see. The pane is `transparent` now and the renderer paints the
+  identical ramp on the canvas underneath, so **a mood with no layers comes out exactly as it did
+  before**. A transparent background is still a background, so nothing about picking changed.
+- **Both canvases are `setMouseTransparent(true)`,** which is not optional and is written down in
+  §11 for the third time: a `Canvas` is picked over its whole rectangle whatever it has drawn, and
+  these two span the window. Left pickable, the overlay would swallow every click in the application
+  while still hovering correctly.
+
+**The measurement, and the 58 fps target it fails.** The figure the spec asks for is unreachable on
+this machine, and not because of this milestone: **a frame with no layers at all already takes
+thirty milliseconds**, because Prism falls back to its software pipeline here (§7). What M11 owes is
+not to make that worse, and the smoke test measures exactly that:
+
+```
+[smoke] moods that cost 0 : 9 of 10 are flattened to a still picture and never redrawn
+[smoke] mood rebuild      : worst 96 ms, paid on a mood change or a resize and never per frame
+[smoke] mood frame cost   : 30.4 ms with no layers, 37.5 ms on sky_garden
+                            - drifting layers add 7.1 ms, still ones add nothing
+```
+
+- **It is measured by `Scene.snapshot`, not by timing canvas calls, and the difference was a factor
+  of two hundred.** Timing `repaint()` reported the heaviest mood at **0.05 ms a frame**; rasterising
+  the same frames reported **7.1 ms**. That is §7's own warning arriving with numbers on both sides
+  of it: a `Canvas` call records a command, and on a machine with no GPU the command is three orders
+  of magnitude cheaper than the pixels. `Scene.snapshot` runs the window through the same pipeline
+  the pulse does, so the *difference* between two moods is honest even though the absolute figure
+  understates a real frame (no vsync, no layout pass, no competing timer).
+- **Pre-tiling a drifting layer took it from 10.7 ms to 7.1 ms.** A tiled layer was being repeated
+  across the canvas per frame - several hundred small `drawImage` calls. It is now repeated once at
+  rebuild into a picture one whole tile larger than the canvas, so any scroll offset is a *source
+  rectangle* and a frame is one blit. The pixel count is identical; what went away is the per-call
+  setup. Only worth doing when the picture is at most a sixteenth of the canvas by area
+  (`PRE_TILE_AREA_RATIO`): a gradient is rasterised at canvas size already, and pre-tiling one would
+  spend four canvases of memory to save three draws.
+- **The remaining 7.1 ms is the full-canvas alpha composite itself and cannot be optimised away
+  here.** So `RIBBON_ROAD`'s starfield was made **static**: a starfield is a backdrop rather than a
+  parallax and loses nothing by standing still, where standing still takes it from 8 ms to 0.
+  `SKY_GARDEN` is the one preset that moves, deliberately - a mood system whose scrolling nobody
+  ever saw would be a feature nobody knew was there - and it is the one that carries the cost.
+
+**`mood/PaletteBuilder` is why ten moods could ship instead of three.** A preset names the room it
+is set in and its two brand colours - four lines - and everything else is derived and then *forced*
+to clear the same bars `MoodsTest` holds the built-ins to. All ten passed every existing check on
+the first run, which is the whole return on the class: sixteen colours picked by eye takes an hour
+and comes out *plausible*, which is worse than muddy. The light mood is left hand-written on
+purpose; it is the palette whose failures taught the builder what to check for.
+
+- The corrections are lightness moves, never hue moves. Hue is what a mood *is* - the entire
+  difference between Sunset Wilds and Boo Lake.
+- It enforces three things a badly chosen palette flattens silently and that nothing else was
+  checking: the bevel's lit edge above its face and its shadowed edge below it, a selected row
+  distinguishable from an unselected one, and a pressed control darker than a hovered one.
+
+**`DARK` is still the default, and `PEACH_CIRCUIT` is not.** §8b names the latter, and this is a
+deliberate departure: the dark purple and amber look is the one the application has had since its
+first window, it is what every screenshot in `docs/` shows, and it is the identity
+`Palette.defaultPalette()` is documented as. Changing which mood a first launch opens in would have
+been a change to what the application *is*, made as a side effect of adding nine more looks.
+`MoodsTest.defaultIsUnchanged` pins it.
+
+**The presets ship at `PRESET_WALLPAPER_OPACITY` = 0.4, and the number came off a screenshot.** A
+`BEHIND_CONTENT` layer shows through wherever the interface leaves ground visible, and the largest
+such area is the library's own filter strip. At full strength Sunset Wilds' orange-to-magenta ramp
+put `ACCENT` text on an orange block and made the search box and every filter caption unreadable,
+while the table below it - which has an opaque ground - was untouched. That reads as a rendering
+fault rather than as a look, and no assertion anywhere would have caught it. A user who wants a wall
+of colour still can: the customizer's slider goes to 1 in that band, and it is *their* mood at that
+point rather than one the application shipped.
+
+**Overlay layers above the content are the ones that read strongly**, which was not obvious in
+advance and is worth knowing before designing the next preset. Three of the eight use them
+(scanlines, LCD grid, vignette) and they are visible everywhere including over the album art, where
+a wallpaper is only visible in the gaps. The 0.35 cap is what makes that safe, and it is applied in
+`LayerStyle`'s constructor rather than in the customizer's slider - so a `.mood.json` a teammate
+exported cannot carry a layer at full strength, which is exactly the file that arrives on the day of
+a defence.
+
+**Reactivity modulates the palette and deliberately not the stylesheet.** The canvases read
+`Palette.active()` on every repaint, so installing a modulated palette reaches the road, the meters,
+the tree and the overlays for free; the controls read a generated stylesheet, and regenerating that
+means a full CSS pass over the whole scene graph three times a second on a machine that also has to
+run a game. It is also the right answer aesthetically - a table whose headings pulse with the music
+is a fault rather than a mood.
+
+- **The clamp is computed once per mood, by measurement.** `MoodReactivity.safeLift` searches
+  downwards from the ceiling for the largest lift the validator still passes, so "clamp so
+  thresholds hold at every point in the modulation" is enforced rather than asserted. Lifting
+  `HIGHLIGHT` moves it through the colour space, and in a palette whose `OUTLINE` happens to be
+  bright that movement is *towards* the role it has to stay away from. A palette with no headroom
+  gets a lift of zero, which is the honest answer.
+- **The 3 Hz cap lives in `MoodReactivity.update`,** which takes the clock every frame and decides
+  for itself whether to accept a reading. A caller that did its own rate limiting would be a second
+  place the cap lived, and a 200 BPM track is 3.3 beats a second - it would breach the cap on its own.
+
+**"Reduce motion" reaches `RunnerView`, which §8b insisted on and is the part that would have been
+forgotten.** One flag, applied at the two places every beat effect is derived from - `beatPulse` and
+`eventWash` - so the zoom, the dip-and-lift wash, the combo surge, the horizon flash and the pickup
+and bump flashes all stop together and none of them can be missed. The road, the entities and the
+timing are untouched: the game plays identically. The smoke test drives the switch on a moving mood
+and checks that the frame loop actually stops and restarts, because a switch that set a flag nobody
+read would look exactly like this one.
+
+**The pixel editor's tiles are indices, and `SKY_GARDEN`'s clouds are the proof.** They are a
+hand-drawn 16x16 tile stored in the built-in mood as sixteen rows of hex digits, referred to by an
+`ImageLayer` by name, and rendered through whatever palette is in force - so recolouring the mood
+recolours the clouds. That is exactly what "Save to layer" produces, which is the point: what ships
+is what the editor makes.
+
+- **An `ImageLayer` resolves a tile before a file**, which is what gives a tile that property and a
+  PNG none of it.
+- **The editing surface is 256px**, which is 16x for a 16x16 tile - the spec's own default zoom, and
+  a whole number at the other two sizes. It was 320 first, and that was measured to be wrong rather
+  than merely large: the tiled 3x3 preview fell below the fold, and a tiled preview nobody can see is
+  the one panel here that cannot afford to be missed.
+- **`ImageQuantizer`'s dither is applied between the two nearest candidates, not as a nudge to the
+  colour**, and the first version got that wrong: nudging lightness before matching does nothing at
+  all on an arbitrary sixteen-colour palette, because the nearest-neighbour decision is dominated by
+  chroma. It was a switch that changed no pixels, which is the worst kind - it looks like a feature.
+  The formulation that replaced it has no tuning constant in it at all.
+
+**Editing a preset duplicates it first, automatically, and says so.** "Never edit a built-in in
+place" is enforced in `MoodRepository.save`, which refuses outright - but making the user press
+Duplicate before they may move a colour is a rule they would resent and work around by editing the
+file by hand. So the customizer duplicates on the first edit and puts a line in the status bar. The
+original is code, so it cannot be corrupted at all.
+
+**The presets are Java rather than resources, which §8b did not ask for.** Copying built-ins out on
+first run buys symmetry and costs two things worth more: a user could corrupt a preset, and the
+presets would be parsed at runtime and hoped for rather than checked by `MoodsTest` at build time.
+
+**A mood folder name comes off a text field, so `MoodRepository.slug` is the only thing between a
+user and `Path.resolve`.** Anything that is not a letter, a digit or a dash becomes a dash, which
+rules out separators, traversal and every reserved character at once; `ImageLayer` separately refuses
+a file name containing `..` or a separator, because a mood folder is unzipped from something a
+teammate sent. Both are tested with the payloads rather than with well-formed names.
+
+**Dropping a `.gpl` or `.hex` anywhere on the window makes a mood from it**, deliberately not
+restricted to the mood screen: somebody who has just downloaded a palette is looking at their
+downloads folder, not at this application's side rail. It goes through the customizer's own import
+path rather than through the repository, so there is one sequence rather than two that can drift.
+
+**`LayeringTest` now enforces the mood package's own half of ground rule 3.** `mood/` may import
+`javafx.scene.paint` and `javafx.scene.image` and nothing else - no `Node`, control, layout, canvas,
+animation or stage. The image allowance is a deliberate widening of §8b's "only Color / Paint": a
+`WritableImage` is a buffer rather than a node, and both uses of one - rendering a tile's indices
+through a palette, and quantising an import onto sixteen colours - are pixel arithmetic that would
+otherwise drag the tile format into `ui/`. What stays out is what the rule is actually about.
 
 ---
 
@@ -2140,7 +2331,7 @@ that reads `Crystal Castles`. Compare `docs/screenshots/sdmk-alphabetical.png` w
 | M7 | ⭐ 3-lane runner: lookahead spawning, coins, bumps, star, cc classes, scoring, beat pulse | ✅ done |
 | M8 | ⭐ Mini companion mode: transparent stage, disk + racer, expand/hide/quit | ✅ done |
 | M9 | Sweep: side rail, favorites, history, statistics, keyboard reference, **`DARK` + `LIGHT` moods and a switcher** — the dark-mode bonus ships as moods, not a boolean | ✅ done |
-| M11 | ⭐ **Mood system** — 16-color GBA palettes, gradient/image/procedural overlay layers, live customizer, 16×16 / 32×32 pixel editor, `.gpl` + `.hex` import, `MoodValidator`, presets | ⬜ |
+| M11 | ⭐ **Mood system** — 16-color GBA palettes, gradient/image/procedural overlay layers, live customizer, 16×16 / 32×32 pixel editor, `.gpl` + `.hex` import, `MoodValidator`, presets | ✅ done — **ten moods**, nine of which cost nothing per frame |
 | M10 | *Optional:* `go-librespot` child process, Spotify search, streamed songs in the library | ✅ built; search runs on the user's own Spotify application and needs only a released daemon. Streamed tracks generate courses, built from the playback tap on first play — verified against the file analyser on real music, byte for byte. **Playback and pause/resume confirmed working on a live Premium account (2026-08-15)**, once the pipe deadlock was fixed |
 
 **M10 was built before M11 at the user's request**, against this file's own advice. The advice
@@ -2155,6 +2346,10 @@ depends on a third-party binary, an OAuth flow and a network. If only one of the
 build M11. Its prerequisite is *already paid for* if ground rule 7 was respected: with every
 color resolved by role, M11 is new code rather than a refactor — so clear the hex-literal debt
 recorded in ground rule 7 before starting it.
+
+**Both are built now, and that prediction was exact.** M11 added twenty classes and changed one
+line of CSS; it did not touch a single `gc.setFill`, because every one of them already named a
+role. The debt cleared in M9 is what made that true.
 
 **Stop after each milestone and report exactly how to test it before continuing.**
 
@@ -2893,6 +3088,27 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
   same color, or the BST highlight the same as the outline, throws nothing and looks fine in a
   screenshot — it fails live, in front of the room. `MoodValidator` runs on load *and* on every
   edit, and renders a substitute rather than the invalid value.
+- **A `Canvas` measured by timing its own draw calls is measured by a factor of two hundred.** The
+  mood overlays reported 0.05 ms a frame recorded and 7.1 ms rasterised. Measure a frame with
+  `Scene.snapshot`, which runs the window through the same pipeline the pulse does — timing
+  `redraw()` or `repaint()` answers a different question, and on this machine the two answers are
+  three orders of magnitude apart. This is the third time the project has been caught by it.
+- **A tiled layer repeated per frame is several hundred `drawImage` calls.** Repeat it *once* into a
+  picture one whole tile larger than the canvas and a scroll offset becomes a source rectangle — the
+  same pixels in one call. Worth it only when the tile is a small fraction of the canvas; a
+  canvas-sized picture pre-tiled costs four canvases of memory to save three draws.
+- **A layer drawn behind an opaque pane is a layer nobody can see.** `.root-pane` had to give up its
+  background for the `BEHIND_CONTENT` band to exist at all, and the renderer paints the identical
+  ramp instead. Anything new that fills the window's centre has to leave the ground visible or the
+  wallpaper silently stops working.
+- **`ImageLayer` file names and mood folder names are untrusted input**, because a mood folder is
+  unzipped from something somebody sent. `MoodRepository.slug` is the only thing between a text field
+  and `Path.resolve`, and `ImageLayer` refuses a name containing `..` or a separator.
+- **A dither applied as a nudge to the colour does nothing on an arbitrary palette.** Nearest-colour
+  matching over sixteen scattered entries is dominated by chroma, so shifting lightness before
+  matching leaves every pixel where it was — a switch that changes no pixels, which looks like a
+  feature. Dither *between the two nearest candidates* instead: take the second when the pixel's
+  distance ratio exceeds its Bayer threshold.
 - **Moods never recolor the sprite art**, and `ABOVE_CONTENT` layers cap at 0.35 opacity. A
   background is a background; it must never compete with the game or the tree.
 - Static overlay layers are flattened to one cached image on mood change — not recomposited per

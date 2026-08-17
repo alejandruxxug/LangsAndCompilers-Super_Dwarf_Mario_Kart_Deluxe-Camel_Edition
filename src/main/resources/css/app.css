@@ -45,9 +45,18 @@
     -diag-magenta-light: #ff7bff;
 }
 
+/*
+ * Transparent, and it used to carry this window's whole backdrop. It had to give it up when the
+ * mood system's overlay layers arrived: a layer drawn BEHIND_CONTENT is behind this pane, and a
+ * layer behind an opaque pane is a layer nobody can see. The identical three-stop ramp is painted
+ * by ui/MoodOverlayRenderer on the canvas underneath, so a mood with no layers at all comes out
+ * exactly as it did before - and one with layers shows them.
+ *
+ * A transparent background is still a background, so this region goes on being picked and nothing
+ * about mouse handling changed.
+ */
 .root-pane {
-    -fx-background-color: linear-gradient(to bottom,
-        -role-background 0%, -role-background-alt 60%, -ui-inset 100%);
+    -fx-background-color: transparent;
 }
 
 /* Every label defaults to the pixel font in the body colour. */
@@ -1302,4 +1311,89 @@
 .settings-value {
     -fx-font-size: 8px;
     -fx-text-fill: -role-text-primary;
+}
+
+/* ------------------------------------------------------------------ */
+/* Mood customizer, palette strip and pixel editor                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The validator bar. Green when the palette is sound, and named-and-shamed when it is not - four
+ * roles carry meaning rather than decoration, and a mood that flattens one of them throws nothing,
+ * photographs perfectly and fails live in front of the room.
+ */
+.validator-bar {
+    -fx-font-size: 8px;
+    -fx-padding: 8 10 8 10;
+    -fx-border-width: 2;
+    -fx-line-spacing: 5px;
+}
+
+.validator-ok {
+    -fx-text-fill: -role-positive;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: -role-positive;
+}
+
+.validator-bad {
+    -fx-text-fill: -role-negative;
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: -role-negative;
+}
+
+.swatch-cell {
+    -fx-padding: 5;
+    -fx-background-color: -ui-inset;
+    -fx-border-color: transparent;
+    -fx-border-width: 2;
+    -fx-cursor: hand;
+}
+
+.swatch-cell:hover {
+    -fx-border-color: -role-accent;
+}
+
+/* The four roles the validator protects, marked so they are visibly not ordinary decoration. */
+.swatch-protected {
+    -fx-background-color: -ui-recessed;
+    -fx-border-color: -role-primary-dim;
+}
+
+.swatch-name {
+    -fx-font-size: 6px;
+    -fx-text-fill: -role-text-dim;
+}
+
+.swatch-hex {
+    -fx-font-size: 6px;
+    -fx-text-fill: -ui-text-faint;
+}
+
+.layer-row {
+    -fx-background-color: -ui-inset;
+    -fx-border-color: -role-outline;
+    -fx-border-width: 2;
+}
+
+.layer-name {
+    -fx-font-size: 9px;
+    -fx-text-fill: -role-primary;
+}
+
+.pixel-editor {
+    -fx-background-color: transparent;
+}
+
+/* The picker's preview. Its fill is set in code: it shows a colour that is not the active mood's. */
+.picker-swatch {
+    -fx-border-color: -role-outline;
+    -fx-border-width: 2;
+}
+
+/*
+ * The pane the overlay layers are drawn on. It paints nothing itself - the backdrop canvas inside
+ * it does - and a background here would sit in front of the very layer it is meant to show.
+ */
+.mood-overlay {
+    -fx-background-color: transparent;
 }

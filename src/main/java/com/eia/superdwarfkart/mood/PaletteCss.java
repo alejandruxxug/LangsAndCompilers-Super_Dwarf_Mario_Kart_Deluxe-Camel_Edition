@@ -64,6 +64,26 @@ public final class PaletteCss {
     }
 
     /**
+     * The recessed ground: headers, status bars, tooltips, sunken fields and scroll bars.
+     *
+     * <p>A short step towards the shadow rather than most of the way there, because "recessed" in a
+     * light mood means a shade below the paper rather than the mid-grey a larger step lands on.
+     *
+     * <p>Named separately from the rest of {@link #tokens} because it is <strong>where an accent
+     * runs out of contrast first</strong> - it is the darkest ground in a light mood and the
+     * lightest in a dark one, so a palette checked only against the background passes and then
+     * renders its headings unreadable on the one band they are actually drawn on. Both
+     * {@code PaletteBuilder} and the mood tests measure against this, and there must be exactly one
+     * of it.
+     *
+     * @param palette the palette to derive from; must not be {@code null}
+     * @return the recessed ground colour
+     */
+    public static Color recessed(Palette palette) {
+        return palette.mix(PaletteRole.BACKGROUND, PaletteRole.SHADOW, 0.18);
+    }
+
+    /**
      * Computes every colour a stylesheet may name: the sixteen roles and the surfaces derived
      * from them.
      *
@@ -76,11 +96,7 @@ public final class PaletteCss {
             tokens.put(variableName(role), palette.color(role));
         }
 
-        // Recessed ground: headers, status bars, tooltips, sunken fields and scroll bars. A short
-        // step towards the shadow rather than most of the way there, because "recessed" in a light
-        // mood means a shade below the paper - not the mid-grey a larger step lands on.
-        tokens.put(DERIVED_PREFIX + "recessed",
-                palette.mix(PaletteRole.BACKGROUND, PaletteRole.SHADOW, 0.18));
+        tokens.put(DERIVED_PREFIX + "recessed", recessed(palette));
         // The unlit cell of a meter, and any well a value is drawn into.
         tokens.put(DERIVED_PREFIX + "inset",
                 palette.mix(PaletteRole.SURFACE, PaletteRole.SURFACE_RAISED, 0.6));

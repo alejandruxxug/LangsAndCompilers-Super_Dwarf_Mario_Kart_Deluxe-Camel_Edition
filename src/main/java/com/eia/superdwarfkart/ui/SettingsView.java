@@ -1,7 +1,9 @@
 package com.eia.superdwarfkart.ui;
 
 import com.eia.superdwarfkart.app.AppConfig;
+import com.eia.superdwarfkart.app.AppState;
 import javafx.geometry.Insets;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Tooltip;
@@ -42,8 +44,16 @@ public class SettingsView extends ScrollPane {
         {"Frame pacing readout (racing)", "F3"},
     };
 
-    /** Builds the settings page. */
-    public SettingsView() {
+    private final AppState state;
+
+    /**
+     * Builds the settings page.
+     *
+     * @param state the shared state the accessibility switch lives on; must not be {@code null}
+     */
+    public SettingsView(AppState state) {
+        this.state = state;
+
         VBox content = new VBox(18);
         content.setPadding(new Insets(18));
         content.getStyleClass().add("settings-content");
@@ -53,6 +63,7 @@ public class SettingsView extends ScrollPane {
 
         content.getChildren().addAll(
                 heading,
+                accessibilitySection(),
                 section("KEYBOARD", shortcutTable()),
                 section("STORAGE", storageTable()),
                 section("ABOUT", aboutTable()));
@@ -60,6 +71,40 @@ public class SettingsView extends ScrollPane {
         setContent(content);
         setFitToWidth(true);
         getStyleClass().add("settings-view");
+    }
+
+    /**
+     * The one setting on this page that changes what the application does rather than reporting it.
+     *
+     * <p>Its own section rather than a row in a table, because it is not a preference in the sense
+     * the rest of this page is. Several things here flash: the mood layers scroll, a reactive mood
+     * modulates with the music, and the runner washes the whole screen on every strong beat and
+     * pulses it three times on a bump. On a 120 BPM track that is 2 Hz - inside the mood system's
+     * own 3 Hz cap, but only because the cap happened to be respected rather than because anything
+     * checked. A fullscreen overlay flashing in a darkened classroom is a genuine problem, not a
+     * style question, and this is the switch that turns all of it off at once.
+     */
+    private VBox accessibilitySection() {
+        CheckBox reduce = new CheckBox("REDUCE MOTION");
+        reduce.setFocusTraversable(false);
+        reduce.setSelected(state.isReduceMotion());
+        reduce.setOnAction(event -> state.setReduceMotion(reduce.isSelected()));
+        state.reduceMotionProperty().addListener(
+                (observable, was, now) -> reduce.setSelected(now));
+        Tooltip.install(reduce, new Tooltip(
+                "Stops mood layers scrolling, stops a reactive mood following the music, and\n"
+                        + "stops the runner's beat zoom, screen washes and pickup and bump flashes."));
+
+        Label explain = new Label("Turns off scrolling overlay layers, beat-reactive moods,\n"
+                + "and the runner's full-screen beat effects.");
+        explain.getStyleClass().add("settings-caption");
+
+        Label heading = new Label("ACCESSIBILITY");
+        heading.getStyleClass().add("panel-heading");
+        VBox box = new VBox(8, heading, reduce, explain);
+        box.getStyleClass().add("settings-section");
+        box.setPadding(new Insets(12));
+        return box;
     }
 
     private VBox section(String title, GridPane body) {
@@ -94,6 +139,8 @@ public class SettingsView extends ScrollPane {
         grid.add(value(AppConfig.beatmapsDir().toString()), 1, 3);
         grid.add(caption("Artwork"), 0, 4);
         grid.add(value(AppConfig.assetsDir().toString()), 1, 4);
+        grid.add(caption("Moods"), 0, 5);
+        grid.add(value(AppConfig.moodsDir().toString()), 1, 5);
         return grid;
     }
 

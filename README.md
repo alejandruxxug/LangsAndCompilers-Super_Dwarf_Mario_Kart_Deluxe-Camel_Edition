@@ -49,7 +49,7 @@ Two further switches help when demonstrating or debugging:
 | Switch | Effect |
 |---|---|
 | `-Dsdmk.home=/tmp/sdmk-demo` | Use a scratch profile instead of `~/.superdwarfkart`, so a demo library can be seeded without touching your real one |
-| `-Dsdmk.screenshot=shot.png` | During a smoke test, save a snapshot of the window |
+| `-Dsdmk.screenshot=shot.png` | During a smoke test, save a snapshot of the window — and one per view beside it, including every mood |
 
 ## Project status
 
@@ -68,7 +68,7 @@ Built milestone by milestone; each is verified before the next begins.
 | M7 | The 3-lane rhythm runner | ✅ |
 | M8 | Mini companion window | ✅ |
 | M9 | Side rail, favourites, history, statistics, `DARK` + `LIGHT` moods, collapsible structure column | ✅ |
-| M11 | **Mood system** — 16-colour GBA palettes, overlay layers, pixel editor, palette import. Dark mode ships here, as two moods rather than a boolean | ⬜ |
+| M11 | **Mood system** — ten 16-colour GBA palettes, overlay layers, live customizer, pixel editor, `.gpl`/`.hex` import, validator. Dark mode ships here, as two moods among ten rather than a boolean | ✅ |
 | M10 | *Optional:* Spotify playback and search through go-librespot | ✅ built; search runs on your own Spotify application and needs only a released daemon |
 
 ---
@@ -232,6 +232,93 @@ Other per-user state lives alongside it in `~/.superdwarfkart/`: `library.json` 
 
 ---
 
+## Moods
+
+A **mood** is a saved look: sixteen colours and an ordered stack of overlay layers. Choosing one
+restyles the whole application at once — both windows, every control, every canvas — because there
+is not a single colour written down anywhere outside `mood/`. Everything names a *role* and asks
+the active palette.
+
+Ten ship. Two are the plain `Dark` and `Light` that the assignment's dark-mode bonus is delivered
+as; the other eight are named after *Mario Kart: Super Circuit* tracks, which is the GBA Mario Kart
+this whole application is dressed as.
+
+| | |
+|---|---|
+| ![Sunset Wilds](docs/screenshots/sdmk-mood-sunset.png) | ![Bowser Castle](docs/screenshots/sdmk-mood-bowser.png) |
+| Sunset Wilds — a banded, dithered gradient | Bowser Castle — scanlines over the interface |
+
+### The sixteen-colour constraint
+
+The Game Boy Advance framebuffer is BGR555: five bits per channel, so 32 levels each. Every colour
+that enters the system round-trips through `mood/GbaColor` before it is stored, and the picker
+offers 0–31 per channel rather than 0–255 — so every step is a step the hardware could draw, and
+what you choose is exactly what gets saved. A mood holds **exactly sixteen** colours, which is what
+a 4bpp tile addresses.
+
+### Four roles are protected
+
+`TEXT_PRIMARY`, `POSITIVE`, `NEGATIVE` and `HIGHLIGHT` carry meaning rather than decoration. A mood
+that brings coins and obstacles together makes the runner unreadable at speed; one that flattens the
+traversal highlight into the ordinary outline kills the BST animation from the back of a room.
+Neither throws, and neither shows up in a screenshot.
+
+`mood/MoodValidator` therefore runs on **every load and every edit**, checks WCAG contrast for text
+and CIE76 ΔE ≥ 25 for the two protected pairs — plus a brightness separation, because hue alone
+fails for a colourblind viewer and for a projector with bad gamma — and *renders a corrected
+substitute* rather than the user's value when one fails. Never render an invalid mood; never
+silently accept one either.
+
+### Importing a palette
+
+`.gpl` (GIMP, which is what Aseprite exports) and plain `.hex` (which is what Lospec's download
+button produces). Drop either **anywhere on the window** and it becomes a mood. This is the reason
+ten moods ship instead of two: choosing sixteen colours by eye takes an afternoon and usually comes
+out muddy, and this takes as long as a drag.
+
+### The pixel editor
+
+![Pixel editor](docs/screenshots/sdmk-pixel-editor.png)
+
+Draw a tile at 8×8, 16×16 or 32×32 inside the application. **A tile stores palette indices, not
+colours**, and everything good about the editor falls out of that rather than out of any code: the
+picker *is* the palette, so nothing drawn can be out of palette or off the hardware grid — and
+changing the palette recolours every tile in the mood instantly. Index 0 is transparent, matching
+the GBA convention, and one pixel is one hex digit so the stored file diffs line by line.
+
+Pencil, eraser, flood fill, line, rectangle, eyedropper, 40 steps of undo, live mirroring on either
+axis, and a 3×3 tiled preview — that last one because a seam is invisible on one tile and glaring
+once it fills a screen. **Save to layer** turns the tile into a tiled background in one click; Sky
+Garden's drifting clouds are exactly that, shipped.
+
+### What a mood costs
+
+Nothing, for nine of the ten. Every layer that does not move is flattened into one cached image
+when the mood is installed, and a mood whose layers are all static runs **no frame loop at all** —
+the canvases are painted once and never touched again.
+
+Measured on this machine, where Prism falls back to software rasterisation (there is no working GPU
+— see the notes in `CLAUDE.md`), by rasterising whole frames rather than by timing canvas calls:
+
+```
+[smoke] moods that cost 0 : 9 of 10 are flattened to a still picture and never redrawn
+[smoke] mood frame cost   : 30.4 ms with no layers, 37.5 ms on sky_garden
+                            - drifting layers add 7.1 ms, still ones add nothing
+```
+
+Sky Garden is the one preset that scrolls, deliberately: a mood system whose motion nobody ever saw
+would be a feature nobody knew was there. **Reduce motion** in Settings turns it — and beat
+reactivity, and the runner's own full-screen beat effects — off in one switch.
+
+### Storage
+
+`~/.superdwarfkart/moods/<slug>/mood.json`, one folder per mood, with any imported artwork beside
+it so a mood can be zipped up and handed over whole. The ten that ship are Java rather than files,
+so a user cannot corrupt one and there is always a known-good mood to fall back to — which is why
+editing a preset duplicates it first.
+
+---
+
 ## Where each requirement is implemented
 
 | Requirement | Where |
@@ -255,6 +342,7 @@ Other per-user state lives alongside it in `~/.superdwarfkart/`: `library.json` 
 | Separation of logic and presentation | `ds/`, `model/`, `playback/`, `audio/`, `analysis/` import no JavaFX |
 | Bonus: favourites, play counts | `model/Song` |
 | Bonus: complexity instrumentation | `ds/StepCounter` → `ui/visualizer/OperationCounter` *(M4)* |
+| Bonus: dark mode | `mood/Moods` — as two named moods among ten, not a boolean *(M9, M11)* |
 
 ---
 

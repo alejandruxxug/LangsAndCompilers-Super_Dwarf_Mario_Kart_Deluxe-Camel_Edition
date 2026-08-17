@@ -8,8 +8,10 @@ import com.eia.superdwarfkart.mood.Mood;
 import com.eia.superdwarfkart.mood.Moods;
 import com.eia.superdwarfkart.playback.PlaybackListener;
 import com.eia.superdwarfkart.playback.PlaybackMode;
+import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.ReadOnlyObjectProperty;
+import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.property.SimpleObjectProperty;
 
 /**
@@ -37,6 +39,8 @@ public class AppState implements PlaybackListener {
             new SimpleObjectProperty<>(this, "speedClass", SpeedClass.defaultClass());
     private final ObjectProperty<Mood> mood =
             new SimpleObjectProperty<>(this, "mood", Moods.defaultMood());
+    private final BooleanProperty reduceMotion =
+            new SimpleBooleanProperty(this, "reduceMotion", false);
 
     /** @return the song currently playing, or {@code null} */
     public ReadOnlyObjectProperty<Song> currentSongProperty() {
@@ -130,6 +134,41 @@ public class AppState implements PlaybackListener {
      */
     public void setMood(Mood selected) {
         mood.set(selected == null ? Moods.defaultMood() : selected);
+    }
+
+    /**
+     * Whether every kind of motion the look produces is suppressed.
+     *
+     * <p><strong>Not a style setting.</strong> A fullscreen overlay flashing in a darkened classroom
+     * is a genuine problem, and this application has several things that flash: the mood layers
+     * scroll, a reactive mood modulates with the music, and the runner washes the whole screen on
+     * every strong beat and pulses it three times on a bump. On a 120 BPM track the beat effects
+     * fire at 2 Hz, which is inside the mood system's 3 Hz cap only because the cap happened to be
+     * respected rather than because anything checked.
+     *
+     * <p>So the switch reaches all of it: {@code MoodOverlayRenderer} for the layers and the
+     * reactivity, and {@code RunnerView} for the beat zoom, the washes and the event flashes. It is
+     * shared here rather than owned by either, because it is a property of the person watching
+     * rather than of a window.
+     *
+     * @return whether motion is suppressed
+     */
+    public BooleanProperty reduceMotionProperty() {
+        return reduceMotion;
+    }
+
+    /** @return whether motion is suppressed */
+    public boolean isReduceMotion() {
+        return reduceMotion.get();
+    }
+
+    /**
+     * Suppresses or restores motion.
+     *
+     * @param on whether to suppress it
+     */
+    public void setReduceMotion(boolean on) {
+        reduceMotion.set(on);
     }
 
     /**

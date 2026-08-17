@@ -65,6 +65,9 @@ public class SettingsRepository {
      */
     private boolean spotifyAutoFetch = true;
 
+    /** Whether every kind of motion the look produces is suppressed. See {@link #reduceMotion()}. */
+    private boolean reduceMotion;
+
     /** Creates a repository over the default location, {@code ~/.superdwarfkart/settings.json}. */
     public SettingsRepository() {
         this(AppConfig.settingsFile());
@@ -89,6 +92,27 @@ public class SettingsRepository {
     /** @return the stored racer name, or {@code null} when the user has never chosen one */
     public String racerId() {
         return racerId;
+    }
+
+    /**
+     * @return whether the user has asked for motion to be suppressed - scrolling mood layers,
+     *         beat-reactive palettes and the runner's own full-screen beat effects
+     */
+    public boolean reduceMotion() {
+        return reduceMotion;
+    }
+
+    /**
+     * Stores whether motion is suppressed and writes it out.
+     *
+     * <p>Persisted, unlike the structure column's fold: somebody who needs this needs it at every
+     * launch, and being made to find the switch again each time would be worse than not having it.
+     *
+     * @param on whether to suppress motion
+     */
+    public void setReduceMotion(boolean on) {
+        this.reduceMotion = on;
+        save();
     }
 
     /** @return the stored speed class name, or {@code null} when the user has never chosen one */
@@ -205,6 +229,7 @@ public class SettingsRepository {
                 // Absent in a file written before Spotify existed, where Jackson leaves the
                 // boxed field null. Only an explicit false turns it off.
                 spotifyAutoFetch = dto.spotifyAutoFetch == null || dto.spotifyAutoFetch;
+                reduceMotion = dto.reduceMotion != null && dto.reduceMotion;
             }
         } catch (IOException e) {
             LOG.log(Level.WARNING,
@@ -226,6 +251,7 @@ public class SettingsRepository {
         dto.speedClass = speedClass;
         dto.spotifyBinaryPath = spotifyBinaryPath;
         dto.spotifyAutoFetch = spotifyAutoFetch;
+        dto.reduceMotion = reduceMotion;
         dto.spotifyClientId = spotifyClientId;
         dto.spotifyClientSecret = spotifyClientSecret;
 
@@ -267,6 +293,8 @@ public class SettingsRepository {
         public String spotifyBinaryPath;
         /** Boxed so an older file, which has no such key, is told apart from an explicit false. */
         public Boolean spotifyAutoFetch;
+        /** Boxed for the same reason: absent in a file written before the mood system existed. */
+        public Boolean reduceMotion;
         public String spotifyClientId;
         public String spotifyClientSecret;
     }

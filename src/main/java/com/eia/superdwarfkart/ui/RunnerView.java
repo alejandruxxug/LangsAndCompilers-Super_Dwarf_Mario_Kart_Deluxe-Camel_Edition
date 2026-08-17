@@ -584,6 +584,22 @@ public class RunnerView extends BorderPane {
     /** How many times the flash pulses on its way out; 0 is a plain fade. */
     private double flashPulses;
 
+    /**
+     * Whether every full-screen beat effect is suppressed.
+     *
+     * <p>The mood system's "Reduce motion" switch reaches here, and it has to: the beat zoom, the
+     * dip-and-lift wash, the combo surge and the pickup and bump flashes are all full-screen, and on
+     * a 120 BPM track they fire at 2 Hz. That is inside the mood system's own 3 Hz cap, but only
+     * because the cap happened to be respected rather than because anything checked it - and a
+     * screen flashing in a darkened classroom is a genuine problem rather than a style question.
+     *
+     * <p>One flag rather than five, applied at the two places every effect is derived from:
+     * {@link #beatPulse} and {@link #eventWash}. The combo surge, the beat wash, the zoom and the
+     * horizon flash are all functions of the pulse, so they stop with it and cannot be forgotten.
+     * The road, the entities and the timing are untouched - the game plays identically.
+     */
+    private boolean reduceMotion;
+
     // ------------------------------------------------------------------
     // The combo heat
     // ------------------------------------------------------------------
@@ -1206,6 +1222,42 @@ public class RunnerView extends BorderPane {
     // Drawing
     // ------------------------------------------------------------------
 
+    /**
+     * Suppresses or restores every full-screen beat effect.
+     *
+     * <p>Wired to the "Reduce motion" switch in Settings, which also stops the mood layers
+     * scrolling and stops a reactive mood following the music. See {@link #reduceMotion}.
+     *
+     * @param on whether to suppress them
+     */
+    public void setReduceMotion(boolean on) {
+        if (reduceMotion == on) {
+            return;
+        }
+        reduceMotion = on;
+        redraw();
+    }
+
+    /** @return whether full-screen beat effects are suppressed */
+    public boolean isReduceMotion() {
+        return reduceMotion;
+    }
+
+    /**
+     * How recently a strong beat landed, on the same clock the road is drawn on.
+     *
+     * <p>Exposed so a reactive mood can follow the beat without going and finding one for itself.
+     * This view already holds the analysed beatmap for the current song and already reads the
+     * playback clock through {@code SmoothClock}; a second answer derived somewhere else would be a
+     * second place that could disagree with the road about where the beat is, which is precisely
+     * what the whole lookahead argument rests on not happening.
+     *
+     * @return 1 at the strike, falling to 0 by the next beat; 0 when there is no beatmap
+     */
+    public double beatPulseNow() {
+        return beatPulse(game.now());
+    }
+
     /** Repaints the whole view. */
     public void redraw() {
         double width = canvas.getWidth();
@@ -1584,6 +1636,9 @@ public class RunnerView extends BorderPane {
      * @return the colour to wash the frame in, or {@code null} when no event is fading
      */
     private Color eventWash(double now) {
+        if (reduceMotion) {
+            return null;
+        }
         double age = now - flashStartedAt;
         if (!(age >= 0) || age > flashSeconds || flashSeconds <= 0) {
             // Also catches the infinity before the first event, and a seek backwards past one.
@@ -1702,7 +1757,7 @@ public class RunnerView extends BorderPane {
      * @return 1 on the instant of a strong beat, falling to 0 over {@value #PULSE_SECONDS} seconds
      */
     private double beatPulse(double now) {
-        if (activeBeatmap.isEmpty()) {
+        if (reduceMotion || activeBeatmap.isEmpty()) {
             return 0;
         }
         double beat = activeBeatmap.lastStrongBeatAtOrBefore(now);

@@ -85,6 +85,55 @@ class LayeringTest {
         }
     }
 
+    /**
+     * The mood system's own half of ground rule 3.
+     *
+     * <p>{@code mood/} is the one non-{@code ui/} package allowed to see the toolkit at all, and the
+     * allowance is narrow on purpose: colours, paints and raw images. It holds the <em>definition</em>
+     * of a look - which has to be loadable, comparable, persistable and testable with no window open,
+     * which is how {@code MoodRepositoryTest} runs at all - and {@code ui/MoodOverlayRenderer} is what
+     * turns a definition into pixels.
+     *
+     * <p>{@code javafx.scene.image} is on the allowed list and the mood system's own notes name only
+     * {@code paint}. That is a deliberate widening, and it is small: a {@code WritableImage} is a
+     * buffer rather than a node, it takes part in no scene graph, and both places that use one -
+     * rendering a tile's indices through a palette, and quantising an import onto sixteen colours -
+     * are pixel arithmetic that would otherwise have to move to {@code ui/} and take the tile format
+     * with it.
+     *
+     * <p>What stays out is what the rule is actually about: a {@code Node}, a control, a layout, a
+     * canvas, an animation or a stage. Any one of those would make a mood something that can only
+     * exist while a toolkit is running.
+     */
+    @Test
+    @DisplayName("mood/ sees colours and images, and no node, control, layout, canvas or timer")
+    void theMoodPackageStaysOutOfTheSceneGraph() throws IOException {
+        List<String> allowed = List.of("javafx.scene.paint.", "javafx.scene.image.");
+        List<String> offences = new ArrayList<>();
+
+        try (Stream<Path> files = Files.walk(SOURCE_ROOT.resolve("mood"))) {
+            for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
+                int lineNumber = 0;
+                for (String line : Files.readAllLines(file)) {
+                    lineNumber++;
+                    String trimmed = line.strip();
+                    if (!trimmed.startsWith("import ") || !trimmed.contains("javafx")) {
+                        continue;
+                    }
+                    String imported = trimmed.substring("import ".length()).replace(";", "");
+                    if (allowed.stream().noneMatch(imported::startsWith)) {
+                        offences.add(file.getFileName() + ":" + lineNumber + "  " + trimmed);
+                    }
+                }
+            }
+        }
+
+        assertTrue(offences.isEmpty(),
+                "mood/ holds the definition of a look, not a view of one. These reach into the "
+                        + "scene graph, which would make a mood impossible to load, compare or "
+                        + "test without a running toolkit:\n  " + String.join("\n  ", offences));
+    }
+
     @Test
     @DisplayName("nothing outside spotify/ and the audio seam knows a subprocess exists")
     void theDaemonStaysBehindItsSeam() throws IOException {
