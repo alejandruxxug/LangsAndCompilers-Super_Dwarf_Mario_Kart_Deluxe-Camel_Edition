@@ -245,6 +245,18 @@ public class App extends Application {
      */
     private static final double SCREENSHOT_COURSE_SECONDS = 45;
 
+    /**
+     * How long the window takes to come up from nothing at launch.
+     *
+     * <p><strong>Long enough to be an arrival and short enough not to be a wait.</strong> Under about
+     * a third of a second a fade is a flicker and reads as the window having failed to draw for a
+     * frame; much over a second and it is the first thing between the user and an application they
+     * have already asked for, before the fifteen-second sequence they are also about to sit through.
+     * It is also deliberately shorter than the boot fanfare's own opening chime, so the picture is
+     * fully up before there is anything to listen to.
+     */
+    private static final Duration LAUNCH_FADE = Duration.millis(650);
+
     private Library library;
     private Repository<Song> libraryRepository;
     private AssetRegistry assets;
@@ -314,6 +326,42 @@ public class App extends Application {
      */
     private final com.eia.superdwarfkart.audio.SoundEffect bootFanfare =
             new com.eia.superdwarfkart.audio.SoundEffect(AppConfig.SOUND_BOOT);
+
+    /**
+     * The mechanical clunk of the cartridge going into the slot, fired as the drag commits.
+     *
+     * <p><strong>A second effect rather than a second call on the first one, because one
+     * {@code SoundEffect} is one line and asking it for another sound stops what it is playing.</strong>
+     * These two are meant to overlap: the fanfare's own measured envelope opens with nearly three
+     * seconds of quiet chime, so a two-second clunk over the top of it has nothing to fight with.
+     *
+     * <p><strong>It starts before the fanfare rather than with it</strong>, by the two tenths of a
+     * second the cartridge takes to travel the last of the slot - see
+     * {@link BootScreen#setOnSeating}. That gap is the whole difference between a sound of something
+     * moving and a sound played over a picture of something that has already stopped.
+     */
+    private final com.eia.superdwarfkart.audio.SoundEffect cartridgeIn =
+            new com.eia.superdwarfkart.audio.SoundEffect(AppConfig.SOUND_CARTRIDGE_IN);
+
+    /**
+     * Whether the drag ever reached the callback the clunk hangs off.
+     *
+     * <p>Only the smoke test reads it, and it is the one thing about that sound a run can check: the
+     * effect is deliberately not played during a screenshot, so a callback that had quietly stopped
+     * being wired would sound exactly like one that was working and being kept quiet.
+     */
+    private boolean cartridgeSeatedFired;
+
+    /**
+     * The noise of the cartridge coming back out, played over the shutdown screen.
+     *
+     * <p>Started as that screen goes up rather than through a callback the way the boot fanfare is:
+     * there the sound fires part way through a sequence the screen owns, and here the sound and the
+     * screen begin at the same instant in the same method. It is faded from
+     * {@link ShutdownScreen#setOnFading} - see there for why that is not the same moment as the end.
+     */
+    private final com.eia.superdwarfkart.audio.SoundEffect cartridgeOut =
+            new com.eia.superdwarfkart.audio.SoundEffect(AppConfig.SOUND_CARTRIDGE_OUT);
 
     /** The screen shown while the daemon is being stopped, or {@code null} before the user quits. */
     private ShutdownScreen shutdownScreen;
@@ -605,11 +653,41 @@ public class App extends Application {
         });
 
         bootScreen = new BootScreen(assets);
+        // **In the dark before the scene exists, so the console fades up rather than appearing.** The
+        // application used to arrive with this screen already fully drawn on it, which is what "it just
+        // pops out" describes, and nothing can fade in from a state it was never in. Here rather than
+        // beside show(): the screen has never been laid out at this point, so the first frame the window
+        // paints is already the faded one and no extra layout pass lands anywhere near the launch. Only
+        // the cartridge and the prompt fade - see BootScreen.sleep, and App.fadeWindowIn for what is
+        // known and not known about the platform fault this launch sits next to.
+        if (!Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
+            bootScreen.sleep();
+        }
         bootScreen.setOnInserted(this::finishBooting);
         bootScreen.setOnLoading(this::bootLoadSpotify);
-        // The noise a console makes when a cartridge goes into a live slot. Fired from the boot
-        // screen rather than played by it: opening an output line is audio/'s business, and this is
-        // also what keeps a screenshot silent - previewAt runs none of the sequence's side effects.
+        // The noise a console makes when a cartridge goes into a live slot: the clunk of the thing
+        // seating, and the machine's own fanfare underneath it. Two effects and therefore two output
+        // lines, because one SoundEffect plays one sound and asking it for a second stops the first.
+        // Fired from the boot screen rather than played by it: opening an output line is audio/'s
+        // business, and this is also what keeps a screenshot silent - the previews run none of the
+        // sequence's side effects.
+        //
+        // **They are two moments, not one.** The clunk goes on the release, the instant the cartridge
+        // commits and starts travelling; the fanfare goes on the tear at the end of that travel, where
+        // the flash is. Fired together they both began after the seat animation had finished, so the
+        // slide was silent and the thing landed with a noise once it had already stopped.
+        //
+        // The clunk is guarded and the fanfare is not, and that asymmetry is real rather than an
+        // oversight: onGlitch is unreachable during a smoke test (the seat Timeline never gets a pulse,
+        // so startSequence never runs), while onSeating hangs off the gesture itself - which the smoke
+        // test genuinely performs. Without the guard, taking a screenshot would play two seconds of
+        // audio into a build log.
+        bootScreen.setOnSeating(() -> {
+            cartridgeSeatedFired = true;
+            if (!smokeTest()) {
+                cartridgeIn.play();
+            }
+        });
         bootScreen.setOnGlitch(bootFanfare::play);
         // The animation is exactly as long as the sound, measured rather than written down - so the
         // picture and the fanfare end together and neither is cut off by the other. Decoding here is a
@@ -686,13 +764,62 @@ public class App extends Application {
         // launching into it would take the border out of every screenshot the run photographs and
         // leave the checks measuring a window that is not the one a user opens. The mode is exercised
         // on its own instead - see reportWindowFullscreen.
+        //
+        // **The fade starts after it returns, and that ordering is worth a sentence.** setFullScreen
+        // blocks here for the length of the platform's own transition, so a fade started before it
+        // would spend most of its length behind a window being flung onto a display of its own - and
+        // arrive already over. Started after, the console comes up on the screen it is going to stay
+        // on. The call itself is left exactly as it was; see fadeWindowIn for what is and is not known
+        // about the intermittent freeze that lives in it.
         if (!Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
-            Platform.runLater(() -> setWindowFullscreen(true));
+            Platform.runLater(() -> {
+                setWindowFullscreen(true);
+                fadeWindowIn();
+            });
         }
 
         if (Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
             runSmokeTest(stage, scene, pixelFont);
         }
+    }
+
+    /**
+     * Brings the console's picture up out of the dark, once the window has settled where it is going.
+     *
+     * <p>It fades what the boot screen <em>draws</em> and never the window itself - see
+     * {@code BootScreen.sleep}. That began as a workaround and survives on its own merits; the story of
+     * how it got there is worth keeping, because most of it is a lesson about measuring rather than
+     * about fading.
+     *
+     * <p><strong>The launch has an intermittent platform fault next to it, and it is not this
+     * one.</strong> {@code Stage.setFullScreen} enters a nested event loop on macOS and does not return
+     * until the platform's own transition has finished - the trap this class already documents twice -
+     * and on this machine that transition <em>sometimes does not finish</em>, leaving the interface
+     * thread {@code RUNNABLE} in {@code MacApplication._enterNestedEventLoopImpl} and the application
+     * drawn and completely deaf. Deferring the call out of {@code start()} made it rare rather than
+     * certain.
+     *
+     * <p><strong>Four different ways of fading were each measured against it and each looked like the
+     * cause, and none of them was.</strong> Dimming the stage before {@code show()}, dimming it after,
+     * fading the scene's root, and a full-screen fill over the boot screen all showed failure rates far
+     * above an untouched launch - about 10 runs in 16 against 2 in 12. The bisection was careful and the
+     * conclusion was wrong: <strong>a control run at the end of the session wedged 6 times out of
+     * 6.</strong> The environment had been degrading throughout - roughly forty fullscreen windows had
+     * been killed outright by then, each leaving its own macOS Space behind - so every comparison made
+     * across that session was against a moving baseline, and the effect attributed to the fade was drift.
+     *
+     * <p>This is the project's own §7 lesson arriving a second time, in a different room: before treating
+     * something as caused by the code, ask what state the <em>machine</em> is in, and interleave the
+     * control rather than running it once at the start. A rate measured against an environment that is
+     * changing under the experiment is not a rate.
+     *
+     * <p>What that leaves is honest and worth saying plainly: <strong>the fullscreen launch can freeze on
+     * this machine, it could before any of this was written, and it is not understood.</strong> A logout
+     * or a restart is the thing to try first, since it is what clears the Spaces those killed windows
+     * left behind. The fade neither causes it nor is known to make it likelier.
+     */
+    private void fadeWindowIn() {
+        bootScreen.wakeUp(LAUNCH_FADE);
     }
 
     /**
@@ -1360,14 +1487,19 @@ public class App extends Application {
     /**
      * Decides whether the shell draws its border, from the state rather than from the call site.
      *
-     * <p>Three separate things want the frame off - the boot screen, a fullscreen race, and a fullscreen
-     * window - and any one of them can end while another is still in force. Toggling the style class at
-     * each of the six places that change those states is how it ends up wrong: {@code finishBooting}
-     * removing it would put a border back around an application that is filling the display, and
-     * leaving a race would do the same. Computing it once from all three cannot drift.
+     * <p>Four separate things want the frame off - the boot screen, a fullscreen race, a fullscreen
+     * window, and the shutdown screen - and any one of them can end while another is still in force.
+     * Toggling the style class at each of the places that change those states is how it ends up wrong:
+     * {@code finishBooting} removing it would put a border back around an application that is filling
+     * the display, and leaving a race would do the same. Computing it once from all of them cannot drift.
+     *
+     * <p><strong>The shutdown screen is on this list for the boot screen's own reason, run
+     * backwards.</strong> Three pixels of amber around a black screen is the software's look outliving
+     * the software - and unlike every other state here there is no title bar left to drag by either, so
+     * the border is not even marking an edge that can be used. The two ends of the application match.
      */
     private void updateWindowFrame() {
-        boolean framed = !(booting || fullscreenRace || windowFullscreen);
+        boolean framed = !(booting || fullscreenRace || windowFullscreen || shuttingDown);
         shell.getStyleClass().remove("no-frame");
         if (!framed) {
             shell.getStyleClass().add("no-frame");
@@ -1916,8 +2048,13 @@ public class App extends Application {
             // would report nothing about the route the user takes - and if this deadlocks, the run
             // hangs here and says so, which is exactly what happened when Stage.setFullScreen was
             // called from inside this method.
-            System.out.println("[smoke] shutdown          : going out through the quit path, "
-                    + "as the close button does");
+            // It now waits for the eject animation as well as for the teardown, so the run takes
+            // ShutdownScreen.EJECT_SECONDS longer than it used to and that is the feature rather than
+            // a stall. If this line is the last one printed, the wait is not the animation - nothing
+            // in it can block - and the exit is genuinely wedged.
+            System.out.printf("[smoke] shutdown          : going out through the quit path, "
+                    + "as the close button does (waiting %.1f s for the eject)%n",
+                    ShutdownScreen.EJECT_SECONDS);
             requestQuit();
         });
         close.play();
@@ -1956,6 +2093,16 @@ public class App extends Application {
         System.out.println("[smoke] boot travel       : " + Math.round(bootScreen.travelPixels())
                 + " px to seat");
 
+        // **The one line that would catch every picture below coming out black.** The launch fades the
+        // tube up out of the dark and this run deliberately never puts it to sleep - but a veil left
+        // down photographs as a perfectly black rectangle, which is what a screen that failed to draw
+        // looks like and is the one picture that would be believed. Nothing else in this run would
+        // notice, because a black screenshot is still a screenshot.
+        double warmedUp = bootScreen.wakeProgress();
+        System.out.printf("[smoke] boot wake         : %s%n", warmedUp >= 1
+                ? "picture at full strength, so every shot below is of something"
+                : String.format("VEILED at %.2f - the shots below are of a dark screen", warmedUp));
+
         // The name goes on the cartridge's own label and nowhere else on this screen, so a label
         // that could not be measured means the name is not on screen at all - which no assertion
         // elsewhere would notice and which reads, in a picture, as artwork with nothing printed on
@@ -1985,6 +2132,33 @@ public class App extends Application {
         layoutNow(scene);
         captureIfRequested(scene, "boot-partway");
 
+        // Then the real thing, past the threshold - and it has to happen **here**, while the screen is
+        // still waiting for a cartridge. It used to sit at the end, after the previews below, where it
+        // was a no-op that read as a check: previewGlitch and previewShow put the screen into a phase
+        // that correctly refuses the gesture, so every press, drag and release was dropped on the floor
+        // and the line after it said nothing about the drag at all. Nothing would ever have noticed,
+        // because the skip that follows works from that phase regardless.
+        //
+        // The seat itself is a Timeline whose onFinished starts the sequence, and no pulse will arrive
+        // to run it, so this exercises the drag's routing and the release's own side effects; the skip
+        // at the end is what actually gets to the finish.
+        fireDrag(handle, travel);
+        boolean accepted = bootScreen.insertion() >= BootScreen.INSERT_THRESHOLD;
+        System.out.println("[smoke] boot full drag    : "
+                + (accepted ? "past the threshold, committed to the slot"
+                        : "THE DRAG NEVER REACHED THE CARTRIDGE"));
+
+        // **And this is the only way to see when the clunk fires.** The whole point of moving it off
+        // the tear is that it happens on the release, while the cartridge is still travelling - and the
+        // tear is two tenths of a second later, behind a Timeline that never runs here, so a callback
+        // that had slipped back onto the glitch would simply never fire and no picture would differ.
+        // The sound itself is suppressed (see the wiring in start()): a screenshot must not make a
+        // noise, so what is read is the callback rather than the audio.
+        System.out.println("[smoke] cartridge clunk   : "
+                + (cartridgeSeatedFired
+                        ? "fires on the release, while the cartridge is still travelling"
+                        : "NEVER FIRED - the clunk has slipped back behind the seat animation"));
+
         // The glitch and the loading bar cannot be photographed by waiting for them: this method
         // holds the interface thread, so the sequence's own timer never ticks. Both are asked for at
         // a stated instant instead, the way the companion window's spinning record is.
@@ -1998,6 +2172,18 @@ public class App extends Application {
         bootScreen.previewGlitch(0.35);
         layoutNow(scene);
         captureIfRequested(scene, "boot-glitch");
+
+        // **The cartridge has to be gone by the time the tear starts, and this is where that is
+        // checked rather than at the end.** The glitch used to blit the artwork back in twenty-two
+        // torn bands, which looked in a still exactly like what it was meant to look like - a picture
+        // breaking up - and in motion like the thing that had just been pushed into the machine still
+        // hanging about on screen. It is off every canvas now, and the tear throws the scanlines
+        // sideways instead. Read off the node, because the ImageView's foot hangs below the pane's own
+        // bottom edge and is therefore off the shot on a tall window.
+        boolean goneByTheGlitch = !bootScreen.cartridgeHandle().isVisible();
+        System.out.println("[smoke] boot glitch       : "
+                + (goneByTheGlitch ? "cartridge already off screen; the tear breaks up the display"
+                        : "CARTRIDGE STILL DRAWN DURING THE TEAR"));
 
         // Then the show, one movement at a time. **Every one of these is a fade**, which is the single
         // most unphotographable thing there is: a still of the wrong instant is a still of an empty
@@ -2051,12 +2237,20 @@ public class App extends Application {
                         bootFanfare.lengthSeconds())
                 : AppConfig.SOUND_BOOT + " WILL NOT DECODE - the boot will be silent");
 
-        // And the real thing, past the threshold. The seat itself is a Timeline whose onFinished starts
-        // the sequence, and no pulse will arrive to run it, so this exercises the drag's routing and the
-        // skip below is what actually gets to the end.
-        fireDrag(handle, travel);
+        // The two cartridge noises, decoded for the same reason and with one extra worth knowing:
+        // **both are mono where the fanfare is stereo**, so they are the only things in the jar that
+        // take PcmFormat's two-stage conversion - decode, then resample and mix up to stereo. That
+        // path is documented in §6 and is exactly the one that "almost every real file" skips, so
+        // nothing else that ships here would ever notice it breaking. A length of zero on either of
+        // these lines is that conversion failing, and it sounds identical to a sound nobody triggered.
+        boolean cartridgeSoundsOk = cartridgeIn.isReady() && cartridgeOut.isReady();
+        System.out.printf("[smoke] cartridge sounds  : %s%n", cartridgeSoundsOk
+                ? String.format("in %.2f s, out %.2f s - both mono, so both took the two-stage decode",
+                        cartridgeIn.lengthSeconds(), cartridgeOut.lengthSeconds())
+                : "ONE OF THE CARTRIDGE SOUNDS WILL NOT DECODE - "
+                        + AppConfig.SOUND_CARTRIDGE_IN + " / " + AppConfig.SOUND_CARTRIDGE_OUT);
 
-        // Which is the check for the skip, and it has to be done from inside a running sequence - the
+        // The check for the skip, and it has to be done from inside a running sequence - the
         // previews above left the screen part way through the show, which is exactly where a user in a
         // hurry presses a key. **A skip that did nothing would be invisible**: the sequence would simply
         // run its own length, which is what it does anyway, so nothing would look wrong for fifteen
@@ -2074,8 +2268,9 @@ public class App extends Application {
                 + (booted && libraryUp ? "seated, machine started, library shown"
                         : booted ? "started but THE LIBRARY DID NOT APPEAR" : "DID NOTHING"));
 
-        return refused && booted && libraryUp && labelled && cartridgeGone && splashFits
-                && fanfareOk && lengthsAgree && skipped;
+        return refused && accepted && cartridgeSeatedFired && booted && libraryUp && labelled
+                && cartridgeGone && goneByTheGlitch && splashFits && fanfareOk && cartridgeSoundsOk
+                && lengthsAgree && skipped;
     }
 
     /**
@@ -3728,16 +3923,34 @@ public class App extends Application {
      */
     private void captureShutdown(Scene scene, String destination) {
         Node was = overlay.getContent();
-        ShutdownScreen screen = new ShutdownScreen();
+        ShutdownScreen screen = new ShutdownScreen(assets);
         screen.setStatus("STOPPING GO-LIBRESPOT");
         shell.setTop(null);
+        // The border comes off here too, or the photograph is of a screen nobody ever sees: the real
+        // quit path drops it through updateWindowFrame, and three pixels of amber round a black screen
+        // is exactly the thing this end of the application is not meant to have.
+        shell.getStyleClass().add("no-frame");
         overlay.setContent(screen);
         layoutNow(scene);
-        screen.previewAt(0.45);
-        writeScreenshot(scene, derivedPath(destination, "shutdown"));
+
+        // One shot per moment, because no two of the three things on this screen are ever there at
+        // once: the tear is over before the cartridge moves, and the name is on the screen or on the
+        // cartridge's own label and never both - the boot screen's rule, run backwards. A single
+        // picture would look like whichever two it missed had failed to draw. The instants come off
+        // ShutdownScreen.Moment rather than being written down here, so they cannot drift from the
+        // timings they are meant to be photographing.
+        for (ShutdownScreen.Moment moment : ShutdownScreen.Moment.values()) {
+            screen.previewAt(moment.instant());
+            layoutNow(scene);
+            writeScreenshot(scene, derivedPath(destination, moment.label()));
+        }
 
         overlay.setContent(was);
         shell.setTop(header);
+        // updateWindowFrame rather than removing the class by hand: the run may be inside a fullscreen
+        // check when this is called, and putting the border back unconditionally would frame a window
+        // that is filling the display.
+        updateWindowFrame();
         layoutNow(scene);
     }
 
@@ -3872,8 +4085,9 @@ public class App extends Application {
             return;
         }
         shuttingDown = true;
-        // Whatever else happens, the fanfare is not still playing over a shutdown screen.
+        // Whatever else happens, neither of the boot's noises is still playing over a shutdown screen.
         bootFanfare.stop();
+        cartridgeIn.stop();
 
         // Something has to be on screen to draw this on. The companion strip may be the only window
         // showing and it is 224 pixels wide, so the main one comes back for it - shown before the
@@ -3897,14 +4111,53 @@ public class App extends Application {
         // either - this screen and the boot screen are the machine rather than the mood, and an
         // ABOVE_CONTENT scanline layer would be the one thing still drawn in somebody's palette.
         shell.setTop(null);
+        // And the border with it, exactly as the boot screen drops it. See updateWindowFrame.
+        updateWindowFrame();
         if (overlay != null) {
             overlay.setMood(null, null);
         }
-        shutdownScreen = new ShutdownScreen();
+        shutdownScreen = new ShutdownScreen(assets);
         overlay.setContent(shutdownScreen);
-        shutdownScreen.start();
+
+        // The machine letting go of the cartridge. Started here rather than through a callback the
+        // way the boot fanfare is, because there the sound fires part way through a sequence the
+        // screen owns and here the two begin at the same instant in the same method.
+        cartridgeOut.play();
 
         long began = System.nanoTime();
+
+        // **Exit waits for both halves, and the animation is usually the slower one.** The teardown
+        // was measured at 8 ms with no daemon running, so on the ordinary path it finishes long
+        // before the eject does - and exiting on it alone would put a three second animation on
+        // screen and then close the window a frame into it, which is the frozen dock this screen
+        // replaced with an extra class in front of it. With a daemon running the teardown takes up to
+        // five seconds and the animation is free. Both flags are only ever touched on the interface
+        // thread, so no synchronisation is needed for them.
+        boolean[] done = {false, false};
+        Runnable exitWhenBothAreDone = () -> {
+            if (!done[0] || !done[1]) {
+                return;
+            }
+            if (shutdownScreen != null) {
+                shutdownScreen.stop();
+            }
+            // The whole justification for this screen, in one number: however long this says, the
+            // window was painting and answering the whole time rather than sitting frozen.
+            LOG.info(String.format("Shut down in %.0f ms", (System.nanoTime() - began) / 1e6));
+            Platform.exit();
+        };
+
+        // The eject sound is 7.71 s against a three second animation, so it is always still playing
+        // at the end. Faded at the blackout rather than at the exit, which leaves SoundEffect's own
+        // quarter-second fade room to finish before the application actually goes - a line cut off
+        // mid-block leaves the cone off zero, and that step is an audible tick.
+        shutdownScreen.setOnFading(cartridgeOut::stop);
+        shutdownScreen.setOnFinished(() -> {
+            done[1] = true;
+            exitWhenBothAreDone.run();
+        });
+        shutdownScreen.start();
+
         Thread teardown = new Thread(() -> {
             releaseResources(step -> Platform.runLater(() -> {
                 if (shutdownScreen != null) {
@@ -3912,14 +4165,8 @@ public class App extends Application {
                 }
             }));
             Platform.runLater(() -> {
-                if (shutdownScreen != null) {
-                    shutdownScreen.stop();
-                }
-                // The whole justification for this screen, in one number: however long this says, the
-                // window was painting and answering the whole time rather than sitting frozen.
-                LOG.info(String.format("Shut down in %.0f ms",
-                        (System.nanoTime() - began) / 1e6));
-                Platform.exit();
+                done[0] = true;
+                exitWhenBothAreDone.run();
             });
         }, "sdmk-shutdown");
         // Daemon, so a teardown that somehow wedged could never be the thing keeping the JVM alive -

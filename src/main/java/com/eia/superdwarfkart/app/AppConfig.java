@@ -66,6 +66,39 @@ public final class AppConfig {
      */
     public static final String SOUND_BOOT = "/assets/sounds/psx.mp3";
 
+    /**
+     * The mechanical noise of the cartridge going into the slot.
+     *
+     * <p>Fired the instant the drag commits and the cartridge starts travelling - which is two tenths of
+     * a second <em>before</em> {@link #SOUND_BOOT}, not alongside it. This is the sound of the thing
+     * moving and the fanfare is the machine noticing at the end of that movement; played together, as
+     * they were at first, both began after the seat animation had already finished and the slide went by
+     * in silence. They still overlap heavily: the fanfare's own measured envelope opens with two and
+     * three quarter seconds of quiet chime, so a two-second clunk over the top of it has nothing to fight
+     * with. <strong>They go through two different {@code SoundEffect}s and therefore two different output
+     * lines</strong>, which is what lets them overlap at all - one effect plays one sound, and asking it
+     * for a second stops the first.
+     *
+     * <p><strong>Mono, unlike the fanfare, and that is worth knowing.</strong> Measured: 2.06 s,
+     * 44.1 kHz, one channel. So it takes {@code PcmFormat}'s two-stage conversion - decode, then
+     * resample and mix up to stereo - where {@code psx.mp3} takes the one-step path. That path is
+     * documented in §6 and is exercised by nothing else that ships in the jar, which is why the smoke
+     * test decodes these two by name.
+     */
+    public static final String SOUND_CARTRIDGE_IN = "/assets/sounds/Cartridge_In.mp3";
+
+    /**
+     * The noise of the cartridge coming back out, played over the shutdown screen.
+     *
+     * <p>Measured at 7.71 s, mono - and <strong>deliberately longer than the animation it accompanies,
+     * which is the opposite arrangement to the boot screen's.</strong> There the picture takes the
+     * sound's length ({@code BootScreen.setSequenceSeconds}) because a first launch is an event worth
+     * standing still for. Here the length is fixed at {@code ShutdownScreen.EJECT_SECONDS} and the
+     * sound is faded out under the blackout, because making somebody wait nearly eight seconds to close
+     * an application is precisely the hang that screen was built to stop looking like.
+     */
+    public static final String SOUND_CARTRIDGE_OUT = "/assets/sounds/Cartridge_Out.mp3";
+
     // ------------------------------------------------------------------
     // Audio
     // ------------------------------------------------------------------

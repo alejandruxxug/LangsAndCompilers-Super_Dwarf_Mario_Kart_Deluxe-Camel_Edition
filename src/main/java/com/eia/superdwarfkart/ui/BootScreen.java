@@ -275,10 +275,12 @@ public class BootScreen extends Pane {
      * that there is nothing on it, and it would read as a sentence rather than as a cast list.
      */
     private static final List<String> PRESENTS_LINES = List.of(
+            "made with ❤\uFE0F by:",
             "@MARIAJSOSAFDEZ",
             "@SAMUELBHOOP",
-            "CLAUDE",
-            "@ALEJANDRUXXUG");
+            "@ALEJANDRUXXUG",
+            "CLAUDE OPUS 5 XHIGH"
+            );
 
     /** How far apart the stacked credit lines sit, as a multiple of their own size. */
     private static final double PRESENTS_LINE_HEIGHT = 1.6;
@@ -288,6 +290,16 @@ public class BootScreen extends Pane {
 
     /** How far a band can be thrown sideways, as a share of the screen's width. */
     static final double TEAR_AMPLITUDE = 0.16;
+
+    /**
+     * How brightly the raster lights up at the start of the tear.
+     *
+     * <p>The scanlines drawn <em>lit</em> rather than darkened, decaying to nothing across the glitch -
+     * a tube handed a live signal for the first time. Deliberately faint: it is the thing being torn
+     * rather than the effect itself, and at anything stronger it competes with the white flash that is
+     * happening over the top of it in the same tenth of a second.
+     */
+    static final double RASTER_ALPHA = 0.22;
 
     /** Where the slot's mouth sits, as a fraction down the screen. */
     private static final double SLOT_Y_SHARE = 0.76;
@@ -362,6 +374,16 @@ public class BootScreen extends Pane {
     private final SpriteSheet sheet;
     private final ImageView cartridge = new ImageView();
 
+    /**
+     * The glass this whole screen is seen through.
+     *
+     * <p>Scanlines, a vignette and a slow sync roll, over every phase. It belongs here and on
+     * {@link ShutdownScreen} and nowhere else: those two are the console rather than the software, and
+     * a display's own texture is the one thing that can say so without putting a colour on screen. It
+     * is also what the tear tears - see {@link #drawGlitch}.
+     */
+    private final CrtEffect crt = new CrtEffect();
+
     /** Behind the cartridge: the dark inside of the slot. */
     private final Canvas back = new Canvas();
 
@@ -380,6 +402,24 @@ public class BootScreen extends Pane {
     /** How far in the cartridge is, from 0 for untouched to 1 for seated. */
     private final DoubleProperty insertion = new SimpleDoubleProperty(0);
 
+    /**
+     * How far the tube has come up, from 0 for a dark screen to 1 for the picture at full strength.
+     *
+     * <p><strong>It starts awake, and that is the safe default rather than the realistic one.</strong>
+     * Asleep by default, every screenshot of this screen would come out black - and a black picture is
+     * exactly what a screen that failed to draw looks like, which is the one photograph that would be
+     * believed. {@code App} puts it to sleep on the launch path and nowhere else, so the smoke test,
+     * both previews and {@link #settle()} are all unveiled without having to remember to say so.
+     *
+     * <p>A property rather than a field for the reason {@link #insertion} is one: the listener below is
+     * what marks this {@code Parent} dirty, and without something doing that a value that changed every
+     * frame would redraw nothing at all.
+     */
+    private final DoubleProperty wake = new SimpleDoubleProperty(1);
+
+    /** Runs the tube's warm-up. Separate from {@link #seatAnimation}, which it never overlaps. */
+    private Timeline wakeAnimation;
+
     private Runnable onInserted;
 
     /** Run when the show starts, so the caller can begin whatever the bar is standing for. */
@@ -390,9 +430,29 @@ public class BootScreen extends Pane {
      *
      * <p>A callback rather than the sound itself: playing audio is {@code audio/}'s business, and a
      * view that opened an output line would be the one place in this application where a screen made
-     * a noise. It is also what keeps {@link #previewAt} silent - a screenshot must not play a sound.
+     * a noise. It is also what keeps {@link #previewGlitch} and {@link #previewShow} silent - a
+     * screenshot must not play a sound.
      */
     private Runnable onGlitch;
+
+    /**
+     * Run at the instant the drag commits and the cartridge starts going home.
+     *
+     * <p><strong>Earlier than {@link #onGlitch}, and the gap is the whole reason it exists.</strong>
+     * The clunk of a cartridge going into a slot is the sound of the thing <em>moving</em>, and firing
+     * it from the tear meant it began after {@link #SETTLE} - two tenths of a second later, by which
+     * time the cartridge has stopped. The picture and the sound were describing different moments: the
+     * eye watched it slide home in silence and then heard it land once it already had. Fired from the
+     * release instead, the noise runs underneath the slide and the flash arrives on top of it, which is
+     * the order those two things happen in on a real machine.
+     *
+     * <p>It is the one callback on this screen reached by the <em>gesture</em> rather than by the
+     * sequence, so unlike {@link #onGlitch} it is not kept silent by {@link #settle} and
+     * {@link #previewShow} alone - the smoke test drives a real drag. See {@code App}, which is where
+     * that is dealt with, because whether a run is allowed to make a noise is not this screen's
+     * business.
+     */
+    private Runnable onSeating;
 
     /**
      * The line under the bar, naming what is being loaded.
@@ -469,6 +529,72 @@ public class BootScreen extends Pane {
         setClip(bounds);
 
         insertion.addListener((observable, was, now) -> requestLayout());
+        wake.addListener((observable, was, now) -> requestLayout());
+    }
+
+    /**
+     * Puts the cartridge and the prompt in the dark, so the picture arrives rather than appearing.
+     *
+     * <p><strong>Called before the window is ever shown, and only on the launch path.</strong> The
+     * application used to come up with this screen already fully drawn on it, which is what "it just
+     * pops out" describes - and nothing can fade in from a state it was never in, so the dark has to
+     * be in place before the toolkit paints once.
+     *
+     * <p><strong>What it does not touch is the room, the slot and its lit rim.</strong> The obvious way
+     * to write this is one fill of {@code SHADOW} over the finished frame - the same mechanism as the
+     * blackout that ends the sequence - and that version was written first, on the theory that a window
+     * with nothing visible on it was what made the launch's fullscreen transition unreliable. <strong>The
+     * theory was wrong and the measurement behind it was confounded</strong>; see
+     * {@code App.fadeWindowIn}, which keeps the whole story because the mistake in it is more useful
+     * than the conclusion.
+     *
+     * <p>This is what survived anyway, on its own merits, and they are the better ones: the display is
+     * already on with an empty slot in it and the cartridge fades up in front of it, which says what the
+     * screen is <em>for</em>, where a flat crossfade says only that something is fading. It also costs
+     * nothing - two node opacities and a multiply on two captions, against a full-canvas alpha fill on a
+     * machine with no GPU (§7 of the project notes).
+     */
+    public void sleep() {
+        stopWakeAnimation();
+        wake.set(0);
+    }
+
+    /**
+     * Brings the picture up out of the dark.
+     *
+     * <p>Safe to call whether or not {@link #sleep()} ever was - a screen that is already up simply
+     * runs a fade from full to full, which draws exactly what it was drawing.
+     *
+     * @param over how long the warm-up takes; anything not positive brings it up at once
+     */
+    public void wakeUp(Duration over) {
+        stopWakeAnimation();
+        if (over == null || over.lessThanOrEqualTo(Duration.ZERO)) {
+            wake.set(1);
+            return;
+        }
+        // Eased rather than linear, for the reason ramp() gives about every fade in the sequence that
+        // follows: a linear fade stops abruptly at the top and the eye catches the corner, which on the
+        // very first thing anybody sees reads as a dropped frame rather than as an arrival.
+        wakeAnimation = new Timeline(new KeyFrame(over,
+                new KeyValue(wake, 1, Interpolator.EASE_OUT)));
+        // Whatever stops the timeline, the picture ends up on screen. An application left permanently
+        // behind a black veil is a far worse fault than anything that could have stopped it, and it has
+        // no symptom to search for.
+        wakeAnimation.setOnFinished(event -> wake.set(1));
+        wakeAnimation.play();
+    }
+
+    /** @return how far the picture has come up, 0 for a dark screen and 1 for full strength */
+    public double wakeProgress() {
+        return wake.get();
+    }
+
+    private void stopWakeAnimation() {
+        if (wakeAnimation != null) {
+            wakeAnimation.stop();
+            wakeAnimation = null;
+        }
     }
 
     /**
@@ -500,14 +626,38 @@ public class BootScreen extends Pane {
      * Sets what to fire at the instant the cartridge seats and the picture tears.
      *
      * <p>This is where the boot fanfare goes. It runs once, from {@link #startSequence()}, so
-     * {@link #settle()} and {@link #previewAt} - the two ways the smoke test drives this screen -
-     * never trigger it: a screenshot must not make a noise, and a check that ran the whole sequence
-     * silently is worth more than one that plays fifteen seconds of audio into a build log.
+     * {@link #settle()}, {@link #previewGlitch} and {@link #previewShow} - the three ways the smoke
+     * test drives this screen - never trigger it: a screenshot must not make a noise, and a check that
+     * ran the whole sequence silently is worth more than one that plays fifteen seconds of audio into
+     * a build log.
+     *
+     * <p><strong>The cartridge's own clunk is no longer fired from here</strong> - see
+     * {@link #setOnSeating}, which happens {@link #SETTLE} earlier, while the thing is still moving.
      *
      * @param action run once, as the glitch begins; {@code null} to do nothing
      */
     public void setOnGlitch(Runnable action) {
         this.onGlitch = action;
+    }
+
+    /**
+     * Sets what to fire at the instant the drag commits and the cartridge starts going home.
+     *
+     * <p>This is where the noise of the cartridge going in belongs, and it is a different moment from
+     * {@link #setOnGlitch}: the clunk is the object moving and the fanfare is the machine noticing, so
+     * the first runs under the slide and the second lands on the flash at the end of it. Fired from the
+     * release rather than from the seat animation's own end, because by then the cartridge has stopped
+     * and a sound of something sliding into place plays over a picture of something already in place.
+     *
+     * <p>It runs once. {@link #settle()} and both previews do not reach it - they do not go through the
+     * gesture at all - but a synthesised drag does, which is a real one as far as this screen is
+     * concerned and correctly so.
+     *
+     * @param action run once, as the cartridge is let go of past {@link #INSERT_THRESHOLD};
+     *              {@code null} to do nothing
+     */
+    public void setOnSeating(Runnable action) {
+        this.onSeating = action;
     }
 
     /**
@@ -564,6 +714,35 @@ public class BootScreen extends Pane {
             return FALLBACK_TRAVEL;
         }
         return HOVER_GAP + cartridgeHeight * SEAT_SHARE;
+    }
+
+    /**
+     * Where the cartridge's top edge sits before it has been touched.
+     *
+     * @param mouthY          where the slot's mouth is, in pixels down the screen
+     * @param cartridgeHeight the drawn height of the cartridge, in pixels
+     * @return the y of its top edge, in pixels
+     */
+    static double hoverY(double mouthY, double cartridgeHeight) {
+        return mouthY - HOVER_GAP - cartridgeHeight;
+    }
+
+    /**
+     * Where the cartridge's top edge sits once it is seated, with {@link #SEAT_SHARE} of it inside.
+     *
+     * <p><strong>{@link ShutdownScreen} asks this rather than working it out again</strong>, which is
+     * the whole reason it is a method: the eject begins from exactly where the insert ended, so the
+     * two screens are one continuous object rather than two animations that agree by coincidence. A
+     * second copy of this arithmetic would drift the first time {@link #SEAT_SHARE} or
+     * {@link #HOVER_GAP} moved, and the way it would drift is a cartridge that jumped as the session
+     * closed - with nothing on screen at either end to say the two were ever meant to match.
+     *
+     * @param mouthY          where the slot's mouth is, in pixels down the screen
+     * @param cartridgeHeight the drawn height of the cartridge, in pixels
+     * @return the y of its top edge, in pixels
+     */
+    static double seatedY(double mouthY, double cartridgeHeight) {
+        return hoverY(mouthY, cartridgeHeight) + seatTravel(cartridgeHeight);
     }
 
     /**
@@ -1087,6 +1266,10 @@ public class BootScreen extends Pane {
     public void settle() {
         stopSeatAnimation();
         stopSequence();
+        // The warm-up too, or skipping the sequence during its first two thirds of a second would hand
+        // the window over from behind a veil that has nothing left to fade it.
+        stopWakeAnimation();
+        wake.set(1);
         insertion.set(1);
         applyCss();
         layout();
@@ -1152,6 +1335,12 @@ public class BootScreen extends Pane {
 
     /** Draws a previewed moment. */
     private void redrawPreview() {
+        // Never behind the veil. A photograph taken with the tube still dark is a photograph of a black
+        // rectangle, which is indistinguishable from a screen that failed to draw - the one picture
+        // that would be believed. sleep() is only ever called on the launch path, so this is belt and
+        // braces rather than a fix, and it is the cheap half of a very expensive mistake.
+        stopWakeAnimation();
+        wake.set(1);
         insertion.set(1);
         // Asked for explicitly, because a Parent only lays out when something marked it dirty and none
         // of the fields above are observable. Without this a second preview silently redraws the first
@@ -1200,6 +1389,15 @@ public class BootScreen extends Pane {
                 return;
             }
             if (isInserted(insertion.get())) {
+                // Before the animation rather than after it. The clunk is the sound of the cartridge
+                // travelling the last of its slot, so it has to start when the travel does - see
+                // setOnSeating. Fired here and not inside seatTo, because seatTo also runs the
+                // spring-back and a cartridge that was refused made no such noise.
+                Runnable clunk = onSeating;
+                onSeating = null;
+                if (clunk != null) {
+                    clunk.run();
+                }
                 seatTo(1, this::startSequence);
             } else {
                 seatTo(0, null);
@@ -1356,8 +1554,10 @@ public class BootScreen extends Pane {
         cartridge.setFitWidth(cartridgeWidth);
         cartridge.setFitHeight(cartridgeHeight);
         double cartridgeX = Math.round((width - cartridgeWidth) / 2);
-        double cartridgeY = Math.round(mouthY - HOVER_GAP - cartridgeHeight
-                + insertion.get() * travel);
+        // Through hoverY rather than inline, so that seatedY - which is this at insertion 1, and is
+        // what the shutdown screen starts its eject from - cannot be a second opinion about the same
+        // position. See seatedY.
+        double cartridgeY = Math.round(hoverY(mouthY, cartridgeHeight) + insertion.get() * travel);
         cartridge.relocate(cartridgeX, cartridgeY);
 
         // The cartridge is only on screen while it is still outside the machine. Past that it is
@@ -1369,12 +1569,14 @@ public class BootScreen extends Pane {
         boolean stillOutside = phase == Phase.INSERT;
         cartridge.setVisible(stillOutside);
         plate.setVisible(stillOutside);
+        // The launch fade, on the two things that are actually the picture. See sleep().
+        cartridge.setOpacity(wake.get());
+        plate.setOpacity(wake.get());
 
         double mouthWidth = Math.round(cartridgeWidth * inletShare());
         drawBack(width, height, mouthY, mouthWidth);
         drawPlate(width, height, cartridgeX, cartridgeY, cartridgeWidth, cartridgeHeight);
-        drawFront(width, height, mouthY, mouthWidth, cartridgeX, cartridgeY,
-                cartridgeWidth, cartridgeHeight);
+        drawFront(width, height, mouthY, mouthWidth);
     }
 
     /**
@@ -1451,25 +1653,49 @@ public class BootScreen extends Pane {
     /**
      * Draws whatever is in front: the slot's lip while the cartridge is going in, and the whole
      * picture once it is.
+     *
+     * <p><strong>The glass goes on last, over every phase.</strong> This screen is a console rather
+     * than an application, and the scanlines and the tube's falloff are what say so - so they sit over
+     * the cartridge, the tear and the title alike, and anything drawn after them would read as a thing
+     * in front of the screen rather than on it. The glitch is the exception only in that it tears the
+     * glass itself, which it has to do from inside its own band loop.
+     *
+     * <p>The blackout at the end of the show is the one thing drawn <em>after</em> the glass, and that
+     * is not an inconsistency: the sequence hands over to a genuinely black screen, and a sync roll
+     * still drifting across it at the moment the library appears would be the display outliving the
+     * fade it just finished.
      */
-    private void drawFront(double width, double height, double mouthY, double mouthWidth,
-            double cartridgeX, double cartridgeY, double cartridgeWidth, double cartridgeHeight) {
+    private void drawFront(double width, double height, double mouthY, double mouthWidth) {
         GraphicsContext gc = front.getGraphicsContext2D();
         gc.setImageSmoothing(false);
         gc.clearRect(0, 0, width, height);
 
-        if (phase == Phase.GLITCH) {
-            drawGlitch(gc, width, height, cartridgeX, cartridgeY, cartridgeWidth, cartridgeHeight);
-            return;
-        }
-        if (phase == Phase.SHOW) {
-            drawShow(gc, width, height);
-            return;
-        }
         if (phase == Phase.DONE) {
             return;
         }
-        drawSlot(gc, width, height, mouthY, mouthWidth);
+        if (phase == Phase.GLITCH) {
+            drawGlitch(gc, width, height);
+        } else if (phase == Phase.SHOW) {
+            drawShow(gc, width, height);
+        } else {
+            drawSlot(gc, width, height, mouthY, mouthWidth);
+        }
+
+        // **The glass goes over the tear as well, and that matters more than it sounds.** The tube's
+        // rounded corners are a property of the screen rather than of what is on it, so leaving them
+        // off for the half second of the glitch would have the display visibly change shape at the
+        // moment it is meant to be showing what it is - square, then round again. What is torn is the
+        // signal; the glass is what the signal arrives on and it does not move.
+        crt.draw(gc, width, height, now(), Palette.hardware());
+
+        if (phase == Phase.SHOW) {
+            double gone = blackout(showProgress);
+            if (gone > 0) {
+                Palette palette = Palette.hardware();
+                gc.setFill(palette.color(PaletteRole.SHADOW, gone));
+                gc.fillRect(0, 0, width, height);
+            }
+        }
     }
 
     /** The slot's near lip, which is what swallows the cartridge's foot as it descends. */
@@ -1498,17 +1724,25 @@ public class BootScreen extends Pane {
         drawPrompt(gc, width, height, lit);
     }
 
-    /** The instruction, which fades out as soon as the gesture has been started. */
+    /**
+     * The instruction, which fades out as soon as the gesture has been started.
+     *
+     * <p>It also fades <em>in</em> at launch, along with the cartridge and nothing else - see
+     * {@link #sleep()} for why the room, the slot and its rim are deliberately not part of that.
+     */
     private void drawPrompt(GraphicsContext gc, double width, double height, double lit) {
         Palette palette = Palette.hardware();
         gc.setTextAlign(TextAlignment.CENTER);
         double centreX = Math.round(width / 2);
+        double warmedUp = wake.get();
 
-        gc.setFill(palette.color(PaletteRole.PRIMARY, Math.clamp(1 - lit * 1.6, 0, 1)));
+        gc.setFill(palette.color(PaletteRole.PRIMARY,
+                Math.clamp(1 - lit * 1.6, 0, 1) * warmedUp));
         gc.setFont(Fonts.pixel(PROMPT_SIZE));
         gc.fillText("INSERT CARTRIDGE", centreX, Math.round(height * 0.10));
 
-        gc.setFill(palette.color(PaletteRole.TEXT_DIM, Math.clamp(1 - lit * 2.4, 0, 1)));
+        gc.setFill(palette.color(PaletteRole.TEXT_DIM,
+                Math.clamp(1 - lit * 2.4, 0, 1) * warmedUp));
         gc.setFont(Fonts.pixel(HINT_SIZE));
         gc.fillText("DRAG IT DOWN INTO THE SLOT", centreX, Math.round(height * 0.10 + 28));
     }
@@ -1521,49 +1755,122 @@ public class BootScreen extends Pane {
      * a full-screen effect that outstays that is the sort of thing the "reduce motion" switch exists
      * for.
      */
-    private void drawGlitch(GraphicsContext gc, double width, double height,
-            double cartridgeX, double cartridgeY, double cartridgeWidth, double cartridgeHeight) {
+    private void drawGlitch(GraphicsContext gc, double width, double height) {
         Palette palette = Palette.hardware();
 
+        // Over a cleared room, because this phase replaces the picture rather than sitting on top of
+        // one - which is the difference between it and the shutdown screen's tear, where the same
+        // effect goes over a screen that is already drawn. See drawTear.
         gc.setFill(palette.color(PaletteRole.SHADOW));
         gc.fillRect(0, 0, width, height);
 
-        // The picture, torn into bands and thrown sideways. Drawn from the artwork rather than from
-        // a snapshot of the scene, which cannot be taken while the interface thread is busy.
-        Rectangle2D frame = sheet.viewport(0);
-        int frameIndex = (int) Math.round(glitchProgress * GLITCH_SECONDS * 60);
-        double bandHeight = cartridgeHeight / TEAR_BANDS;
-        double sourceBand = frame.getHeight() / TEAR_BANDS;
-        for (int band = 0; band < TEAR_BANDS; band++) {
-            double offset = tearOffset(band, frameIndex, glitchProgress, width);
-            gc.drawImage(sheet.image(),
-                    frame.getMinX(), frame.getMinY() + band * sourceBand,
-                    frame.getWidth(), sourceBand,
-                    Math.round(cartridgeX + offset), Math.round(cartridgeY + band * bandHeight),
-                    Math.round(cartridgeWidth), Math.ceil(bandHeight));
+        drawTear(gc, palette, width, height, glitchProgress, tearFrame(glitchProgress,
+                GLITCH_SECONDS));
+
+        // The flash itself, at the very start and gone almost immediately. TEXT_PRIMARY rather than
+        // a literal white: it is the palette's brightest role by definition, and it is protected, so
+        // no mood can turn this into a flash nobody sees.
+        //
+        // **It is the one part of the tear the shutdown screen does not borrow**, and that asymmetry
+        // is the whole point of it: a flash of light is power arriving. At the other end of the
+        // session the contact is being broken, and a screen that lit up as it was cut off would be
+        // saying the opposite of what happened.
+        double flash = 1 - Math.clamp(glitchProgress * GLITCH_SECONDS / FLASH_SECONDS, 0, 1);
+        if (flash > 0) {
+            gc.setFill(palette.color(PaletteRole.TEXT_PRIMARY, flash * flash));
+            gc.fillRect(0, 0, width, height);
+        }
+    }
+
+    /**
+     * Which frame of a tear a given progress lands on, so the bands actually move.
+     *
+     * <p>{@link #tearOffset} takes the frame as its second seed, so a tear drawn with a constant one
+     * is twenty-two bands displaced by fixed amounts - a broken picture rather than a breaking one.
+     * Sixty a second is the pulse rate it is drawn at; nothing depends on hitting it exactly, only on
+     * the number advancing as the effect runs.
+     *
+     * @param progress how far through the tear, 0 to 1
+     * @param seconds  how long the whole tear lasts
+     * @return the frame index to seed with
+     */
+    static int tearFrame(double progress, double seconds) {
+        return (int) Math.round(progress * seconds * 60);
+    }
+
+    /**
+     * The picture tearing itself apart, at a stated instant.
+     *
+     * <p><strong>One implementation, drawn at both ends of the session.</strong> The cartridge going
+     * into a live slot and the cartridge being taken back out are the same electrical event in
+     * opposite directions, so they tear the same way; a second copy of these twenty lines in
+     * {@link ShutdownScreen} would be free to drift, and the way it would drift is that the two ends
+     * of one session would stop looking like the same machine. What the two screens do differently is
+     * what they draw it <em>over</em> - {@link #drawGlitch} clears the room first, the shutdown screen
+     * lays it over a picture that is already there - and the white flash, which belongs only to the
+     * end where power arrives.
+     *
+     * <p><strong>What tears is the display, and there is deliberately nothing else in it.</strong>
+     * This used to blit the cartridge artwork back in twenty-two torn bands, on the argument that a
+     * broken-up picture of the cartridge reads as the picture breaking up rather than as the object
+     * still sitting there. Looked at, it does not: the tear is brief and the bands stay recognisably a
+     * cartridge, so what the eye reports is the thing that was just pushed into the machine still
+     * hanging about on screen - exactly the sliver the clip and the visibility flag were added to get
+     * rid of, arriving back by a different route.
+     *
+     * <p><strong>It is drawn lit rather than by tearing the glass, and that distinction cost a
+     * screenshot.</strong> The obvious move is to blit {@link CrtEffect}'s own mask back a band at a
+     * time at an offset - and it is a no-op, because the mask darkens towards {@code SHADOW} and on
+     * both these screens {@code SHADOW} <em>is</em> the ground. Black torn over black changes not one
+     * pixel: the picture came out identical to the one before the change, which is the worst way for
+     * an effect to fail, because the code reads perfectly. A raster that is momentarily
+     * <em>brighter</em> than the room has somewhere to go, and it is the truer picture as well - a tube
+     * handed a signal lights up, and one losing it flares as it goes.
+     *
+     * @param gc       what to draw on
+     * @param palette  the console's own, for the same reason every other colour here comes from it
+     * @param width    the screen's width, in pixels
+     * @param height   its height
+     * @param progress how far through the tear, 0 to 1; at or past 1 nothing is drawn
+     * @param frame    which frame of it, from {@link #tearFrame}
+     */
+    static void drawTear(GraphicsContext gc, Palette palette, double width, double height,
+            double progress, int frame) {
+        if (progress >= 1 || progress < 0) {
+            return;
+        }
+        double raster = RASTER_ALPHA * (1 - progress);
+        if (raster > 0) {
+            gc.setFill(palette.color(PaletteRole.TEXT_PRIMARY, raster));
+            double bandHeight = height / TEAR_BANDS;
+            // Offset onto the rows the grille leaves clear - see CrtEffect.scanlineShade, where the
+            // third row of each cycle is the untouched one. Lighting the rows it darkens would have
+            // the two cancel, and the tear would come out as a flat wash instead of a raster.
+            //
+            // The grille bows with the glass now, so that alignment is exact down the middle of the
+            // tube and drifts by a row towards the sides. That is deliberately left alone: these rows
+            // are being thrown sideways by up to a sixth of the screen at the time, so a raster that
+            // lined up perfectly with a curve it is not sitting on would be the odd thing.
+            for (int row = CrtEffect.SCANLINE_PERIOD - 1; row < height;
+                    row += CrtEffect.SCANLINE_PERIOD) {
+                int band = (int) Math.min(TEAR_BANDS - 1, row / bandHeight);
+                double offset = tearOffset(band, frame, progress, width);
+                gc.fillRect(Math.round(offset), row, width, 1);
+            }
         }
 
         // A few rows of the signal breaking up entirely. ACCENT and NEGATIVE because they are the
         // two roles furthest from the room's own colour, so the bands read as interference whatever
         // the mood is - and never as part of the artwork.
         for (int band = 0; band < TEAR_BANDS; band++) {
-            double offset = tearOffset(band, frameIndex + 977, glitchProgress, width);
+            double offset = tearOffset(band, frame + 977, progress, width);
             if (offset == 0) {
                 continue;
             }
             PaletteRole role = (band % 2 == 0) ? PaletteRole.ACCENT : PaletteRole.NEGATIVE;
-            gc.setFill(palette.color(role, 0.35 * (1 - glitchProgress)));
+            gc.setFill(palette.color(role, 0.35 * (1 - progress)));
             double y = Math.round(height * band / (double) TEAR_BANDS);
             gc.fillRect(Math.round(offset * 2), y, width, Math.ceil(height / TEAR_BANDS / 2));
-        }
-
-        // The flash itself, at the very start and gone almost immediately. TEXT_PRIMARY rather than
-        // a literal white: it is the palette's brightest role by definition, and it is protected, so
-        // no mood can turn this into a flash nobody sees.
-        double flash = 1 - Math.clamp(glitchProgress * GLITCH_SECONDS / FLASH_SECONDS, 0, 1);
-        if (flash > 0) {
-            gc.setFill(palette.color(PaletteRole.TEXT_PRIMARY, flash * flash));
-            gc.fillRect(0, 0, width, height);
         }
     }
 
@@ -1596,13 +1903,11 @@ public class BootScreen extends Pane {
         drawTitle(gc, palette, width, centreY, show);
         drawBar(gc, palette, width, height, show);
 
-        // Last, over everything, which is what makes it a fade to black rather than five things each
-        // fading on their own and arriving at slightly different times.
-        double gone = blackout(show);
-        if (gone > 0) {
-            gc.setFill(palette.color(PaletteRole.SHADOW, gone));
-            gc.fillRect(0, 0, width, height);
-        }
+        // The blackout is *not* drawn here. It is the last thing on the screen and it has to go over
+        // the glass as well as over the picture - a sync roll still drifting down a screen that has
+        // finished fading would be the display outliving the fade. See drawFront, which applies it
+        // after CrtEffect for that reason. It is still one fill over everything rather than five
+        // elements each fading on their own and arriving at slightly different times.
     }
 
     /**

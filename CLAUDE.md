@@ -137,8 +137,11 @@ them, photographed over the library rather than beside their own switcher), **`-
 **`-mood-layers`**, **`-pixel-editor`**, **`-spotify-add`** (the library's add-from-Spotify modal, with a
 track already picked — the form is hidden until something is, so a shot of it as it opens would be missing
 the half worth looking at; the results are made up rather than searched for, so a layout check does not
-stop running when the machine is offline), **`-shutdown`** (photographed by `captureShutdown`, which tears
-nothing down),
+stop running when the machine is offline), **`-shutdown-glitch`, `-shutdown` and `-shutdown-eject`** (photographed by
+`captureShutdown`, which tears nothing down — **three** shots because no two of the three things on that
+screen are ever there at once: the tear is over before the cartridge moves, and the name is on the screen
+or on the cartridge's label and never both, so one picture would be missing whichever two it caught. The
+instants come off `ShutdownScreen.Moment` rather than being written down in the smoke test),
 and **`-boot`, `-boot-partway`, `-boot-flash`, `-boot-glitch`, then one per movement of the fifteen-second
 show — `-boot-presents`, `-boot-title`, `-boot-hold`, `-boot-loading`, `-boot-fade`** — the boot screen,
 which exists only until the cartridge goes in and is therefore photographed *first*, before any other
@@ -498,9 +501,55 @@ answer, and a second modal question straight afterwards is one too many. Boot la
   **clipped** to its own bounds, and the `ImageView` and the name plate are **hidden whenever the phase
   is not `INSERT`**, decided in `layoutChildren` because four different things enter a phase (the drag,
   `settle()`, `previewAt()` and the sequence's own timer) and that is the one place all four pass
-  through. The glitch still draws its own *torn* copy of the artwork from the sheet — that is the
-  picture breaking up, not the object still sitting there. `[smoke] boot cartridge in` reads the node's
-  visibility, because the sliver hung below the pane and is off the shot on a tall window.
+  through. `[smoke] boot cartridge in` reads the node's visibility, because the sliver hung below the
+  pane and is off the shot on a tall window.
+
+  **And the glitch no longer draws a torn copy of the artwork either, which is where the last of it was
+  hiding.** This section used to end "the glitch still draws its own *torn* copy of the artwork from the
+  sheet — that is the picture breaking up, not the object still sitting there", and looked at rather than
+  reasoned about, it is not: the tear is half a second long and twenty-two displaced bands of a cartridge
+  are still recognisably a cartridge, so what the eye reports is the thing that was just pushed into the
+  machine hanging about on screen. That is the same sliver arriving by a different route, and it is what
+  was asked for by name — *"kill the sprite just when it happens, it's showing in the glitch screen"*.
+  **What tears now is the raster**: the tube's own scanlines, lit and thrown sideways by the same
+  `tearOffset`, decaying to nothing. `[smoke] boot glitch` reads the node's visibility *at the tear*
+  rather than only after the show, which is where the complaint actually was.
+  - **Tearing `CrtEffect`'s mask instead is the obvious move and it is a no-op.** The mask darkens
+    towards `SHADOW`, and on this screen `SHADOW` *is* the ground — black torn over black changes not one
+    pixel. It was written that way first and the screenshot came out **identical to the one before the
+    change**, which is the worst way for an effect to fail: the code reads correctly and there is simply
+    nothing there. A raster drawn momentarily *brighter* than the room has somewhere to go, and it is
+    also the truer picture — a tube handed a live signal lights up. The lit rows are offset onto the ones
+    the grille leaves clear (`CrtEffect.SCANLINE_PERIOD - 1`), or the two cancel and the glitch comes out
+    as a flat wash. Now that the grille bows with the glass that alignment is exact down the middle of
+    the tube and drifts by a row towards the sides, which is left alone deliberately: these rows are
+    being thrown up to a sixth of the screen sideways at the time, so a raster lining up perfectly with a
+    curve it is not sitting on would be the odd thing.
+  - **The glass is drawn over the tear too, and that is not cosmetic.** The tube's rounded corners are a
+    property of the *screen* rather than of what is on it, so leaving them off for the half second of the
+    glitch had the display visibly change shape at the moment it is meant to be announcing what it is —
+    square, then round again. `drawFront` no longer returns early for the glitch phase; what is torn is
+    the signal, and the glass it arrives on does not move. It is also the shot where the curvature reads
+    most strongly, because the torn raster fans out along the bow — see `-boot-glitch`.
+- **The picture fades up rather than arriving all at once** (`BootScreen.sleep` / `wakeUp`), which is
+  what "it just pops out" was about: the window used to appear with the whole boot screen already drawn
+  on it. **What fades is the cartridge and the prompt, and deliberately not the room, the slot or its
+  lit rim** — so the display is already on with an empty slot in it and the thing you are meant to pick
+  up rises out of the dark in front of it. That reads as what the screen is *for*, where a flat
+  crossfade reads only as something fading. It is also two node opacities and a multiply on two
+  captions rather than a full-canvas alpha fill, which on the machine §7 describes is the difference
+  between free and ten milliseconds a frame.
+  - **`sleep()` is called as the screen is constructed, before the scene exists**, because nothing can
+    fade in from a state it was never in and because that way the first frame the window paints is
+    already the faded one — no extra layout pass lands anywhere near the launch.
+  - **It starts *awake* and the launch path is what puts it to sleep**, never the other way round.
+    Asleep by default, every screenshot of this screen would come out black — and a black picture is
+    exactly what a screen that failed to draw looks like, which is the one photograph that would be
+    believed. `settle()` and both previews force it up as well, and **`[smoke] boot wake` is the line
+    that would catch it**: nothing else in a run notices, because a black screenshot is still a
+    screenshot.
+  - **Fading the *window* was tried four ways and abandoned** — see §11, where the finding is not about
+    fading at all.
 - **Nothing else is on the screen, and it is black and white rather than in the user's mood.**
   `Palette.hardware()` — black ground, white light, nothing else — because at this point the system has
   not started: a mood is something the *software* chose, so a boot screen in Sunset Wilds is the console
@@ -646,9 +695,46 @@ sort of thing that looks fine in every screenshot.
   instead of being copied into the smoke test where the two could drift, and the timing constants stay
   package-private.
 - Screenshots: `-boot-presents`, `-boot-title`, `-boot-hold`, `-boot-loading`, `-boot-fade`.
-- **And the machine makes a noise: `assets/sounds/psx.mp3`, played from `setOnGlitch`.** Fired at the
-  instant the cartridge seats, before the first frame of the tear, because the flash and the sound are
-  the same event and a fanfare a frame late reads as a sound effect rather than as the machine coming on.
+- **And the machine makes two noises: `assets/sounds/Cartridge_In.mp3` on the release, and
+  `assets/sounds/psx.mp3` on the tear.** They overlap, and they are **two moments rather than one** —
+  which they were not to begin with, and the gap is the whole point. The clunk is the sound of the thing
+  *moving*, so it goes on `BootScreen.setOnSeating`, fired the instant the drag commits; the fanfare is
+  the machine noticing, so it stays on `setOnGlitch`, before the first frame of the tear, because the
+  flash and the fanfare are one event and a fanfare a frame late reads as a sound effect rather than as
+  the machine coming on.
+  - **Fired together, both began after the seat animation had already finished.** `seatTo` runs a
+    `SETTLE` = 200 ms timeline and `startSequence` hangs off its `onFinished`, so the cartridge slid home
+    in silence and then landed with a noise once it had stopped — the picture and the sound describing
+    different moments. Two tenths of a second is small and it is exactly the length of the only motion
+    the sound is meant to be describing.
+  - **The clunk is guarded against the smoke test and the fanfare is not, and that asymmetry is real.**
+    `onGlitch` is unreachable in a screenshot run — the seat timeline never gets a pulse, so
+    `startSequence` never runs — while `onSeating` hangs off the gesture, which the smoke test genuinely
+    performs. Without the guard in `App`, taking a screenshot would play two seconds of audio into a
+    build log.
+  - **`[smoke] cartridge clunk` is the only thing that can see when it fires**, because the sound is
+    suppressed in exactly the run that could check it: what is read is the callback rather than the
+    audio. A clunk that slipped back onto the tear would simply never fire there and **no picture would
+    differ**.
+  - **Adding that check found the full drag had been a no-op for a milestone.** `fireDrag(handle,
+    travel)` sat *after* the glitch and show previews, which put the screen into a phase that correctly
+    refuses the gesture — so every press, drag and release was dropped on the floor and the line beside
+    it read as a check. It runs before the previews now, while the screen is still waiting for a
+    cartridge, and `[smoke] boot full drag` says whether it was accepted.
+  - **Two `SoundEffect`s rather than two calls on one, and that is forced rather than chosen.** One
+    effect is one output line, and `play()` begins with `stop()` — so asking a single one for the second
+    sound would cut the first off a millisecond after it started. They are separate fields on `App` and
+    therefore separate lines, which is the only way they can overlap at all.
+  - **They do not fight, and that was measured rather than hoped for.** The clunk is **2.06 s** and the
+    fanfare's own envelope opens with a quiet chime out to 2.75 s (the same measurement the show's
+    timings come off), so the mechanical noise lands entirely inside the quietest part of the music —
+    with the extra 200 ms of head start it now has, more so rather than less. That is also what a console
+    sounds like: the cartridge going home and the chime starting are one event with two sounds in it.
+  - **Both cartridge sounds are mono where the fanfare is stereo**, so they are the only things shipped
+    in the jar that take `PcmFormat`'s **two-stage** conversion — decode, then resample and mix up to
+    44.1 kHz stereo. §6 documents that path and notes that "almost every real file" takes the one-step
+    one, which means nothing else here would ever notice it breaking. `[smoke] cartridge sounds` decodes
+    both by name and prints their lengths for exactly that reason.
   - **`audio/SoundEffect` opens a line of its own**, and that is the whole design rather than a
     convenience. The application's existing `SourceDataLine` belongs to the *music*: it is the clock the
     runner's entire lookahead is read off (`position()` counts the frames that line has rendered), so
@@ -700,6 +786,88 @@ sort of thing that looks fine in every screenshot.
   one per movement of the show - `-boot-presents`, `-boot-title`, `-boot-hold`, `-boot-loading`,
   `-boot-fade`.
 
+### The glass on the two bracket screens (`ui/CrtEffect`)
+
+**A curved tube — rounded corners, a bowed raster, a lit rim, a sheen and a slow sync roll — over the
+boot and shutdown screens and nowhere else.** Those two are the only places in the application that draw
+no interface at all — they are the console rather than the software — which is exactly what makes them
+the only two where a picture *of a display* is the right idea. Everywhere else the 8-bit look comes from
+hard edges and sixteen colours; here it comes from the tube those colours would have arrived on.
+
+- **Fenced deliberately.** The same treatment over the library would be a filter somebody chose rather
+  than the hardware, and over the runner it is a full-canvas alpha composite competing with the game for
+  a frame budget that has no GPU behind it (§7). This is a property of the two screens, not a mood
+  option and not a setting.
+- **The curvature is the shape of the *mask*, and the picture behind it stays flat.** Barrel-distorting
+  the drawn frame is a full-canvas pixel remap per frame, on the machine §7 established has no GPU — the
+  single most expensive thing this application could ask for, in front of a screen whose whole job is to
+  appear instantly. What the eye actually reads on two mostly-black screens is the **corner shape** and
+  the **bow of the scanlines**, and both of those are properties of the glass, so both are baked. Do not
+  "finish the job" by warping the content.
+- **`CURVATURE` and `CORNER_SHARE` are two knobs, and they were one to begin with.** Reading the
+  silhouette off the raster's own warp gives a region that meets the window at exactly four points — the
+  middles of its edges — and falls away from all four. That is a **lens, not a television**: the sides
+  bowed in over their whole height and the corners closed to points. The screenshot said so immediately
+  and nothing else would have. Split, the raster can sag hard enough to see (0.12) while the outline
+  stays a rounded rectangle (0.13 of the shorter side ≈ 104 px of corner here) — and the warp still
+  feeds `edgeDistance`, so the sides bulge gently the way the front of a tube does.
+- **The mask is rasterised once and blitted, never drawn row by row.** Scanlines are the obvious thing
+  to write as a loop of one-pixel `fillRect`s, and at this window's height that is around four hundred
+  calls a frame on a software rasteriser. Every part of the glass — curvature, grille, vignette, glass
+  edge, rim, case and sheen — is static for a given size and palette, so all of it bakes into one
+  `WritableImage` and costs exactly one `drawImage` afterwards. Same lesson `MoodOverlayRenderer` learned
+  pre-tiling its layers, applied before it could cost anything. The cache is keyed on the palette **by
+  identity**, exactly as the level meters' colour ramp is: a `Palette` is immutable, so a different look
+  is always a different object.
+- **Two colours in one blit, and the arithmetic is exact rather than close.** The glass both darkens
+  (towards `SHADOW`) and *lifts* (towards `TEXT_PRIMARY`, for the rim and the sheen). Source-over of a
+  shade `s` then a lift `t` collapses to one fill: `alpha = 1 - (1-s)(1-t)`, carrying `s(1-t)` of the
+  shadow and `t` of the light, which sum to a whole colour. Two images would have been the obvious way
+  and would cost twice the fill rate on the one machine that cannot afford it.
+  `theTwoDirectionsCollapseToOneFill` pins it against ideal sequential blending.
+- **No colour is named.** Everything darkens towards `SHADOW` and every lift goes towards `TEXT_PRIMARY`,
+  both out of whatever palette the caller passes — `Palette.hardware()` for both screens. Ground rule 7
+  is untouched.
+- **`SCANLINE_PERIOD` is 3, not 2.** At a fifty percent duty cycle half of every screen is darkened and
+  the effect stops reading as a grille and starts reading as the picture being dimmed, which is a
+  different thing. It also beats against the pixel font's own two- and three-pixel strokes and puts a
+  moire pattern through the title. Measured down a stroke of the 44px title on the real shot: **195
+  clear, 173 soft, 126 dark**, which is the 0.38 and 0.12 the constants ask for. The rows are counted
+  **on the tube rather than on the window**, which is what makes them bow.
+- **A vertical grille was deliberately left out.** An aperture mask is the obvious next cue and it is the
+  one that cannot be added safely: at a period of 3 it aligns with the font's three-pixel strokes and
+  alternates against its two-pixel ones, which is the same moire the paragraph above rejects a two-row
+  cycle for — in the axis where the strokes are thickest. The drama is spent on the curve instead.
+- **`RIM_LIFT` is load-bearing and is the only reason the corners are visible at all.** The case is
+  `SHADOW` and so is the room, so a corner blacked out is a corner nobody can see — the same trap that
+  ate one attempt at the boot glitch. What the eye reads is a **lit curve where the glass ends**, easing
+  back to `BEZEL_LIFT` over 16 px of moulded plastic. Set the lift to zero and the whole curvature
+  becomes invisible while every test about its geometry still passes.
+- **The other darkenings are invisible over bare room, and that is correct rather than a bug.** The
+  grille, the vignette and the glass edge all shade towards `SHADOW` — so they appear only where
+  something is drawn, which is what a tube does. See §"the boot screen", where tearing this image
+  sideways turned out to change not one pixel.
+- **`ROLL_SECONDS` is 9 — 0.11 Hz against §8b's 3 Hz cap on anything full-screen and rhythmic.** It is
+  the one thing on either screen that moves without being asked to, which is what stops a held frame
+  reading as an application that has frozen — the same job the boot screen's starfield and the companion
+  window's spinning record do. `ROLL_BANDS` went from 6 to 16 off a screenshot: the room is pure black,
+  so every step in the band's ramp is against nothing at all, and at six it read as three or four
+  horizontal bars rather than as a swell. Each band is now cut to `tubeHalfWidth` at its own row, so the
+  roll stops at the glass instead of running out over the case — which would say out loud that the
+  rounded corners are painted on.
+- **Anything laid out near the top or bottom of either screen is measured against `tubeHalfWidth`, not
+  against the window.** The corner arc costs real screen area and both screens' captions are centred, so
+  the prompt row and the skip-hint row are pinned by test (`theContentClearsTheCurve`): running a caption
+  into the case throws nothing and simply cuts it off.
+- Every quantity is a static pure function (`curveX`, `curveY`, `cornerRadius`, `edgeDistance`,
+  `insideTube`, `tubeHalfWidth`, `scanlineShade`, `vignetteShade`, `edgeShade`, `bezelLift`, `glareLift`,
+  `rollCentre`) for the usual reason: a one-pixel scanline looks the same in a still whether the period
+  is right or wrong, a vignette on a black ground is invisible except under something drawn on top, and
+  the roll is the one thing here that moves. `CrtEffectTest` is what can actually be checked — and it
+  earned its keep immediately, catching a `>=` that should have been `>` in the corner chord, which made
+  the outermost row of the tube report as *no* glass rather than as the straight span between the two
+  corners.
+
 ### The shutdown screen: ejecting the cartridge (`ui/ShutdownScreen`)
 
 **The application closes on a black screen with a sweeping bar on it, and it exists because closing used
@@ -741,13 +909,79 @@ work already done.
   that could be called off would be a state every view behind it would have to know about. The title bar
   goes with it, because a close button on a screen that is already closing can only be a second press
   that does harm.
+- **The picture tears as the contact breaks, and that is the same tear the boot screen draws.**
+  Pressing close is a cartridge being pulled out of a live slot, which is the insert's own electrical
+  event backwards, so `BootScreen.drawTear` is now one implementation called by both screens — a second
+  copy of it would be free to drift, and the way it would drift is the two ends of one session looking
+  like different machines. Three things differ, all of them deliberate:
+  - **It goes *over* the picture rather than instead of it.** The boot screen clears the room first
+    because its glitch replaces a phase; here the screen is already up, and a signal breaking up breaks
+    up whatever was being shown — the name, the bar and the caption.
+  - **There is no white flash.** A flash of light is *power arriving*; a screen that lit up as it was
+    cut off would be saying the opposite of what happened. That one paragraph is the whole of what the
+    shutdown does not borrow.
+  - **It finishes before the cartridge moves** (`GLITCH_OUT` = 0.15 against `EJECT_IN` = 0.18), because
+    the tear is the cause and the eject is what the machine does about it. Overlapping them puts both on
+    screen at once and reads as one confused event; in sequence it reads as two. At `EJECT_SECONDS` that
+    is 0.45 s against the insert's 0.55 s, and a test pins them to within a tenth of each other.
+- **And the cartridge comes back out, with `assets/sounds/Cartridge_Out.mp3` under it.** The boot screen
+  opens on a cartridge being pushed into a slot; this hands it back. They are one gesture and its
+  reverse, so this screen borrows the boot screen's geometry rather than inventing its own — the same
+  slot, the same hover gap, the same inlet measured off the artwork by `SpriteSheet.footprint` — and it
+  borrows the boot screen's rule about the name as well: **the title is on the screen while the cartridge
+  is not, and on the cartridge's own label once it is**. So the splash fades out as the cartridge rises
+  and the name reappears where a cartridge has always carried it, wrapped by the same `BootScreen.wrapName`
+  in the same places. The two are never on screen at once, in either direction. The rim of the slot cools
+  from `HIGHLIGHT` to `OUTLINE` as it leaves, which is the exact reverse of the boot screen's warming.
+  - **It starts halfway out, where the boot screen left it** — `BootScreen.seatedY`, asked rather than
+    re-derived, so the two screens are one continuous object instead of two animations that agree by
+    coincidence. Seated means `SEAT_SHARE` of the cartridge inside and the other 45% still above the lip;
+    beginning from entirely swallowed had the machine hand back something it had *eaten*, and spent the
+    first third of the travel climbing to a position nobody ever moved it away from.
+  - **Which forced the label to fade in**, because the cartridge is now on screen from the first frame
+    and its label is 68% of the artwork — most of it above the lip. Drawn unconditionally the name would
+    be across the screen *and* on the label at the same instant, which is the one thing both bracket
+    screens promise never happens. `plateAlpha` is written as `1 - splashAlpha` rather than as a second
+    ramp, so the handover holds by construction: two numbers meant to add to one are two numbers free to
+    drift, and the way they would drift is the title appearing twice.
+  - **One clock, every element a pure function of it** — `emergence`, `splashAlpha`, `blackout` — for the
+    reason the boot show has one: five timers is five places for the sequence to get out of step with
+    itself, and nowhere to ask what this looks like at a stated instant. Which is what `previewAt` needs,
+    since a still of a fade taken at the wrong moment is a still of an empty screen.
+  - **`EJECT_SECONDS` is 3.0 and is deliberately *not* the sound's length, which is the opposite of the
+    boot screen's arrangement.** There `setSequenceSeconds` takes the fanfare's own measured duration
+    because a first launch is an event worth standing still for. The eject sound is **7.71 s**, and
+    making somebody wait nearly eight seconds to close an application is precisely the hang this screen
+    exists to stop looking like. So the picture is fixed at three and the sound is faded out under the
+    blackout instead.
+  - **Quitting therefore waits for the animation as well as for the teardown**, `App.requestQuit`
+    exiting only when both are done. That is the cost of the feature and it is stated rather than
+    discovered: with a daemon running the teardown's five-second grace period dominates and the eject is
+    free; with none it is the whole of the wait, and the measured 8 ms below becomes **3007 ms**. Exiting
+    on the teardown alone would put a three-second animation up and close the window a frame into it,
+    which is the frozen dock this screen replaced with an extra class in front of it.
+  - **The sound is stopped at the blackout, not at the exit, and the two are separate callbacks for
+    that.** `setOnFading` fires at `FADE_OUT` and `setOnFinished` at the end; `SoundEffect.stop()` fades
+    over a quarter of a second, and the six tenths between them is the room that fade needs. Stopping it
+    at the exit would fade into a process that has already gone, and the tick that leaves is exactly what
+    `FADE_SECONDS` exists to prevent.
+  - **The window frame comes off too**, through `updateWindowFrame()` — which now decides from *four*
+    states rather than three. Same argument as the boot screen's, run backwards: three pixels of amber
+    around a black screen is the software's look outliving the software, and here there is not even a
+    title bar left for the border to be marking the edge of.
 - **The smoke test now closes through `requestQuit()` rather than `Platform.exit()`**, which is the only
   way to exercise it: the failure mode of getting a background teardown wrong is a process that never
   exits, and a run that closed itself by a different route than the close button uses would report
-  nothing about the route the user takes. Measured, with no daemon running: **8 ms**. The screen itself
-  is photographed separately by `captureShutdown`, which tears nothing down — running the real teardown
-  mid-run would close the sound card out from under every check after it.
-- Screenshot: `docs/screenshots/sdmk-shutdown.png`.
+  nothing about the route the user takes. Measured, with no daemon running: **8 ms of teardown**, inside
+  a **3007 ms** wait that is now the eject animation. The screen itself is photographed separately by
+  `captureShutdown`, which tears nothing down — running the real teardown mid-run would close the sound
+  card out from under every check after it. **It takes three shots**, `-shutdown-glitch`, `-shutdown`
+  and `-shutdown-eject`, because no two of the three things on this screen are ever there together and a
+  single picture would look like whichever two it missed had failed to draw. The instants live on
+  `ShutdownScreen.Moment` beside the timings, exactly as `BootScreen.Movement` does, rather than being
+  copied into the smoke test where the two could drift — and each is the **middle** of its movement,
+  since a still of the edge of a fade is a still of an empty screen.
+- Screenshots: `docs/screenshots/sdmk-shutdown.png`, `-shutdown-glitch`, `-shutdown-eject`.
 
 ### Sprites in the interface
 
@@ -1040,6 +1274,7 @@ com.eia.superdwarfkart
                   MoodSelectView, MoodCustomizerView, PixelEditorView,
                   MoodOverlayRenderer, GbaColorPicker,
                   BootScreen, ShutdownScreen (the two ends, both on Palette.hardware()),
+                  CrtEffect (the glass those two are seen through, and nothing else),
                   SpotifySearchDialog (add from Spotify, from the library's own header)
     └── visualizer/  StructureView (base) -> RoadView (base) -> CircuitView,
                      StraightView;  BstView extends StructureView directly,
@@ -2768,6 +3003,58 @@ enters a nested event loop and deadlocks a synchronous smoke test; and Spotify h
 `genres` on the artist object while still documenting it, which is why the add dialog's genre comes from
 the library's own knowledge of the artist instead.
 
+**Then four more, all asked for directly, all about the two bracket screens.** 1085 tests, up from 1068.
+
+| Change | Where |
+|---|---|
+| **The cartridge is killed the instant it seats** — it was still being drawn, torn, through the glitch | §"the boot screen" |
+| **Scanlines, a vignette and a sync roll on the boot and shutdown screens only** (`ui/CrtEffect`) | §"the glass on the two bracket screens" |
+| **`Cartridge_In.mp3` at the moment it seats**, on a second line beside the fanfare | §"the boot screen" |
+| **The cartridge is ejected on shutdown**, with `Cartridge_Out.mp3` under it | §"the shutdown screen" |
+
+**The finding in this batch is that the obvious way to write the glitch draws nothing at all.** With the
+artwork gone there is nothing left to tear, so the natural move is to blit `CrtEffect`'s own mask back a
+band at a time at an offset — and the mask darkens towards `SHADOW`, which on that screen *is* the ground.
+Black torn over black is a no-op: the screenshot came out byte-identical to the one before the change,
+with code that reads perfectly. It lights the raster instead. That is the third time this project has
+been caught by an effect that looks like a feature and changes no pixels — see also the mood importer's
+dither and the meters' colour ramp — and the tell is the same every time: **compare the picture, not the
+code.**
+
+**Then two more, both asked for directly, both about the same two screens.** 1096 tests, up from 1085.
+
+| Change | Where |
+|---|---|
+| **The clunk plays the moment the cartridge goes in**, on the release rather than two tenths of a second later on the tear | §"the boot screen" |
+| **The glass became a curved tube** — rounded corners, a bowed raster, a lit rim and a sheen | §"the glass on the two bracket screens" |
+
+**The finding in this batch is that one warp cannot be both the raster and the silhouette.** Reading the
+tube's outline off the same barrel curve that bows the scanlines gives a region touching the window at
+exactly four points and falling away from all four — **a lens, not a television**, with the sides bowed in
+over their whole height and the corners closed to points. The code is correct, every number in it is what
+it says it is, and the shape is simply wrong; the only thing that reported it was looking at the
+screenshot. Two knobs now: `CURVATURE` for the raster, `CORNER_SHARE` for the outline.
+
+**And the smoke check written for the clunk immediately found the drag it was checking had been dead.**
+The full-threshold `fireDrag` sat after the glitch and show previews, which put the screen into a phase
+that correctly refuses a gesture — so the press, the drag and the release were all dropped and the line
+beside it read as a passing check. **A check placed after something that changes state is not a check.**
+
+**Then three more, all asked for directly, all about the two bracket screens.** 1101 tests, up from 1096.
+
+| Change | Where |
+|---|---|
+| **The screen glitches as the cartridge is pulled out** — the insert's own tear, run at the other end | §"the shutdown screen" |
+| **The eject starts the cartridge halfway out**, where the boot screen left it, with the name handing over to its label | §"the shutdown screen" |
+| **The application fades in at launch** instead of appearing already drawn | §"the boot screen" |
+
+**The finding in this batch is not about any of them.** The launch fade was measured against an
+intermittent freeze in the fullscreen launch and looked, across four separate implementations, like the
+cause of it. It was not: a control run at the end of the session wedged six times out of six on
+untouched code, because the machine had been degrading under the experiment all along. The freeze is
+real, pre-existing and unexplained; the bisection that "found" it was measuring drift. See §11 — and
+§7, where this project learned the identical lesson about an animated wallpaper.
+
 **Stop after each milestone and report exactly how to test it before continuing.**
 
 ---
@@ -3592,6 +3879,25 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
   tried to click rather than as a frozen thread — here, "the cartridge won't drag". Defer it with
   `Platform.runLater`. The rule is not "not during a smoke test", it is **not while anything is holding
   the interface thread**.
+- **The fullscreen launch still freezes sometimes, it did so before any of this was written, and it is
+  not understood.** `Stage.setFullScreen` blocks in a nested event loop until macOS finishes its own
+  transition, and on this machine that transition intermittently never finishes — leaving the interface
+  thread `RUNNABLE` in `MacApplication._enterNestedEventLoopImpl` and the application drawn and
+  completely deaf, exactly as the entry above describes. Deferring the call out of `start()` made it
+  rare rather than certain. **Try a logout or a restart first**: the rate climbs steeply as fullscreen
+  windows are killed outright, each of which leaves its own Space behind.
+- **And the way that was nearly misdiagnosed is worth more than the finding.** The launch fade was
+  suspected, and four independent implementations of it — dimming the stage before `show()`, dimming it
+  after, fading the scene's root, and a full-canvas fill over the boot screen — each measured **far**
+  worse than an untouched launch: about 10 wedges in 16 runs against 2 in 12. Every one of those
+  comparisons was wrong. A control run at the *end* of the session wedged **6 times out of 6** on code
+  that had never been touched. The environment had been degrading throughout, so the effect attributed
+  to the fade was drift.
+
+  This is §7's `flurry` lesson arriving a second time in a different room, and the tell is the same:
+  **a rate measured against an environment that is changing under the experiment is not a rate.**
+  Interleave the control rather than running it once at the start, and ask what state the *machine* is
+  in before concluding anything about the code.
 - **Nothing called from inside `runSmokeTest` may enter a nested event loop.** `Stage.setFullScreen`
   does, on macOS: it does not return until the platform's fullscreen transition has finished, and that
   transition can never finish while a synchronous check is holding the interface thread. The run wedged
@@ -3630,6 +3936,35 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
   distance from white wobbles because the hues are not equally far from it, so a "it only ever gets
   closer" assertion is false against correct code. Assert the *envelope* — the room the hue has left —
   which is what the interpolation actually guarantees.
+- **Darkening something that is already the darkest colour on screen changes nothing, and it compiles.**
+  `CrtEffect`'s mask shades towards `SHADOW`; both bracket screens *are* `SHADOW`. So tearing that mask
+  sideways to break the boot glitch up drew a perfect no-op — the screenshot came out identical to the
+  one before the change, and nothing anywhere said so. The rule generalises past this one case: **an
+  effect whose colour is the ground it is drawn on is invisible by construction**, and the only way to
+  find out is to compare the picture rather than to re-read the code. Light the thing instead, where it
+  has somewhere to go.
+- **A whole-screen effect can only be seen where something is drawn.** That is correct for a scanline
+  grille and it means a screenshot of one on a mostly-black screen proves very little; read the pixels
+  down a column of text instead (a title row should read clear/soft/dark on a three-row cycle).
+- **The same rule is why the tube's rounded corners need a *lit* rim rather than a black bezel.** Blacking
+  the corners out is the obvious way to shape a screen and on these two it changes nothing anybody can
+  see. `CrtEffect.RIM_LIFT` is what the eye actually reads, and every geometry test about the curvature
+  passes with it set to zero.
+- **A curvature that shapes the raster and a curvature that shapes the screen are two different numbers.**
+  One barrel warp doing both gives a lens: a region touching the window at its four edge-midpoints and
+  falling away from all of them, sides bowed over their whole height, corners closed to points. Nothing
+  reports it and it is obvious in one screenshot. `CURVATURE` bows the scanlines; `CORNER_SHARE` rounds a
+  rectangle.
+- **A smoke check placed after something that changes state may be checking nothing.** The boot screen's
+  full-threshold drag sat after the glitch and show previews, which move it into a phase that correctly
+  refuses a gesture — so the press, drag and release were dropped on the floor for a whole milestone
+  while the line beside it read as a passing check. Both `[smoke] boot full drag` and
+  `[smoke] cartridge clunk` exist because that only came to light when a *second* check was hung off the
+  same gesture.
+- **`static final` primitives are inlined into the classes that read them, so tuning one and running
+  `./mvnw test` without `clean` tests the old value.** Changing `CrtEffect.RIM_LIFT` from 0.20 to 0.18
+  produced `expected: <0.2> but was: <0.18>` from an untouched test — which reads exactly like a real
+  regression and is a stale `.class` file. `./mvnw clean test` after moving a constant.
 - **Smoothed pixel art.** JavaFX interpolates by default; the sprites turn to mush and it reads
   as a bug in the art, not in the code. `setImageSmoothing(false)`, integer scale factors.
 - **Moods: the four protected roles are the whole risk.** A mood that makes coins and bumps the
