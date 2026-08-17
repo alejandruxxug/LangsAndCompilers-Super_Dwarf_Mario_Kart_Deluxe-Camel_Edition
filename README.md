@@ -3,7 +3,9 @@
 A JavaFX desktop music player built around three **hand-written data structures**, with a
 beat-synchronised Mario-Kart-styled rhythm game riding on top of the audio it plays.
 
-Data Structures course project, Universidad EIA.
+A Data Structures course project, by [@mariajsosafdez](https://github.com/mariajsosafdez),
+[@SamuelBhoop](https://github.com/SamuelBhoop), Claude and
+[@alejandruxxug](https://github.com/alejandruxxug).
 
 > The name is intentional, underscores and hyphen included. It is styled after a ROM filename
 > and pairs with the 8-bit font. Short form: `SDMK_Deluxe`.
@@ -501,6 +503,18 @@ consulted. `SpotifyConfigTest` asserts each one and the smoke test prints them.
 ---
 
 ## Credits
+
+Built by:
+
+| | |
+|---|---|
+| [@mariajsosafdez](https://github.com/mariajsosafdez) | |
+| [@SamuelBhoop](https://github.com/SamuelBhoop) | |
+| Claude | Anthropic's Claude Opus, pair-programming throughout |
+| [@alejandruxxug](https://github.com/alejandruxxug) | |
+
+The same four names are the first thing the application shows — the boot sequence puts them on
+screen before the title, where a console names whoever made the hardware.
 
 **Press Start 2P** by CodeMan38, bundled under the SIL Open Font License 1.1. The full licence
 text ships alongside the font at `src/main/resources/fonts/OFL.txt`.

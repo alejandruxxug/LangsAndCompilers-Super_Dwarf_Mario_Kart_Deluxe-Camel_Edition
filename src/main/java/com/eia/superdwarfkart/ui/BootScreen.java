@@ -263,13 +263,25 @@ public class BootScreen extends Pane {
     private static final double PRESENTS_SIZE = 11;
 
     /**
-     * The line the machine shows before the title.
+     * The names the machine shows before the title.
      *
      * <p>The structural equivalent of a console's own first screen, which names whoever made the
-     * hardware before the game names itself. This is a Data Structures project for Universidad EIA, so
-     * that is what it says - and it is deliberately small, dim and gone before the title arrives.
+     * hardware before the game names itself - so this names the people who made this. Deliberately
+     * small, dim and gone before the title arrives: {@link #presentsAlpha} guarantees the two never
+     * share the screen, because a credit competing with the title is neither a credit nor a title.
+     *
+     * <p>Stacked rather than run together on one line. At {@link #PRESENTS_SIZE} in a fixed-width font
+     * four handles joined by separators is over 500 px of a screen whose whole point at that moment is
+     * that there is nothing on it, and it would read as a sentence rather than as a cast list.
      */
-    private static final String PRESENTS_LINE = "UNIVERSIDAD EIA";
+    private static final List<String> PRESENTS_LINES = List.of(
+            "@MARIAJSOSAFDEZ",
+            "@SAMUELBHOOP",
+            "CLAUDE",
+            "@ALEJANDRUXXUG");
+
+    /** How far apart the stacked credit lines sit, as a multiple of their own size. */
+    private static final double PRESENTS_LINE_HEIGHT = 1.6;
 
     /** How many horizontal bands the picture is torn into. */
     static final int TEAR_BANDS = 22;
@@ -1594,10 +1606,14 @@ public class BootScreen extends Pane {
     }
 
     /**
-     * The publisher line, up and away again before the title arrives.
+     * The credits, up and away again before the title arrives.
      *
      * <p>Small and dim, exactly as a console's first screen is: it is not the title and must not compete
      * with the one that follows it. {@link #presentsAlpha} guarantees they never share the screen.
+     *
+     * <p>Centred as a <em>block</em> on {@code centreY} rather than started at it, so the stack grows
+     * evenly in both directions and adding or losing a name does not shift the rest of the sequence
+     * against the title that follows.
      */
     private void drawPresents(GraphicsContext gc, Palette palette, double width, double centreY,
             double show) {
@@ -1607,7 +1623,14 @@ public class BootScreen extends Pane {
         }
         gc.setFont(Fonts.pixel(PRESENTS_SIZE));
         gc.setFill(palette.color(PaletteRole.TEXT_DIM, alpha));
-        gc.fillText(PRESENTS_LINE, Math.round(width / 2), Math.round(centreY));
+
+        double lineHeight = PRESENTS_SIZE * PRESENTS_LINE_HEIGHT;
+        double block = PRESENTS_LINES.size() * lineHeight;
+        double first = centreY - block / 2 + PRESENTS_SIZE;
+        for (int i = 0; i < PRESENTS_LINES.size(); i++) {
+            gc.fillText(PRESENTS_LINES.get(i), Math.round(width / 2),
+                    Math.round(first + i * lineHeight));
+        }
     }
 
     /**

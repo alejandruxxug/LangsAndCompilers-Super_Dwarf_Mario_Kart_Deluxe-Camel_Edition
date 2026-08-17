@@ -667,9 +667,19 @@ public class App extends Application {
             stage.setMaximized(true);
         }
         stage.show();
-        // True fullscreen, and after show() because that is the only point a stage will take it. The
-        // maximised size above becomes what the window restores to when the display is handed back,
-        // so both layouts still have to be right.
+        // True fullscreen, and NOT from inside start(). Stage.setFullScreen enters a nested event loop
+        // on macOS and does not return until the platform's transition has finished - and that
+        // transition can never finish while start() is still on the stack, because the launcher has not
+        // handed the thread back to normal event dispatch yet. Measured, before this was deferred: the
+        // FX thread sat RUNNABLE in MacApplication._enterNestedEventLoopImpl for as long as the
+        // application was left open, entered from MacView._enterFullscreen. The window drew perfectly -
+        // the boot screen was painted before the call - and then processed no input at all, so the
+        // cartridge could not be dragged and the application could only be killed. A rendered, frozen
+        // window is the worst shape this fault could take: nothing throws and nothing looks wrong.
+        //
+        // Platform.runLater puts it on a later pulse, once start() has returned and the outer event
+        // loop is running, which is what lets the nested one complete. This is the same trap the smoke
+        // test documents - see smokeTest() - reached by a different road.
         //
         // Skipped whole during a smoke test rather than just its setFullScreen call, and that is a
         // stronger exemption than the one smokeTest() describes: the frame comes off in this mode, so
@@ -677,7 +687,7 @@ public class App extends Application {
         // leave the checks measuring a window that is not the one a user opens. The mode is exercised
         // on its own instead - see reportWindowFullscreen.
         if (!Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
-            setWindowFullscreen(true);
+            Platform.runLater(() -> setWindowFullscreen(true));
         }
 
         if (Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {

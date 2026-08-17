@@ -299,6 +299,28 @@ so they are two flags rather than one — `App.windowFullscreen` and `App.fullsc
   inside one leaves that Space on screen, empty, with the companion stranded on the desktop behind it.
   It does **not** put it back on expanding: "taken out" is the whole of what was asked for, and a window
   that silently re-took the display on the way back would be a surprise.
+- **`setFullScreen` must not be called from inside `start()`, and this froze the whole application.**
+  It enters a nested event loop on macOS and does not return until the platform's transition finishes —
+  and that transition can never finish while `start()` is still on the stack, because the launcher has
+  not handed the thread back to normal event dispatch yet. **Measured** with `jstack` on the real run:
+  the FX Application Thread sat `RUNNABLE` in `MacApplication._enterNestedEventLoopImpl` for 574
+  seconds, entered from `MacView._enterFullscreen` ← `Stage.setFullScreen` ← `App.start`.
+
+  **The symptom is the worst shape this could take: a window that draws perfectly and accepts no
+  input.** The boot screen was painted before the call, so it looked completely normal — and then the
+  cartridge could not be dragged, no key did anything, and the only way out was to kill the process.
+  Nothing threw, nothing was logged, and it was reported as "it won't let me drag down the cartridge",
+  which sounds like a hit-testing bug and is not one.
+
+  `Platform.runLater(() -> setWindowFullscreen(true))` is the fix: a later pulse, once `start()` has
+  returned and the outer loop is running, is what lets the nested one complete. **This is §"the smoke
+  test" deadlock reached by a different road** — the same call, the same nested loop, a different
+  reason the thread was busy — and it was written *after* that warning was already in this file, which
+  is worth knowing: the note said "during a smoke test" and the real constraint is "while anything is
+  holding the FX thread", `start()` included.
+
+  Confirmed after the fix, at the real fullscreen geometry (stage 1800x1130, `fullScreen=true`), by
+  driving the gesture with real mouse events: `short drag: refused`, `full drag: SEATED`.
 - **The launch into it is skipped whole during a smoke test**, which is a stronger exemption than the
   `setFullScreen` one below. The frame comes off in this mode, so launching into it would take the
   border out of *every screenshot the run photographs* and leave the layout checks measuring a window
@@ -3563,6 +3585,13 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
   right. `setManaged(false)` on the canvas, or hold it in a plain `Pane` (whose minimum is just its
   insets) as every other view here does. This is what `MoodOverlayRenderer` did to the restore
   button, and `[smoke] window shrink` is what now catches it.
+- **`Stage.setFullScreen` may not be called from `Application.start()` either**, and the reason is the
+  same as the smoke test's: the nested event loop it enters cannot finish while the launcher still has
+  the FX thread. Measured at 574 s wedged in `MacApplication._enterNestedEventLoopImpl`. **The window
+  draws first and then accepts no input at all**, so it reads as a hit-testing bug in whatever the user
+  tried to click rather than as a frozen thread — here, "the cartridge won't drag". Defer it with
+  `Platform.runLater`. The rule is not "not during a smoke test", it is **not while anything is holding
+  the interface thread**.
 - **Nothing called from inside `runSmokeTest` may enter a nested event loop.** `Stage.setFullScreen`
   does, on macOS: it does not return until the platform's fullscreen transition has finished, and that
   transition can never finish while a synchronous check is holding the interface thread. The run wedged
