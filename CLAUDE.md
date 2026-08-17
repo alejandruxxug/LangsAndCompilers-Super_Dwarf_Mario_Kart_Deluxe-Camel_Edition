@@ -1497,6 +1497,29 @@ smoke test prints all of it and re-derives it every launch.
   **The rule this leaves behind: a new full-canvas effect is not free here, it is about ten
   milliseconds.** Anything screen-wide that wants to be added has to go through `drawWashes` and be
   composited with the others, not painted on top of them.
+
+  **Corrected the same day, and it changes what the numbers above mean rather than whether they were
+  right: a `flurry` animated-wallpaper process was running on the machine throughout, and that is
+  most of what "very laggy" actually was.** The hardware is an **M4 Mac** — not a slow machine, and
+  never the constraint this section reads as describing. An animated wallpaper repainting the desktop
+  continuously competes for exactly the resource a software rasteriser needs, so every figure above
+  was measured under contention nobody knew was there.
+
+  What survives unchanged: **the Prism fallback is real** — `-Dprism.verbose=true` says so whatever
+  else is running, and the version sweep stands. The three optimisations are correct, pixel-identical
+  and worth keeping; one composited fill instead of three is simply the better way to write it. And
+  the *relative* shape of the wash measurement — that the third full-canvas fill costs materially
+  more than the second — is a fill-rate result that contention scales rather than invents.
+
+  What does not survive: **the absolute milliseconds, and the conclusion drawn from them.** 29.7 ms
+  for an empty frame is a number from a busy machine, and it has **not** been re-measured on a quiet
+  one — so do not quote it, and do not treat this project as one that has to be designed inside a
+  starved CPU budget. The ten-millisecond rule above is a good habit and a bad law.
+
+  **The lesson is the cheap check that was never run.** Three JavaFX versions were swept, the
+  transparent stage was ruled out by measurement, and the wash count was bisected — all of it careful,
+  all of it inside the application, and none of it asked what else was on the machine. Before the next
+  "it feels laggy" becomes a rendering investigation, look at the process list first.
 - **The palette is too dark to draw a road from two adjacent surface roles.** `SURFACE` and
   `SURFACE_RAISED` are a few 5-bit steps apart, and the first version drew a correct road nobody
   could see against the verge. The lit band is `mix(SURFACE_RAISED, TEXT_DIM, 0.22)` — a *distance
@@ -2985,11 +3008,16 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
   is formatting `m:ss`. This cost a milestone's worth of "the game feels laggy" — see §7, M7.
 - **Measuring a `Canvas` by timing `redraw()` measures nothing but the command recording.** The
   frame-to-frame interval is the honest number; `-Dsdmk.diag` prints it.
-- **There is no GPU: Prism falls back to its software pipeline on this machine**, so a full-canvas
-  fill costs about ten milliseconds at the maximised window size and fill rate is the whole budget.
-  Check with `-Dprism.verbose=true` before believing any performance reasoning that assumes
-  hardware compositing. A new screen-wide effect must be composited into `RunnerView.drawWashes`
-  rather than painted over the top of the existing ones — see §7.
+- **There is no GPU: Prism falls back to its software pipeline on this machine**, so fill rate is
+  the budget and a full-canvas fill is one of the more expensive things the runner can do. Check
+  with `-Dprism.verbose=true` before believing any performance reasoning that assumes hardware
+  compositing. A new screen-wide effect should be composited into `RunnerView.drawWashes` rather
+  than painted over the top of the existing ones — see §7.
+- **Ask what else is running on the machine before treating "it feels laggy" as a rendering bug.**
+  The whole of §7's software-pipeline investigation was measured against a `flurry` animated
+  wallpaper repainting the desktop the entire time, on an **M4 Mac** — so the absolute frame times
+  recorded there are contention, not a hardware ceiling, and have not been re-measured on a quiet
+  machine. Three JavaFX versions were swept before anyone looked at the process list.
 - **`Song.getFilePath()` returns `null` for a streamed song.** Nothing in the type system says so.
   Go through `Song.locator()`, or ask `isSpotify()` first — the places this was got wrong were a
   details panel, an index request, an edit dialog and **the whole beatmap pipeline**, all of which
