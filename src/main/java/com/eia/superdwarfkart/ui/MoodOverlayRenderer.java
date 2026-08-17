@@ -166,6 +166,18 @@ public class MoodOverlayRenderer extends StackPane {
         // still hovering correctly - the exact fault that ate the companion window's transport.
         backdrop.setMouseTransparent(true);
         overlay.setMouseTransparent(true);
+        // And neither may take part in the layout, which is a separate rule from the one above and
+        // was learned the harder way. A StackPane's minimum size is the largest of its children's,
+        // and a Canvas is not resizable - it reports its own width as its minimum. So two canvases
+        // sized *to* this pane make the pane's minimum whatever the pane last was, and this pane is
+        // the whole middle of the window: it could grow and then never shrink again. Restoring a
+        // maximised window left every view still laid out at the maximised size with the window's
+        // edge cutting through it, which reads as the interface failing to redraw rather than as a
+        // minimum nothing can go under. Unmanaged, they are excluded from the minimum and from the
+        // layout pass; they still sit at (0,0) spanning the pane, because that is where a child
+        // nobody positions stays, and resized() is what gives them their size.
+        backdrop.setManaged(false);
+        overlay.setManaged(false);
 
         getChildren().addAll(backdrop, content, overlay);
 

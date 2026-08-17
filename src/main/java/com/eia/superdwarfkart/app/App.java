@@ -143,6 +143,17 @@ public class App extends Application {
     private static final double COMPLEXITY_HEIGHT = 350;
 
     /**
+     * How much bigger than its restore size the smoke test grows the window before shrinking it
+     * back, in pixels.
+     *
+     * <p>Any amount would do - the fault is a minimum that ratchets, so one pixel of growth pins it
+     * as well as a screenful. This is roughly the difference between the restored window and a
+     * maximised one on this machine, which makes the printed numbers the ones the restore button
+     * actually produces.
+     */
+    private static final double SHRINK_PROBE_GROWTH = 360;
+
+    /**
      * Width of the meter column on the right, in pixels.
      *
      * <p>This is where the three-lane runner goes when it is built; the meters already sit where
@@ -1428,6 +1439,7 @@ public class App extends Application {
 
         boolean headerOk = reportHeader(scene);
         boolean foldOk = reportStructureFold(scene);
+        boolean shrinkOk = reportWindowShrink(scene);
 
         reportAudio();
         reportBeatmap();
@@ -1490,6 +1502,9 @@ public class App extends Application {
         }
         if (!headerOk) {
             failures.add("header fit");
+        }
+        if (!shrinkOk) {
+            failures.add("window shrink");
         }
         if (!foldOk) {
             failures.add("dsa fold");
@@ -1733,6 +1748,59 @@ public class App extends Application {
                 stopped ? "  (view stopped)" : "  VIEW STILL DRAWING WHILE HIDDEN",
                 cameBack && drawingAgain ? "" : "  DID NOT COME BACK");
         return widthGiven && stopped && cameBack && drawingAgain;
+    }
+
+    /**
+     * Grows the window and shrinks it back, and reports whether the interface followed it down.
+     *
+     * <p><strong>A window can only grow if anything inside it has a minimum size larger than the
+     * window is.</strong> The application comes up maximised and restores to
+     * {@link AppConfig#MAIN_WIDTH}, so that is not a corner case - it is the restore button, and it
+     * is what this catches. The fault it was written for is that
+     * {@link com.eia.superdwarfkart.ui.MoodOverlayRenderer} is a {@code StackPane} holding two
+     * canvases sized <em>to itself</em>: a {@code Canvas} is not resizable and reports its own width
+     * as its minimum, so the pane holding the whole middle of the window could never go under
+     * whatever it last was. Restoring left every view still laid out at the maximised size with the
+     * window's edge cutting through it.
+     *
+     * <p>Nothing else can see this. A screenshot is taken at one size, so it photographs a perfectly
+     * good interface; the crop is only ever visible in the second size. And a unit test cannot reach
+     * it either - the quantity is a minimum computed by a live scene graph.
+     *
+     * <p>The <em>root</em> is resized rather than the stage, because a stage resize on this platform
+     * comes back through the window system on a later pulse and the smoke test is holding the
+     * interface thread. Resizing the root is what the scene itself does when the stage changes size,
+     * and it is synchronous. It is put back to the pixel afterwards.
+     *
+     * @param scene the scene, laid out between each step
+     * @return whether the middle of the window grew and came back
+     */
+    private boolean reportWindowShrink(Scene scene) {
+        layoutNow(scene);
+        double startWidth = shell.getWidth();
+        double startHeight = shell.getHeight();
+        double before = centreWidth();
+
+        shell.resize(startWidth + SHRINK_PROBE_GROWTH, startHeight + SHRINK_PROBE_GROWTH);
+        layoutNow(scene);
+        double grown = centreWidth();
+
+        shell.resize(startWidth, startHeight);
+        layoutNow(scene);
+        double back = centreWidth();
+
+        // Stated against the window rather than against the number it started at: what the restore
+        // button asks for is a middle that fits inside the window, and a middle wider than the
+        // window it is in is precisely the crop being looked for.
+        boolean fitsAgain = back <= startWidth + 1 && Math.abs(back - before) < 1;
+        boolean grewWithIt = grown > before + 1;
+
+        System.out.printf("[smoke] window shrink     : centre %.0f -> %.0f -> %.0f px "
+                        + "in a window of %.0f%s%s%n",
+                before, grown, back, startWidth,
+                grewWithIt ? "" : "  DID NOT GROW",
+                fitsAgain ? "" : "  STUCK WIDE - THE WINDOW WILL CROP IT");
+        return grewWithIt && fitsAgain;
     }
 
     /**

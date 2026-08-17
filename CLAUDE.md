@@ -2042,6 +2042,27 @@ title bar with it.
   §11 for the third time: a `Canvas` is picked over its whole rectangle whatever it has drawn, and
   these two span the window. Left pickable, the overlay would swallow every click in the application
   while still hovering correctly.
+- **And both are `setManaged(false)`, which is a different rule and was missed until 2026-08-16.**
+  A `StackPane`'s minimum size is the largest of its children's, and a `Canvas` is not resizable — it
+  reports its own width as its minimum. Two canvases sized *to* this pane therefore made the pane's
+  minimum **whatever the pane last was**, and this pane is the whole middle of the window: it could
+  grow and then never shrink again. Measured, the `StackPane` holding an 1800px canvas answers
+  `minWidth = 1800` where a plain `Pane` answers 0 — which is why every *other* canvas view here
+  (`BootScreen`, `LevelMeterView`, `BeatmapTimeline`, `ComplexityScatter`, and the `CanvasHolder`
+  inside `RunnerView` and `StructureView`) is a `Pane` and never had this. **Reported as the window
+  cropping its views instead of resizing them**, which is exactly what it looked like: the
+  application comes up maximised, and the restore button then left every view still laid out at
+  1800px with the window's edge cutting through it. Unmanaged, the canvases are excluded from the
+  minimum *and* from the layout pass, and stay at (0,0) spanning the pane — which is where a child
+  nobody positions sits, and `.mood-overlay` has no insets to make that a lie. `resized()` is still
+  what gives them their size.
+- **`[smoke] window shrink` is the check, and nothing else could be.** A screenshot is taken at one
+  size, so it photographs a perfectly good interface — the crop only exists at the *second* size —
+  and the quantity is a minimum computed by a live scene graph, which no unit test here can reach.
+  It grows the shell, shrinks it back and prints `centre 809 -> 1169 -> 809 px in a window of 1440`;
+  before the fix the last number was 1169. It resizes the **root** rather than the stage, because a
+  stage resize comes back through the window system on a later pulse and the smoke test is holding
+  the interface thread.
 
 **The measurement, and the 58 fps target it fails.** The figure the spec asks for is unreachable on
 this machine, and not because of this milestone: **a frame with no layers at all already takes
@@ -3080,6 +3101,14 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
   little it has drawn. The control still hovers and still does nothing, and the keyboard path keeps
   working so every key-driven test stays green. `setMouseTransparent(true)` on any canvas that
   overlaps something clickable.
+- **A `Canvas` in a `StackPane` stops the window ever getting smaller.** Different rule, same class:
+  a `StackPane`'s minimum is the largest of its children's minimums, and a non-resizable node reports
+  its own size as its minimum — so a canvas sized to its parent pins that parent at whatever it last
+  was. The symptom is a window that grows and then **crops** its contents instead of relaying them
+  out, which reads as a failure to redraw; nothing throws and a screenshot at either size looks
+  right. `setManaged(false)` on the canvas, or hold it in a plain `Pane` (whose minimum is just its
+  insets) as every other view here does. This is what `MoodOverlayRenderer` did to the restore
+  button, and `[smoke] window shrink` is what now catches it.
 - **A hex literal anywhere outside `mood/`** — it looks harmless per site and turns M11 into a
   find-and-replace across a finished UI, which is where the feature gets abandoned.
 - **Smoothed pixel art.** JavaFX interpolates by default; the sprites turn to mush and it reads
