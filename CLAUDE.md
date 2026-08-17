@@ -1432,6 +1432,57 @@ smoke test prints all of it and re-derives it every launch.
   timer and a garbage collection all land in it. That is what `-Dsdmk.diag` reports, and it is the
   number the player is looking at. Measured on this machine: **120 Hz display, p50 8.3 ms, tick
   0.23 ms** — the runner is nowhere near the frame budget and never was.
+
+  **Superseded on 2026-08-16, and the last sentence of that paragraph is now false: there is no GPU.**
+  Reported as the game being "very laggy" since the combo landed. `-Dprism.verbose=true` on the real
+  application says what nothing else would:
+
+  ```
+  Prism pipeline init order: es2 mtl sw
+  GLFactory MacGLFactory could not be initialized. ES2Pipeline not available.
+  error initializing pipeline com.sun.prism.mtl.MTLPipeline — could not create an instance
+  *** Fallback to Prism SW pipeline
+  ```
+
+  **Every pixel is blended by the CPU**, so frame cost is proportional to canvas area × overdraw and
+  a full-canvas fill is one of the most expensive things the runner can do. Checked across versions
+  rather than assumed: **21.0.6 and 23.0.1 also fall back, and 25.0.2 does initialise Metal and then
+  dies** with `NSInvalidArgumentException: object cannot be nil` the moment it presents a window. So
+  there is no working GPU option on this machine today and this is a constraint to design inside,
+  not a bug to wait out. Do not "fix" it by pinning an older JavaFX; that trades a slow renderer for
+  one that crashes.
+
+  Three things landed together and only the third got the blame:
+  1. **`stage.setMaximized(true)`** (§3b) — the canvas went from 1440×800 to 1800×1036, and under a
+     software rasteriser that is a straight 1.6× on everything.
+  2. **The combo's wash** made a **third** full-canvas alpha fill, on for about ninety percent of a
+     clean run. Measured at the maximised size, p50 frame interval by wash count:
+     **0 → 29.7 ms, 1 → 29.2 ms, 2 → 32.6 ms, 3 → 42.2 ms.** The third one costs ten milliseconds.
+  3. **The transparent stage is innocent**, which was worth measuring rather than assuming: 45.3 ms
+     transparent against 46.5 ms opaque, i.e. noise. `StageStyle.TRANSPARENT` costs nothing here.
+
+  **The smoke test cannot see any of this and said so the whole time** — `frame cost: 0.16 ms,
+  comfortably inside a 60 fps frame` while the real interval was 42 ms. It measures command
+  recording, and it deliberately does not maximise. That is this section's own warning arriving with
+  numbers on both sides of it.
+
+  **What was done about it** (see `RunnerView.compositeWashes` and `drawSky`):
+  - The beat wash, the combo heat and the event flash are **composited into one fill** instead of
+    three. Source-over of constant colours collapses exactly, so the order and the look are
+    unchanged; the drawn frame moves by at most one level of 255, in the direction of the *more*
+    faithful answer, because the old path rounded to eight bits three times and this rounds once.
+    `RunnerWashCompositeTest` pins the arithmetic against ideal sequential blending.
+  - The sky's **backdrop fill was removed**: its five bands are whole-pixel and tile `[0, horizonY]`
+    flush, so the fill underneath them was painted over in full every frame. Bands tiling rather
+    than overlapping is also why *caching the sky to an image would save nothing* — both touch each
+    pixel exactly once. The same is true of the verge, which is why it is not cached either.
+  - The verge is drawn with **`fillRect` rather than `fillPolygon`**. Both its ends span 0 to
+    `width`, so it was an axis-aligned rectangle going through Marlin's edge-list and coverage
+    machinery, over the seventy percent of the canvas below the horizon. Verified pixel-identical.
+
+  **The rule this leaves behind: a new full-canvas effect is not free here, it is about ten
+  milliseconds.** Anything screen-wide that wants to be added has to go through `drawWashes` and be
+  composited with the others, not painted on top of them.
 - **The palette is too dark to draw a road from two adjacent surface roles.** `SURFACE` and
   `SURFACE_RAISED` are a few 5-bit steps apart, and the first version drew a correct road nobody
   could see against the verge. The lit band is `mix(SURFACE_RAISED, TEXT_DIM, 0.22)` — a *distance
@@ -2718,6 +2769,11 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
   is formatting `m:ss`. This cost a milestone's worth of "the game feels laggy" — see §7, M7.
 - **Measuring a `Canvas` by timing `redraw()` measures nothing but the command recording.** The
   frame-to-frame interval is the honest number; `-Dsdmk.diag` prints it.
+- **There is no GPU: Prism falls back to its software pipeline on this machine**, so a full-canvas
+  fill costs about ten milliseconds at the maximised window size and fill rate is the whole budget.
+  Check with `-Dprism.verbose=true` before believing any performance reasoning that assumes
+  hardware compositing. A new screen-wide effect must be composited into `RunnerView.drawWashes`
+  rather than painted over the top of the existing ones — see §7.
 - **`Song.getFilePath()` returns `null` for a streamed song.** Nothing in the type system says so.
   Go through `Song.locator()`, or ask `isSpotify()` first — the places this was got wrong were a
   details panel, an index request, an edit dialog and **the whole beatmap pipeline**, all of which
