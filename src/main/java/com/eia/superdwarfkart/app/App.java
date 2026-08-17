@@ -32,6 +32,7 @@ import com.eia.superdwarfkart.mood.GbaColor;
 import com.eia.superdwarfkart.mood.Mood;
 import com.eia.superdwarfkart.mood.MoodRepository;
 import com.eia.superdwarfkart.mood.Moods;
+import com.eia.superdwarfkart.mood.Palette;
 import com.eia.superdwarfkart.mood.PaletteImporter;
 import com.eia.superdwarfkart.mood.PaletteRole;
 import com.eia.superdwarfkart.mood.PixelTile;
@@ -74,7 +75,11 @@ import com.eia.superdwarfkart.ui.Theme;
 import com.eia.superdwarfkart.ui.visualizer.OperationCounter;
 import com.eia.superdwarfkart.ui.visualizer.PresentationView;
 import com.eia.superdwarfkart.ui.visualizer.StructureVisualizer;
+import javafx.animation.Interpolator;
+import javafx.animation.KeyFrame;
+import javafx.animation.KeyValue;
 import javafx.animation.PauseTransition;
+import javafx.animation.Timeline;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
@@ -256,6 +261,23 @@ public class App extends Application {
      * fully up before there is anything to listen to.
      */
     private static final Duration LAUNCH_FADE = Duration.millis(650);
+
+    /**
+     * How long the application takes to come up out of the black the boot screen leaves behind, and
+     * how long the fanfare takes to fade out under it.
+     *
+     * <p><strong>One length for both, which is the whole point of the constant.</strong> The picture
+     * and the sound are two halves of a single handover - the machine has finished reading and the
+     * software arrives - and two numbers that are meant to describe one moment are two numbers free
+     * to drift. Passed to {@code SoundEffect.stop(double)} rather than letting the sound take its own
+     * default quarter-second, which under a two-thirds-of-a-second fade reads as the fanfare having
+     * been cut off early.
+     *
+     * <p>The same 650 ms as {@link #LAUNCH_FADE}, deliberately: the console fades up out of the dark
+     * at exactly the rate the application later fades up out of it, so the launch opens and closes on
+     * the same gesture.
+     */
+    private static final Duration HANDOVER_FADE = Duration.millis(650);
 
     private Library library;
     private Repository<Song> libraryRepository;
@@ -473,12 +495,14 @@ public class App extends Application {
         // library does not appear in the history as though it had been listened to.
         history = new PlayHistory();
         engine.setOnPlayCounted(song -> {
-            // The fanfare is fifteen seconds long and the boot sequence is two, so it deliberately
-            // rings on over the library exactly as a console's does over a game's first screen. What
-            // it must not do is play *underneath the music*: the moment a song starts there are two
-            // things making noise and the older one gives way. This is the exact hook for it - the
-            // application boots paused and no song has ever played, so the first play is always a
-            // counted one and can never be a resume that would slip past.
+            // A backstop, and honestly a no-op on every path there is today: handOverFromTheDark
+            // fades the fanfare out as the library comes up, so by the time any song can be played
+            // it has already let go. It used to be the *only* place the fanfare was stopped, back
+            // when it deliberately rang on over the library the way a console's does over a game's
+            // first screen. It is kept because it costs nothing and covers the one thing that must
+            // never happen - two sounds at once, the older one not giving way - and because this is
+            // the exact hook for it: the application boots paused and no song has ever played, so a
+            // first play is always a counted one and can never be a resume that slips past.
             bootFanfare.stop();
             history.record(song);
         });
@@ -871,6 +895,9 @@ public class App extends Application {
      * second question straight afterwards would be one too many - but it is a statement about
      * <em>starting up</em>, not about playback: pressing play still brings the road up on its own,
      * exactly as it did before.
+     *
+     * <p>The swap itself is instant and always was; what follows it is {@link #handOverFromTheDark()},
+     * which is what makes the arrival read as a handover rather than as a cut.
      */
     private void finishBooting() {
         if (!booting) {
@@ -887,6 +914,69 @@ public class App extends Application {
         // Now the layers arrive, with the application.
         applyMood(state.getMood());
         resumeMainViews();
+        handOverFromTheDark();
+    }
+
+    /**
+     * Brings the application up out of the black the boot screen ended on, picture and sound together.
+     *
+     * <p>The show finishes on a full blackout - {@code BootScreen.blackout} ramps to 1 over its last
+     * few percent - and until this existed the library then <em>appeared</em>, whole, on the very next
+     * pulse. Two things were wrong with that and they are the same thing twice: the machine spent
+     * fifteen seconds fading everything it drew and then handed over with a cut, and on a
+     * {@code skip()} the fanfare carried on ringing at full strength over a library that was already
+     * up. The end of the loading bar is one moment, however it is reached, so it gets one gesture.
+     *
+     * <p><strong>The whole window fades, not the centre.</strong> {@code finishBooting} has just
+     * attached the header and the frame, and those are as much a part of the application arriving as
+     * the library is - a title bar snapping in at full strength over a view that is still coming up
+     * would be the cut moved rather than removed. So what is faded is {@code shell}, the scene's root,
+     * and what is behind it for the length of the fade is the <em>scene fill</em>, set to the console's
+     * own black.
+     *
+     * <p><strong>The fill is not optional and the black has to be that black.</strong> The stage is
+     * {@code TRANSPARENT}, so a half-faded root over the default fill is a half-transparent application
+     * over the user's desktop - which is not a fade from black, it is a window that failed to draw.
+     * {@code Palette.hardware()} is where the value comes from because that is the palette the boot
+     * screen faded <em>to</em>: the first frame of this fade is then exactly the colour of the last
+     * frame of that one, and ground rule 7 is untouched - a role named, a palette asked.
+     *
+     * <p><strong>Skipped whole during a smoke test</strong>, for the reason that run photographs
+     * anything at all: the screenshots are taken on the interface thread immediately after
+     * {@code bootScreen.skip()}, no pulse arrives to advance a timeline, and every shot in the run
+     * would come out of a window frozen at opacity zero over a black fill. A picture of nothing is
+     * indistinguishable from a view that failed to lay out, which is the one photograph that would be
+     * believed. The fanfare is still told to stop, because that costs no frames and needs none.
+     */
+    private void handOverFromTheDark() {
+        // Whether the fanfare ran its full length or the user pressed a key half way through it, this
+        // is where it lets go - it is the machine's noise, and the machine has just finished. Over the
+        // same span as the picture, so the two describe one event; a natural end has already retired
+        // the player thread and this is a no-op.
+        bootFanfare.stop(HANDOVER_FADE.toSeconds());
+
+        if (smokeTest()) {
+            return;
+        }
+        Scene scene = shell.getScene();
+        if (scene == null) {
+            return;
+        }
+        scene.setFill(Palette.hardware().color(PaletteRole.SHADOW));
+        shell.setOpacity(0);
+        // Eased for the reason every other fade here is - BootScreen.wakeUp says it at length: a
+        // linear ramp stops abruptly at the top and the eye catches the corner.
+        Timeline fade = new Timeline(new KeyFrame(HANDOVER_FADE,
+                new KeyValue(shell.opacityProperty(), 1, Interpolator.EASE_OUT)));
+        // Whatever happens to the timeline, the application ends up visible and the window ends up
+        // transparent again. An application left permanently behind a black veil, in a window whose
+        // corners have quietly stopped being see-through, is a far worse fault than anything that
+        // could have interrupted the fade - and it has no symptom to search for.
+        fade.setOnFinished(event -> {
+            shell.setOpacity(1);
+            scene.setFill(Color.TRANSPARENT);
+        });
+        fade.play();
     }
 
     /**
@@ -2268,9 +2358,21 @@ public class App extends Application {
                 + (booted && libraryUp ? "seated, machine started, library shown"
                         : booted ? "started but THE LIBRARY DID NOT APPEAR" : "DID NOTHING"));
 
+        // handOverFromTheDark fades the whole window up out of the console's black, and it is skipped
+        // whole in this mode because no pulse arrives to advance a timeline. This is the check that it
+        // really was skipped, and it is the same argument as `boot wake` one screen earlier: left at
+        // opacity zero over an opaque black fill, **every screenshot in this run would come out
+        // black** - and a black picture is exactly what a view that failed to lay out looks like,
+        // which is the one photograph that would be believed. Nothing else here would notice.
+        boolean handedOver = shell.getOpacity() == 1 && Color.TRANSPARENT.equals(scene.getFill());
+        System.out.println("[smoke] boot handover     : "
+                + (handedOver ? "window fully up and the fill transparent again"
+                        : "STILL BEHIND THE HANDOVER FADE - opacity " + shell.getOpacity()
+                                + ", fill " + scene.getFill() + "; every shot after this is black"));
+
         return refused && accepted && cartridgeSeatedFired && booted && libraryUp && labelled
                 && cartridgeGone && goneByTheGlitch && splashFits && fanfareOk && cartridgeSoundsOk
-                && lengthsAgree && skipped;
+                && lengthsAgree && skipped && handedOver;
     }
 
     /**

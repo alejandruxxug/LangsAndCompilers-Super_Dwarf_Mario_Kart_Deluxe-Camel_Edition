@@ -44,6 +44,12 @@ public final class SoundEffect {
      * leaves the speaker cone somewhere other than zero, and that step is audible as a tick - which
      * on a sound whose whole job is to be the nice noise the application makes is exactly the wrong
      * detail to get wrong.
+     *
+     * <p>It is the default rather than the only length. {@link #stop(double)} exists because a fade
+     * that is <em>accompanying</em> something - the boot screen handing the window over to the
+     * library - has to last as long as the thing it is accompanying, and a quarter of a second under
+     * a two-thirds-of-a-second fade to picture reads as the sound having been cut early rather than
+     * as the two ending together.
      */
     private static final double FADE_SECONDS = 0.25;
 
@@ -66,6 +72,15 @@ public final class SoundEffect {
 
     /** Set by {@link #stop()}; read once per block by the player thread. */
     private volatile boolean stopping;
+
+    /**
+     * How long the fade asked for by the pending {@link #stop(double)} is, in seconds.
+     *
+     * <p>Volatile and read by the player thread at the moment it notices {@link #stopping}, never
+     * before: the length has to be the one the <em>caller</em> asked for, and a value read when the
+     * write loop started would be whatever the last stop happened to leave behind.
+     */
+    private volatile double fadeSeconds = FADE_SECONDS;
 
     /** The thread currently playing, or {@code null}. Never more than one. */
     private volatile Thread player;
@@ -109,6 +124,26 @@ public final class SoundEffect {
      * <p>Safe to call when nothing is playing, and safe to call twice.
      */
     public void stop() {
+        stop(FADE_SECONDS);
+    }
+
+    /**
+     * Fades the sound out over a stated length and stops it.
+     *
+     * <p>For a fade that has to keep time with something else. The boot screen's handover is the
+     * case it was written for: the picture comes up out of the black over
+     * {@code App.HANDOVER_FADE}, and a fanfare that let go a quarter of a second in would read as
+     * the sound having been cut rather than as the machine handing over to the software.
+     *
+     * <p>Returns as soon as the player thread has been told, exactly as {@link #stop()} does - the
+     * caller is usually the interface thread, and this is now potentially most of a second of it.
+     * Safe when nothing is playing and safe to call twice.
+     *
+     * @param overSeconds how long the fade takes; anything not positive is as close to a cut as a
+     *                    whole frame of audio allows
+     */
+    public void stop(double overSeconds) {
+        fadeSeconds = Math.max(0, overSeconds);
         stopping = true;
         player = null;
     }
@@ -156,13 +191,14 @@ public final class SoundEffect {
             line.open(PcmFormat.PLAYBACK_FORMAT);
             line.start();
             writeTo(line, audio);
-            if (!stopping) {
-                // Only on a natural end. After a fade the line holds a quarter second of audio that
-                // has already been faded to nothing, and draining it would simply wait for silence.
-                line.drain();
-            } else {
-                line.flush();
-            }
+            // Drained on both paths, and after a fade that is load-bearing rather than tidy.
+            // `write` returns once the audio is in the line's own buffer, not once it has been
+            // heard - so flushing here discards however much of the fade is still queued, and cuts
+            // it off part way down its own ramp. That is inaudible while the fade is shorter than
+            // the line's buffer and is a click the moment it is longer, which is exactly what
+            // stop(double) makes possible. The wait is bounded by the fade and is spent on this
+            // effect's own daemon thread, which no caller is holding.
+            line.drain();
         } catch (LineUnavailableException e) {
             // Every output line is busy, or the machine has none. Not a failure worth reporting to
             // the user: the sound is a flourish and the application is not about to stop for it.
@@ -179,10 +215,12 @@ public final class SoundEffect {
      * @param audio the decoded audio
      */
     private void writeTo(SourceDataLine line, byte[] audio) {
-        int fadeBytes = alignToFrame((int) (FADE_SECONDS * AppConfig.BYTES_PER_SECOND));
         int offset = 0;
         while (offset < audio.length) {
             if (stopping) {
+                // Read here rather than before the loop, so the length is the one the caller that
+                // just asked for the stop wanted - see fadeSeconds.
+                int fadeBytes = fadeBytes(fadeSeconds);
                 // The tail is faded in place on a copy, so the cached buffer stays pristine and the
                 // next play starts from the sound as decoded rather than from a faded one.
                 int length = Math.min(fadeBytes, audio.length - offset);
@@ -223,6 +261,30 @@ public final class SoundEffect {
                 block[index + 1] = (byte) ((faded >> 8) & 0xFF);
             }
         }
+    }
+
+    /**
+     * How much audio a fade of a given length covers, as a whole number of frames.
+     *
+     * <p>A pure function and package-private for the usual reason: it is the one quantity in this
+     * class that can be checked without a speaker. A fade is completely inaudible in a test - the
+     * whole point of {@link SoundEffectTest} - so what is worth pinning is the arithmetic that would
+     * make it crash or crunch rather than fade. Two things do:
+     *
+     * <ul>
+     *   <li>A length of zero or less would give a byte count of zero or negative, and the caller
+     *       allocates a buffer of it - a negative one throws on the player thread, where nothing is
+     *       watching. {@link #stop(double)} already clamps at zero and this clamps again at a whole
+     *       frame, so the worst case is a one-frame ramp, which is a cut.</li>
+     *   <li>A count that is not a multiple of the frame size would put the left channel's bytes where
+     *       the right channel's belong for the rest of the sound.</li>
+     * </ul>
+     *
+     * @param seconds how long the fade should take; anything not positive gives a single frame
+     * @return the fade's length in bytes, a whole number of frames and never less than one
+     */
+    static int fadeBytes(double seconds) {
+        return alignToFrame((int) (Math.max(0, seconds) * AppConfig.BYTES_PER_SECOND));
     }
 
     /**

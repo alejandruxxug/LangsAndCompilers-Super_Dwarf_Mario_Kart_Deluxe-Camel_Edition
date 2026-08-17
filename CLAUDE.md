@@ -747,12 +747,27 @@ sort of thing that looks fine in every screenshot.
     stream is wrapped in a `BufferedInputStream` because that is how a decoder probes a format — it
     reads a header, decides, and rewinds. Verified against the resolved jars: the fanfare is 44.1 kHz
     stereo already and takes the one-step conversion.
-  - **Measured: 15.0 seconds**, against a 2.35 s boot. So it deliberately **rings on over the library**,
-    exactly as a console's fanfare does over a game's first screen — and is stopped the moment a song
-    starts, from `PlaybackEngine.setOnPlayCounted`. That hook is exact rather than approximate: the
-    application boots *paused* and no song has ever played, so the first play is always a counted one
-    and can never be a resume that slips past. `stop()` fades over `FADE_SECONDS` rather than cutting,
-    because stopping a line mid-block leaves the cone off zero and that step is an audible tick.
+  - **Measured: 15.0 seconds**, and it now **fades out as the library comes up** rather than ringing on
+    over it — see §"the handover" below, which owns the decision and the length. It used to ring on
+    deliberately, the way a console's fanfare does over a game's first screen, stopped only by
+    `PlaybackEngine.setOnPlayCounted`; what that hook could not do is describe the *end of the boot*,
+    which is a moment the sequence knows about and the transport does not. It is still registered, as a
+    backstop that is a no-op on every path there is today, and the reason it is exact is unchanged: the
+    application boots *paused* and no song has ever played, so a first play is always a counted one and
+    can never be a resume that slips past.
+  - **`stop()` fades rather than cutting**, because stopping a line mid-block leaves the cone off zero
+    and that step is an audible tick. `stop(double)` is the same fade at a stated length, and it exists
+    for exactly one caller: a fade that is *accompanying* something has to last as long as the thing it
+    accompanies, and `FADE_SECONDS`' quarter of a second under a 650 ms fade to picture reads as the
+    sound having been cut early rather than as the two ending together.
+  - **The faded tail is `drain`ed and not `flush`ed, and at 0.25 s that distinction was invisible.**
+    `SourceDataLine.write` returns once the audio is in the line's own buffer, not once it has been
+    heard, so flushing straight afterwards discards however much of the fade is still queued and cuts it
+    off part way down its own ramp — a click, and precisely the one `FADE_SECONDS` exists to prevent.
+    While the fade was shorter than the line's buffer that loss was the inaudible tail of a ramp already
+    near zero, which is why the old code was right and stopped being right the moment `stop(double)`
+    made a longer fade possible. The wait is bounded by the fade and is spent on the effect's own daemon
+    thread, which no caller is holding.
   - **Nothing about it can throw.** A missing resource, a format no decoder can read and a machine with
     no free output line are all ordinary; the sound does not happen and a line goes in the log (ground
     rule 5). `isReady()` exists so the *absence* can be reported, which is the only reason to know — a
@@ -785,6 +800,55 @@ sort of thing that looks fine in every screenshot.
 - Screenshots: `docs/screenshots/sdmk-boot.png`, `-boot-partway`, `-boot-flash`, `-boot-glitch`, and
   one per movement of the show - `-boot-presents`, `-boot-title`, `-boot-hold`, `-boot-loading`,
   `-boot-fade`.
+
+### The handover: the application comes up out of the black, picture and sound together
+
+**The show ends on a full blackout and until this existed the library then simply *appeared*.**
+`blackout` ramps to 1 over the last few percent of the sequence, so the last frame the boot screen
+draws is an entirely black window — and the very next pulse had the library, the title bar and the
+window frame all on screen at full strength. The machine had spent fifteen seconds fading everything
+it drew and then handed over with a cut. `App.handOverFromTheDark`, called at the end of
+`finishBooting`, is the one gesture that replaces it.
+
+- **One length for both halves**, `App.HANDOVER_FADE` = 650 ms, and the constant exists so there
+  cannot be two: the picture coming up and the fanfare letting go are two descriptions of a single
+  moment, and two numbers meant to describe one moment are two numbers free to drift. It is the same
+  650 ms as `LAUNCH_FADE`, deliberately — the console fades up out of the dark at exactly the rate the
+  application later fades up out of it, so the launch opens and closes on the same gesture.
+- **It is the end of the loading bar, however that is reached.** A sequence that ran its full length
+  and one cut short by `skip()` are the same event here, which is what makes the skip stop being a
+  compromise: before this, a key pressed at three seconds left twelve seconds of fanfare playing at
+  full strength over a library that was already up. A fanfare that ended naturally is a `stop()` on a
+  retired player thread, i.e. a no-op, so the same call covers both.
+- **The whole window fades, not the centre.** `finishBooting` has just attached the header and the
+  frame, and those arrive *with* the application — a title bar snapping in at full strength over a
+  view still coming up would be the cut moved rather than removed. So what fades is `shell`, the
+  scene's root.
+- **Which forces the scene fill, and the fill has to be that black.** The stage is `TRANSPARENT`, so a
+  half-faded root over the default fill is a half-transparent application over the user's desktop —
+  not a fade from black but a window that failed to draw. The value comes from `Palette.hardware()`
+  because that is the palette the boot screen faded *to*: the first frame of this fade is then exactly
+  the colour of the last frame of that one. Ground rule 7 is untouched — a role named, a palette
+  asked — and it is the same argument §"the boot screen" makes for `hardware()` existing at all.
+  It is restored to `Color.TRANSPARENT` when the fade finishes, in the same handler that forces the
+  opacity to 1: an application left permanently behind a black veil, in a window whose corners have
+  quietly stopped being see-through, is a far worse fault than anything that could have interrupted
+  the fade, and it has no symptom to search for.
+- **The cost is a full-scene composite for 650 ms**, which on the software pipeline §7 documents is
+  not free — node opacity on a `Parent` renders the subtree to a buffer and blends it. It is one-shot,
+  at launch, and it has **not** been measured; if the fade is ever reported as stuttering, that is the
+  thing to measure first, and §7's own warning applies about asking what else is on the machine before
+  believing the answer.
+- **Skipped whole during a smoke test**, and this is the strongest reason the run has a line for it:
+  the screenshots are taken on the interface thread immediately after `bootScreen.skip()`, no pulse
+  arrives to advance a timeline, and a window left at opacity zero over an opaque black fill would put
+  out **an entire run of black screenshots that still passed every other check**. A black picture is
+  exactly what a view that failed to lay out looks like, which is the one photograph that would be
+  believed — the same argument `[smoke] boot wake` makes one screen earlier. `[smoke] boot handover`
+  reads the opacity and the fill back and fails the boot check on either.
+- **The fade itself is unphotographable and is not photographed.** Every criticism this file makes of
+  a still taken at the edge of a fade applies here in full, and there is no `previewAt` for it: the
+  quantity worth checking is that the fade *finished*, which is what the smoke line asks.
 
 ### The glass on the two bracket screens (`ui/CrtEffect`)
 
@@ -3055,6 +3119,22 @@ untouched code, because the machine had been degrading under the experiment all 
 real, pre-existing and unexplained; the bisection that "found" it was measuring drift. See §11 — and
 §7, where this project learned the identical lesson about an animated wallpaper.
 
+**Then one more, asked for directly: the other end of that fade.** 1102 tests as measured, up from
+1100 — the two new ones are `SoundEffectTest`'s.
+
+| Change | Where |
+|---|---|
+| **The application fades up out of the boot screen's black, and the fanfare fades with it** — one gesture, one length, whether the sequence ran out or was skipped | §"the handover" |
+
+**The finding in this batch is that the audio fade had a length it could not survive being given.**
+`SoundEffect` wrote its faded tail and then `flush`ed the line, on the reasoning — written down, and
+correct at the time — that what was left buffered had already been faded to nothing. That holds only
+while the fade is shorter than the line's own buffer. `stop(double)` made a 650 ms fade possible and
+the same line of code silently became a cut part way down the ramp, which is the click `FADE_SECONDS`
+exists to prevent, arriving by the mechanism that constant's own comment describes. It drains now.
+**A constant that is safe at its default is not the same as a constant that is safe**, and the tell
+was that nothing about the old code changed or looked wrong — only what could now be passed to it.
+
 **Stop after each milestone and report exactly how to test it before continuing.**
 
 ---
@@ -3735,6 +3815,13 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
   kind of thing that drifts halfway through a long build).
 - `APP_NAME` leaking into the mini player — invisible until rendered.
 - Little-endian byte order and sign extension.
+- **`SourceDataLine.write` returns when the audio is *buffered*, not when it has been heard, so a
+  `flush()` after it throws away whatever has not played yet.** That is harmless when what is left is
+  the inaudible tail of a fade already near zero and is a click the moment the fade is longer than the
+  line's buffer — which is what happened the day `SoundEffect.stop(double)` made a 650 ms fade
+  possible, to code that had been correct and untouched for a quarter-second one. `drain()` after a
+  fade; the wait is bounded by the fade and is on a daemon thread nobody is holding. **A constant that
+  is safe at its default is not the same as a constant that is safe.**
 - The PCM callback is on the audio thread: analyze fast, return, never touch the scene graph.
 - Game timing from `audioSource.position()`, never accumulated frame time.
 - **`java.time.Duration.toSeconds()` truncates to a whole `long` second and widens to `double`
