@@ -22,6 +22,7 @@ import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.effect.ColorAdjust;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.Pane;
+import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
 import javafx.util.Duration;
 
@@ -197,6 +198,40 @@ public class BootScreen extends Pane {
 
     /** How much of the title's brightness the breath takes, at most. */
     private static final double BREATH_DEPTH = 0.12;
+
+    /**
+     * The roles the start-up title cycles, in the order it cycles them.
+     *
+     * <p>The same six the runner's star walks, in the same order, read out of
+     * {@link Palette#bootRainbow()} rather than out of the console's own palette - which is monochrome,
+     * so cycling roles there would give six greys. Naming roles rather than colours is what keeps the
+     * hexadecimal in {@code mood/} where ground rule 7 requires it.
+     */
+    private static final PaletteRole[] TITLE_RAINBOW = {
+            PaletteRole.PRIMARY, PaletteRole.POSITIVE, PaletteRole.METER_LOW,
+            PaletteRole.ACCENT, PaletteRole.HIGHLIGHT, PaletteRole.NEGATIVE,
+    };
+
+    /**
+     * How many times a second the title walks the whole rainbow.
+     *
+     * <p>One full sweep every two and a half seconds, which is six colour changes in that time and
+     * nowhere near §8b's 3 Hz cap on anything full-screen and rhythmic. It is also deliberately slower
+     * than the star's {@code RAINBOW_HZ}: the star is a power-up going off during a race and this is a
+     * title being read, so the colour has to move slowly enough that the name stays the thing being
+     * looked at. Interpolated rather than stepped, so nothing here ever flashes.
+     */
+    static final double TITLE_RAINBOW_HZ = 0.4;
+
+    /**
+     * How far through the show the title starts settling from the rainbow to white.
+     *
+     * <p>It reaches white exactly at {@link #FADE_OUT}, so the colour finishes at the instant the
+     * picture begins to go and the fanfare dies - the cycle resolves rather than being cut off
+     * mid-sweep. Starting it at {@link #LOADING_IN} means the settling and the loading bar are the
+     * same movement: the machine has finished showing off and is getting on with it.
+     */
+    static final double TITLE_WHITE_IN = LOADING_IN;
 
     /** How many stars drift behind the held title. */
     private static final int STARS = 90;
@@ -655,6 +690,45 @@ public class BootScreen extends Pane {
      */
     static double titleScale(double show) {
         return 1 + TITLE_OVERSHOOT * (1 - ramp(show, TITLE_IN, TITLE_FULL));
+    }
+
+    /**
+     * The colour the title is drawn in: a rainbow that settles to white as the fanfare dies.
+     *
+     * <p><strong>The one thing on this screen that has a hue, and it is the machine rather than the
+     * software.</strong> Everything else in the sequence asks {@link Palette#hardware()} and comes out
+     * black and white, because at this point no software has chosen a look; a console running a colour
+     * test across its own name is the opposite statement, and the two sit in the same frame without
+     * contradicting each other. Ground rule 7 is untouched: this names a {@link PaletteRole} and mixes
+     * two of them out of {@link Palette#bootRainbow()}, so the colours live in {@code mood/} exactly as
+     * the console's own do.
+     *
+     * <p>Mixed rather than stepped, and {@link Palette#mix} snaps the result back onto the 5-bit grid,
+     * so the sweep stays inside the colours a GBA could have shown and never flashes - which is what
+     * keeps a full-screen cycling title inside §8b's cap on rhythmic effects rather than merely near it.
+     *
+     * <p><strong>It resolves to white instead of stopping.</strong> From {@link #TITLE_WHITE_IN} it
+     * eases to the console's own {@code TEXT_PRIMARY} - a true white, the same value the insertion flash
+     * uses - and arrives there exactly at {@link #FADE_OUT}, so the colour finishes at the instant the
+     * blackout starts and the sound runs out. Cutting a rainbow off mid-sweep at the fade would read as
+     * the effect having been interrupted rather than having ended.
+     *
+     * <p>Static and taking the length rather than reading {@link #showSeconds()}, like every other
+     * element of the show: the sequence re-times itself to whatever the fanfare measures, and a
+     * screenshot or a test has to be able to ask what this looks like at a stated instant.
+     *
+     * @param show    how far through the show, 0 to 1
+     * @param seconds how long the whole show lasts, so the cycle keeps real time
+     * @return the colour the name is drawn in, fully opaque
+     */
+    static Color titleColor(double show, double seconds) {
+        double cycle = show * seconds * TITLE_RAINBOW_HZ * TITLE_RAINBOW.length;
+        int from = (int) Math.floorMod((long) Math.floor(cycle), TITLE_RAINBOW.length);
+        int to = (from + 1) % TITLE_RAINBOW.length;
+        Color hue = Palette.bootRainbow()
+                .mix(TITLE_RAINBOW[from], TITLE_RAINBOW[to], cycle - Math.floor(cycle));
+        return hue.interpolate(Palette.hardware().color(PaletteRole.TEXT_PRIMARY),
+                ramp(show, TITLE_WHITE_IN, FADE_OUT));
     }
 
     /**
@@ -1675,7 +1749,10 @@ public class BootScreen extends Pane {
                 * (0.5 - 0.5 * Math.cos(show * showSeconds() * BREATH_HZ * 2 * Math.PI));
 
         gc.setFont(Fonts.pixel(size));
-        gc.setFill(palette.color(PaletteRole.TEXT_PRIMARY, alpha * breath));
+        // The rainbow, settling to white as the fanfare dies - see titleColor. The breath and the fade
+        // still ride on top of it as opacity, so the colour decides the hue and nothing else.
+        gc.setFill(titleColor(show, showSeconds())
+                .deriveColor(0, 1, 1, Math.clamp(alpha * breath, 0d, 1d)));
         double first = centreY - block / 2 + size;
         for (int i = 0; i < lines.size(); i++) {
             gc.fillText(lines.get(i), Math.round(width / 2),

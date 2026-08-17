@@ -321,6 +321,54 @@ public final class Palette {
         return new Palette("Hardware", colors);
     }
 
+    /**
+     * The six hues the start-up title cycles through before it settles to white.
+     *
+     * <p><strong>The one thing on the boot screen that is not monochrome, and it is deliberate rather
+     * than an exception being carved out of {@link #hardware()}.</strong> That palette is the console
+     * with the power just switched on and it stays black and white; this is the colour test a console
+     * runs <em>across its own name</em> while it starts up, which is a different statement - the
+     * machine demonstrating it has colour, before any software has chosen one. The two are used in the
+     * same frame and never for the same thing: everything else in the sequence, the loading bar and
+     * the caption included, still asks {@code hardware()}.
+     *
+     * <p>It is a {@link Palette} for exactly the reason that one is - ground rule 7 is about where
+     * colours are defined. {@code BootScreen} names a {@link PaletteRole} and mixes between two of
+     * them through {@link #mix}, which is the same mechanism the runner's star uses, so the hexadecimal
+     * lives here and the boot screen carries none.
+     *
+     * <p>Six hues on the six roles the star already cycles, in the same order, so the two rainbows are
+     * one idea rather than two. They are snapped to the GBA's 5-bit grid by {@link GbaColor#web} like
+     * everything else, so this stays a cycle a GBA could genuinely have shown. The remaining ten roles
+     * mirror the console's own, because nothing ever reads them from here.
+     *
+     * <p>Not a mood: never offered in the switcher, never validated, and nobody can choose it.
+     *
+     * @return the fixed start-up rainbow, the same object every time
+     */
+    public static Palette bootRainbow() {
+        return BOOT_RAINBOW;
+    }
+
+    /** The start-up rainbow, built once and held; see {@link #bootRainbow()}. */
+    private static final Palette BOOT_RAINBOW = bootRainbowPalette();
+
+    /**
+     * @return the start-up rainbow; see {@link #bootRainbow()} for why it exists
+     */
+    private static Palette bootRainbowPalette() {
+        Map<PaletteRole, Color> colors = new EnumMap<>(hardwarePalette().colors);
+        // The six the star cycles, in the order it cycles them - red through to violet, so a sweep
+        // reads as a spectrum rather than as six colours in an arbitrary ring.
+        colors.put(PaletteRole.PRIMARY, GbaColor.web("#ff4040"));
+        colors.put(PaletteRole.POSITIVE, GbaColor.web("#ffa020"));
+        colors.put(PaletteRole.METER_LOW, GbaColor.web("#ffe830"));
+        colors.put(PaletteRole.ACCENT, GbaColor.web("#40e050"));
+        colors.put(PaletteRole.HIGHLIGHT, GbaColor.web("#3090ff"));
+        colors.put(PaletteRole.NEGATIVE, GbaColor.web("#b060ff"));
+        return new Palette("Boot rainbow", colors);
+    }
+
     @Override
     public String toString() {
         return "Palette[" + name + "]";

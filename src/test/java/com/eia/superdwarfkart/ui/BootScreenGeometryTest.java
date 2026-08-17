@@ -1,6 +1,7 @@
 package com.eia.superdwarfkart.ui;
 
 import com.eia.superdwarfkart.app.AppConfig;
+import javafx.scene.paint.Color;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -437,6 +438,124 @@ class BootScreenGeometryTest {
             assertTrue(line.length() <= perLine,
                     "\"" + line + "\" is wider than the " + perLine + " characters it has");
         }
+    }
+
+    @Test
+    @DisplayName("the title has a hue while it is being read, so the rainbow is actually a rainbow")
+    void theTitleCycles() {
+        // Sampled across the hold, which is the long middle where the name is on screen and settled.
+        // The failure this catches is the one that would look completely fine: cycling roles through
+        // the console's own palette gives six greys, and a title that "cycles" between them is a
+        // static white title. Nothing throws and every screenshot looks right.
+        double mostColourful = 0;
+        for (int step = 0; step <= 40; step++) {
+            double show = BootScreen.TITLE_FULL
+                    + (BootScreen.TITLE_WHITE_IN - BootScreen.TITLE_FULL) * step / 40.0;
+            Color colour = BootScreen.titleColor(show, BootScreen.SEQUENCE_SECONDS);
+            mostColourful = Math.max(mostColourful, saturation(colour));
+        }
+        assertTrue(mostColourful > 0.3,
+                "the title never leaves grey - the most saturated it ever gets is " + mostColourful);
+    }
+
+    @Test
+    @DisplayName("and it walks, rather than sitting on one colour for the whole hold")
+    void theTitleWalksThroughColours() {
+        Color early = BootScreen.titleColor(BootScreen.TITLE_FULL, BootScreen.SEQUENCE_SECONDS);
+        // A full sweep takes 1 / TITLE_RAINBOW_HZ seconds, so half of one is far enough to be a
+        // different colour by any measure. Expressed as a fraction of the show, since that is what
+        // titleColor takes and the show re-times itself to whatever the fanfare measures.
+        double halfSweep = (0.5 / BootScreen.TITLE_RAINBOW_HZ) / BootScreen.SEQUENCE_SECONDS;
+        Color later = BootScreen.titleColor(BootScreen.TITLE_FULL + halfSweep,
+                BootScreen.SEQUENCE_SECONDS);
+
+        assertTrue(distance(early, later) > 0.2,
+                "the title held one colour across half a sweep: " + early + " then " + later);
+    }
+
+    @Test
+    @DisplayName("it is white by the time the picture starts to go, so the cycle resolves")
+    void theTitleSettlesToWhite() {
+        Color end = BootScreen.titleColor(BootScreen.FADE_OUT, BootScreen.SEQUENCE_SECONDS);
+
+        assertEquals(1.0, end.getRed(), 0.01, "the title did not reach white by FADE_OUT");
+        assertEquals(1.0, end.getGreen(), 0.01, "the title did not reach white by FADE_OUT");
+        assertEquals(1.0, end.getBlue(), 0.01, "the title did not reach white by FADE_OUT");
+    }
+
+    @Test
+    @DisplayName("and it keeps settling all the way, so the last frames cannot flash back to colour")
+    void theSettleIsMonotonic() {
+        // Not "the distance from white only ever falls" - that is false and was worth finding out.
+        // The rainbow goes on cycling underneath the settle, and the six hues are not equally far from
+        // white (yellow is much closer than blue), so the measured distance genuinely wobbles while
+        // the settle itself never reverses. What the interpolation actually guarantees is an
+        // *envelope*: at any instant the colour is at most (1 - settled) of the way from white, so the
+        // room the hue has to move in shrinks to nothing. That is the property that stops a burst of
+        // colour appearing late in the fade, and it is what is asserted here.
+        double widest = 0;
+        for (int step = 0; step <= 60; step++) {
+            double show = BootScreen.TITLE_WHITE_IN
+                    + (BootScreen.FADE_OUT - BootScreen.TITLE_WHITE_IN) * step / 60.0;
+            double settled = (show - BootScreen.TITLE_WHITE_IN)
+                    / (BootScreen.FADE_OUT - BootScreen.TITLE_WHITE_IN);
+            double fromWhite = distance(BootScreen.titleColor(show, BootScreen.SEQUENCE_SECONDS),
+                    Color.WHITE);
+            // sqrt(3) is the furthest any colour can be from white, so this is the envelope at its
+            // most generous and still pins the shape.
+            double envelope = (1 - smoothstep(settled)) * Math.sqrt(3) + 0.02;
+            assertTrue(fromWhite <= envelope,
+                    "the title was " + fromWhite + " from white at " + show
+                            + ", outside the settling envelope of " + envelope);
+            if (settled > 0.9) {
+                widest = Math.max(widest, fromWhite);
+            }
+        }
+        assertTrue(widest < 0.2,
+                "the title still had colour in it at the end of the settle: " + widest + " from white");
+    }
+
+    /**
+     * @param t 0 to 1
+     * @return the same smoothstep {@code BootScreen.ramp} eases with, so the envelope above follows
+     *         the curve the settle actually takes rather than a straight line it never was
+     */
+    private static double smoothstep(double t) {
+        double clamped = Math.clamp(t, 0d, 1d);
+        return clamped * clamped * (3 - 2 * clamped);
+    }
+
+    @Test
+    @DisplayName("the sweep stays far under the 3 Hz cap on anything full-screen and rhythmic")
+    void theRainbowIsSlowEnough() {
+        // Six colours per sweep, so the rate a viewer sees a colour change at is HZ x 6. Section 8b
+        // caps a full-screen rhythmic effect at 3 Hz and this has to be nowhere near it rather than
+        // merely under it - the title fills the screen and is the one thing being looked at.
+        double colourChangesPerSecond = BootScreen.TITLE_RAINBOW_HZ * 6;
+
+        assertTrue(colourChangesPerSecond < 3,
+                "the title cycles at " + colourChangesPerSecond + " colours a second");
+    }
+
+    /**
+     * @param colour any colour
+     * @return how far it is from grey, 0 for a grey and 1 for a fully saturated hue
+     */
+    private static double saturation(Color colour) {
+        double high = Math.max(colour.getRed(), Math.max(colour.getGreen(), colour.getBlue()));
+        double low = Math.min(colour.getRed(), Math.min(colour.getGreen(), colour.getBlue()));
+        return high - low;
+    }
+
+    /**
+     * @param from one colour
+     * @param to   another
+     * @return how far apart they are in plain RGB, which is enough to tell two hues apart
+     */
+    private static double distance(Color from, Color to) {
+        return Math.sqrt(Math.pow(from.getRed() - to.getRed(), 2)
+                + Math.pow(from.getGreen() - to.getGreen(), 2)
+                + Math.pow(from.getBlue() - to.getBlue(), 2));
     }
 
     /**

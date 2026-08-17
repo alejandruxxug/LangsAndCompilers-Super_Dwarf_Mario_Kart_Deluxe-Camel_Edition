@@ -226,6 +226,19 @@ public class App extends Application {
     private static final KeyCode FULLSCREEN_KEY = KeyCode.F11;
 
     /**
+     * What the window's fullscreen button says when pressing it would give up the display.
+     *
+     * <p>Both captions are three characters, like the three buttons beside them: in a fixed-width font
+     * a caption that changes width shoves its neighbours along as it is pressed, and those are exactly
+     * where the pointer already is. Arrows rather than words because there is no room for a word, and
+     * they point the way the window is about to go.
+     */
+    private static final String FULLSCREEN_ON_CAPTION = "> <";
+
+    /** What it says when pressing it would take the whole display. See {@link #FULLSCREEN_ON_CAPTION}. */
+    private static final String FULLSCREEN_OFF_CAPTION = "< >";
+
+    /**
      * Where into the track the runner is drawn for its screenshot, in seconds.
      *
      * <p>Far enough in that a track which opens quietly has got going.
@@ -276,6 +289,23 @@ public class App extends Application {
 
     /** Whether the runner currently has the whole display to itself. See {@link #FULLSCREEN_KEY}. */
     private boolean fullscreenRace;
+
+    /**
+     * Whether the <em>window</em> currently has the whole display, which is a different thing from
+     * {@link #fullscreenRace}.
+     *
+     * <p>This one is the application filling the screen with its whole interface - the side rail, the
+     * library, the meters and the title bar all still there. {@link #fullscreenRace} is the road and
+     * nothing else. They are tracked apart because they nest: pressing {@code F11} out of a fullscreen
+     * window and leaving the race again has to put the interface back <em>and stay fullscreen</em>,
+     * where a single flag would drop the window out of it as a side effect of leaving the game.
+     *
+     * @see #setWindowFullscreen(boolean)
+     */
+    private boolean windowFullscreen;
+
+    /** The header button that toggles {@link #windowFullscreen}; its caption follows the state. */
+    private Button fullscreenToggle;
 
     /**
      * The fanfare the machine makes as the cartridge goes in.
@@ -619,6 +649,13 @@ public class App extends Application {
             event.consume();
             requestQuit();
         });
+        // The toolkit's own fullscreen exit key is switched off for the whole session, and Escape is
+        // handled in installShortcuts instead. They are the same keystroke and not the same thing:
+        // the toolkit's takes the stage out of fullscreen and leaves every flag and style class here
+        // exactly as they were - no border, a road parented to the overlay pane, a button whose
+        // caption now says the opposite of what it does. Both fullscreen modes rely on this.
+        stage.setFullScreenExitKeyCombination(javafx.scene.input.KeyCombination.NO_MATCH);
+        stage.setFullScreenExitHint("");
         // Filling the screen from the start, because the boot screen is a console powering up and a
         // console does not power up in a window. MAIN_WIDTH and MAIN_HEIGHT stay as the size the
         // window restores to, and the layout has to be right at both - which is what the maximise
@@ -630,6 +667,18 @@ public class App extends Application {
             stage.setMaximized(true);
         }
         stage.show();
+        // True fullscreen, and after show() because that is the only point a stage will take it. The
+        // maximised size above becomes what the window restores to when the display is handed back,
+        // so both layouts still have to be right.
+        //
+        // Skipped whole during a smoke test rather than just its setFullScreen call, and that is a
+        // stronger exemption than the one smokeTest() describes: the frame comes off in this mode, so
+        // launching into it would take the border out of every screenshot the run photographs and
+        // leave the checks measuring a window that is not the one a user opens. The mode is exercised
+        // on its own instead - see reportWindowFullscreen.
+        if (!Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
+            setWindowFullscreen(true);
+        }
 
         if (Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
             runSmokeTest(stage, scene, pixelFont);
@@ -691,9 +740,12 @@ public class App extends Application {
             return;
         }
         booting = false;
-        // The title bar and the window frame arrive with the application, not before it.
+        // The title bar and the window frame arrive with the application, not before it - though the
+        // frame only if nothing else still wants it off, which is why this asks rather than removes.
+        // Launching fullscreen is exactly that case: the boot screen ends and the border must not
+        // come back around an application that is filling the display.
         shell.setTop(header);
-        shell.getStyleClass().remove("no-frame");
+        updateWindowFrame();
         overlay.setContent(root);
         // Now the layers arrive, with the application.
         applyMood(state.getMood());
@@ -879,6 +931,13 @@ public class App extends Application {
                 event.consume();
             } else if (event.getCode() == KeyCode.ESCAPE && presenting) {
                 togglePresentation();
+                event.consume();
+            } else if (event.getCode() == KeyCode.ESCAPE && windowFullscreen) {
+                // Last of the three Escapes, deliberately: presentation mode is a state inside the
+                // window, so leaving it has to come first or one keystroke would give up the display
+                // and leave the visualizer still holding the stage. This is the toolkit's own exit key
+                // arriving at the one place that undoes every part of the mode - see setWindowFullscreen.
+                setWindowFullscreen(false);
                 event.consume();
             } else if (event.getCode() == KeyCode.TAB && !typing(scene)) {
                 playbackBar.cycleMode();
@@ -1118,6 +1177,15 @@ public class App extends Application {
      * @return the three buttons in a row, furthest right where system chrome puts them
      */
     private HBox buildWindowButtons() {
+        // Fullscreen, and it is the way back as much as the way there: the application launches with
+        // the whole display, so on the first run this button is the only visible thing that hands the
+        // window back. F11 is not it - that is the runner and nothing else.
+        fullscreenToggle = new Button(FULLSCREEN_OFF_CAPTION);
+        fullscreenToggle.getStyleClass().add("window-button");
+        fullscreenToggle.setTooltip(new Tooltip(
+                "Fill the whole display, or go back to a window\nEsc leaves"));
+        fullscreenToggle.setOnAction(event -> setWindowFullscreen(!windowFullscreen));
+
         Button minimise = new Button("_");
         minimise.getStyleClass().add("window-button");
         minimise.setTooltip(new Tooltip("Minimise"));
@@ -1146,11 +1214,14 @@ public class App extends Application {
         // Same rule as the three view toggles beside them: a focusable button in the header answers
         // the first space bar of the session instead of play/pause, and these three sit at the end
         // of the strip where the traversal would reach them.
+        fullscreenToggle.setFocusTraversable(false);
         minimise.setFocusTraversable(false);
         maximise.setFocusTraversable(false);
         quit.setFocusTraversable(false);
 
-        HBox buttons = new HBox(6, minimise, maximise, quit);
+        // Fullscreen first, so the three that were already here keep their positions relative to the
+        // corner - close stays the last thing on the strip, where every window manager puts it.
+        HBox buttons = new HBox(6, fullscreenToggle, minimise, maximise, quit);
         buttons.setAlignment(Pos.CENTER_RIGHT);
         return buttons;
     }
@@ -1239,6 +1310,61 @@ public class App extends Application {
     }
 
     /**
+     * Gives the whole display to the application, or hands the window back.
+     *
+     * <p><strong>This is the mode the application launches in</strong>, and it is not the same thing as
+     * {@link #enterFullscreenRace()}: everything stays where it is - the title bar, the side rail, the
+     * library, the meters - and the window simply stops being a window. The road is one destination
+     * inside it rather than the whole of it.
+     *
+     * <p>The window frame comes off, for the reason it comes off in a fullscreen race: a border is what
+     * tells you where a window ends, and on a display with no window on it three pixels of amber is the
+     * only thing that is not the application. It goes through {@link #updateWindowFrame()} rather than
+     * being toggled here, because three separate states want it off and the last one to finish would
+     * otherwise put it back.
+     *
+     * <p><strong>The toolkit's own fullscreen exit key stays switched off here too.</strong> It would
+     * take the stage out of fullscreen and leave this flag set and the frame off - a window that no
+     * longer fills the screen, has no border, and whose button now says the opposite of what it does.
+     * That is the same desync {@link #enterFullscreenRace()} documents, so the same answer: one way in,
+     * one way out, and {@code Escape} handled in the filter.
+     *
+     * @param on whether the window should have the whole display
+     */
+    private void setWindowFullscreen(boolean on) {
+        if (mainStage == null || windowFullscreen == on) {
+            return;
+        }
+        windowFullscreen = on;
+        updateWindowFrame();
+        if (fullscreenToggle != null) {
+            fullscreenToggle.setText(on ? FULLSCREEN_ON_CAPTION : FULLSCREEN_OFF_CAPTION);
+        }
+        if (!smokeTest()) {
+            // Skipped during a smoke test for the reason smokeTest() gives: on macOS this enters a
+            // nested event loop that can never finish while a synchronous run holds the thread.
+            mainStage.setFullScreen(on);
+        }
+    }
+
+    /**
+     * Decides whether the shell draws its border, from the state rather than from the call site.
+     *
+     * <p>Three separate things want the frame off - the boot screen, a fullscreen race, and a fullscreen
+     * window - and any one of them can end while another is still in force. Toggling the style class at
+     * each of the six places that change those states is how it ends up wrong: {@code finishBooting}
+     * removing it would put a border back around an application that is filling the display, and
+     * leaving a race would do the same. Computing it once from all three cannot drift.
+     */
+    private void updateWindowFrame() {
+        boolean framed = !(booting || fullscreenRace || windowFullscreen);
+        shell.getStyleClass().remove("no-frame");
+        if (!framed) {
+            shell.getStyleClass().add("no-frame");
+        }
+    }
+
+    /**
      * Gives the runner the whole display: no window, no interface, just the road.
      *
      * <p><strong>It starts the race if one is not running.</strong> F11 says what the user wants to
@@ -1275,14 +1401,12 @@ public class App extends Application {
         root.setCenter(null);
         overlay.setContent(runner);
         shell.setTop(null);
-        shell.getStyleClass().add("no-frame");
+        fullscreenRace = true;
+        updateWindowFrame();
 
-        mainStage.setFullScreenExitKeyCombination(javafx.scene.input.KeyCombination.NO_MATCH);
-        mainStage.setFullScreenExitHint("");
         if (!smokeTest()) {
             mainStage.setFullScreen(true);
         }
-        fullscreenRace = true;
 
         runner.requestFocus();
     }
@@ -1323,14 +1447,16 @@ public class App extends Application {
         }
         fullscreenRace = false;
         if (!smokeTest()) {
-            // Skipped for the same reason the other half is - see smokeTest().
-            mainStage.setFullScreen(false);
+            // Back to whatever the window itself was doing, not flatly out of fullscreen. Leaving the
+            // race from a fullscreen window has to give the interface back and keep the display, or
+            // F11 and Escape would quietly be a way of resizing the window - see windowFullscreen.
+            mainStage.setFullScreen(windowFullscreen);
         }
 
         overlay.setContent(root);
         root.setCenter(runner);
         shell.setTop(header);
-        shell.getStyleClass().remove("no-frame");
+        updateWindowFrame();
 
         runner.requestFocus();
     }
@@ -1384,6 +1510,15 @@ public class App extends Application {
         if (miniStage.isShowing()) {
             return;
         }
+        // The display goes back before the window does. A 224px strip is the opposite of a fullscreen
+        // application, and on macOS a fullscreen window lives in a Space of its own - hiding it from
+        // inside one leaves that Space on screen, empty, with the companion stranded on the desktop
+        // behind it. Leaving the race first because a fullscreen race is a fullscreen window too, and
+        // collapsing is leaving the race in any case: there is no longer a road to look at.
+        if (fullscreenRace) {
+            exitFullscreenRace();
+        }
+        setWindowFullscreen(false);
         if (!miniPlaced) {
             placeCompanion();
             miniPlaced = true;
@@ -1669,6 +1804,7 @@ public class App extends Application {
         boolean foldOk = reportStructureFold(scene);
         boolean shrinkOk = reportWindowShrink(scene);
         boolean fullscreenOk = reportFullscreenRace(scene);
+        boolean windowFullscreenOk = reportWindowFullscreen(scene);
 
         reportAudio();
         reportBeatmap();
@@ -1734,6 +1870,9 @@ public class App extends Application {
         }
         if (!shrinkOk) {
             failures.add("window shrink");
+        }
+        if (!windowFullscreenOk) {
+            failures.add("window fullscreen");
         }
         if (!fullscreenOk) {
             failures.add("race fullscreen");
@@ -2175,6 +2314,60 @@ public class App extends Application {
                 + "  (the stage's own setFullScreen is skipped here - it deadlocks a synchronous run)");
         return entered && roadHasTheWindow && barGone && frameGone
                 && othersIgnored && left && restored;
+    }
+
+    /**
+     * Drives the window's own fullscreen mode - the one the application launches in - and reports it.
+     *
+     * <p><strong>This is the mode a user meets first and the one nothing else here photographs.</strong>
+     * The run deliberately does not launch into it: the frame comes off, so every screenshot afterwards
+     * would be of a borderless window rather than of the one that opens on a desktop. So it is entered
+     * and left on purpose, in the middle of the run, and the quantities are all state - a flag, a style
+     * class, a caption and the interface still being there.
+     *
+     * <p><strong>The caption is checked because it is the only way out.</strong> On a display with no
+     * chrome the button is the visible affordance, and one that went on saying "fill the display" while
+     * already filling it reads as a control that did nothing - which is exactly what a user would
+     * conclude before pressing it again and going nowhere.
+     *
+     * <p>And the title bar has to <em>stay</em>, which is the difference from a fullscreen race worth
+     * asserting rather than assuming: this mode gives the display to the whole application, so taking
+     * the header off would leave the window with no way back and no way to close.
+     *
+     * @param scene the scene to fire Escape at
+     * @return whether the mode was entered, reported itself, and left cleanly
+     */
+    private boolean reportWindowFullscreen(Scene scene) {
+        boolean framedBefore = !shell.getStyleClass().contains("no-frame");
+
+        setWindowFullscreen(true);
+        layoutNow(scene);
+        boolean entered = windowFullscreen;
+        boolean frameGone = shell.getStyleClass().contains("no-frame");
+        boolean barStayed = shell.getTop() == header;
+        boolean saysSo = FULLSCREEN_ON_CAPTION.equals(fullscreenToggle.getText());
+
+        // Escape rather than the button, because that is the path with somewhere to go wrong: the
+        // toolkit's own exit key is switched off for the session and this is the handler that replaced
+        // it, sitting behind two other Escapes that must win first.
+        fireKey(scene, KeyCode.ESCAPE);
+        layoutNow(scene);
+        boolean left = !windowFullscreen;
+        boolean framedAgain = !shell.getStyleClass().contains("no-frame");
+        boolean captionBack = FULLSCREEN_OFF_CAPTION.equals(fullscreenToggle.getText());
+
+        System.out.println("[smoke] window fullscreen : "
+                + (entered ? "took the display" : "DID NOTHING")
+                + ", " + (frameGone ? "frame off" : "THE FRAME STAYED")
+                + ", " + (barStayed ? "title bar kept" : "THE TITLE BAR WENT - NO WAY BACK")
+                + ", button " + (saysSo ? "reads \"" + FULLSCREEN_ON_CAPTION + "\""
+                        : "STILL SAYS \"" + FULLSCREEN_OFF_CAPTION + "\"")
+                + ", ESC " + (left ? "left" : "DID NOT LEAVE")
+                + (framedAgain && captionBack ? " and put the frame and the caption back"
+                        : " BUT LEFT THE WINDOW INCONSISTENT")
+                + "  (the stage's own setFullScreen is skipped here - it deadlocks a synchronous run)");
+        return framedBefore && entered && frameGone && barStayed && saysSo
+                && left && framedAgain && captionBack;
     }
 
     /**

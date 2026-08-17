@@ -257,12 +257,54 @@ tooltips and dialogs are all rebuilt as hard-edged beveled blocks.
 | `F7` | collapse to the companion strip, and back — **the same key in both windows** |
 | `F8` *(companion window)* | put the artwork away, leaving the song and the transport, and back |
 | `F11` | **true fullscreen for the runner and nothing else** — starts the race if one is not running |
-| `Esc` | leave true fullscreen; leave Presentation Mode; on the companion strip, expand; **on the boot screen, quit** — it draws no title bar, so it draws no close button |
+| `Esc` | leave a fullscreen race; leave Presentation Mode; **leave the fullscreen window**; on the companion strip, expand; **on the boot screen, quit** — it draws no title bar, so it draws no close button |
+| `< >` / `> <` *(title bar)* | give the whole display to the **application**, and hand the window back. **This is not `F11`** — see below |
 | any key *(boot screen, cartridge already in)* | skip the rest of the fifteen-second start-up sequence. `Esc` still quits rather than skipping |
 | `→` / `Space` *(tree view focused)* | step through one edge of a traversal |
 | `←` / `→` / `A` / `D` *(road focused)* | change lane |
 | `Space` / `↑` / `W` *(road focused)* | jump |
 | `F3` *(road on screen)* | cycle the frame-pacing readout: off → drawn → printed only |
+
+### There are two fullscreens and they are not the same thing
+
+**The application launches into the whole display, and `F11` is still the runner alone.** They nest,
+so they are two flags rather than one — `App.windowFullscreen` and `App.fullscreenRace`.
+
+| | `windowFullscreen` (launch, `< >` button, `Esc`) | `fullscreenRace` (`F11`, `Esc`) |
+|---|---|---|
+| What fills the display | the **whole application** — side rail, library, meters, title bar | the **road and nothing else** |
+| Title bar | **kept** — it is the only way back | off |
+| Window frame | off | off |
+| Other shortcuts | all live | dead |
+| Starts a race | no | yes |
+
+- **The title bar has to stay in the window mode, and that is the load-bearing difference.** There is no
+  system chrome on a display with no window on it, so the `< >` button is the only visible way back out.
+  Taking the header off — which is exactly what a fullscreen race does — would leave an application that
+  cannot be un-fullscreened, moved or closed.
+- **Leaving a race returns to whatever the *window* was doing**, not flatly to a window:
+  `exitFullscreenRace` calls `setFullScreen(windowFullscreen)`. A single flag would drop the display as a
+  side effect of leaving the game, so `F11` and `Esc` would quietly be a way of resizing the window.
+- **The frame is computed, never toggled.** Three states want `no-frame` on — booting, a race, a
+  fullscreen window — and any one can end while another is in force, so `updateWindowFrame()` decides it
+  from all three. Toggling it at the six call sites is how `finishBooting` ends up putting a border back
+  around an application that is filling the display.
+- **The toolkit's own fullscreen exit key is switched off once, for the session**, in `start()` rather
+  than per mode — both rely on it, and the failure it prevents is the same in both: the stage leaves
+  fullscreen and every flag, style class and button caption here stays exactly as it was.
+- **`Esc` is the last of three**, after presentation mode and after a race. Leaving a presentation has to
+  win, or one keystroke would give up the display and leave the visualizer still holding the stage.
+- **Clicking `F7 MINI` takes the window out of fullscreen first.** A 224 px strip is the opposite of a
+  fullscreen application, and on macOS a fullscreen window lives in a Space of its own — hiding it from
+  inside one leaves that Space on screen, empty, with the companion stranded on the desktop behind it.
+  It does **not** put it back on expanding: "taken out" is the whole of what was asked for, and a window
+  that silently re-took the display on the way back would be a surprise.
+- **The launch into it is skipped whole during a smoke test**, which is a stronger exemption than the
+  `setFullScreen` one below. The frame comes off in this mode, so launching into it would take the
+  border out of *every screenshot the run photographs* and leave the layout checks measuring a window
+  that is not the one a user opens. `reportWindowFullscreen` enters and leaves it on purpose instead,
+  mid-run, and checks the flag, the frame, the header staying and **the button's caption** — a button
+  that went on saying "fill the display" while already filling it reads as a control that did nothing.
 
 **True fullscreen (`F11`) is the runner and nothing else** — no title bar, no side rail, no meters, no
 playback bar, no window frame and no desktop. It is presentation mode's idea taken one step further:
@@ -386,10 +428,13 @@ dialogs do.
   bar away with it now — leaving a window that cannot be moved or closed until `F5` is pressed a
   second time. The header was hoisted out of `root` into a persistent shell for this. The visualizer
   gets the stage less the title bar, which is the right trade.
-- **The window comes up maximised**, and `MAIN_WIDTH` / `MAIN_HEIGHT` became the size it *restores*
-  to. Both sizes have to lay out, which is what the maximise button is for. The smoke test does not
-  maximise: it measures the middle of the window against `SIDE_COLUMN_WIDTH` and photographs every
-  view, and both want the size the constants describe rather than whatever display the run is on.
+- **The window comes up in true fullscreen**, and maximised underneath it — so `MAIN_WIDTH` /
+  `MAIN_HEIGHT` are what it restores to after the display is handed back twice over. All three sizes
+  have to lay out, which is what the maximise and `< >` buttons are for. The smoke test does neither:
+  it measures the middle of the window against `SIDE_COLUMN_WIDTH` and photographs every view, and
+  both want the size the constants describe rather than whatever display the run is on. See
+  §"There are two fullscreens" — the fullscreen *window* keeps its title bar, which is what stops the
+  launch state from being one nobody can get out of.
 - **Dragging is ignored while maximised**, consumed in a mouse *filter* so it runs before
   `dragBy`'s handler. The filter checks `event.getTarget() == header`, which is what keeps the
   buttons on the strip working — a press on one of them is targeted at the button, not the strip.
@@ -511,6 +556,34 @@ sort of thing that looks fine in every screenshot.
   wrong direction, and a test walks the whole sequence to check it. **The wrap is computed at the
   resting size and never at the scaled one**, or the line count would change mid-fade and the block
   would jump.
+- **The title cycles a rainbow and settles to white as the fanfare dies** (`titleColor`). This is the
+  one thing on either bracket screen with a hue in it, and it is a deliberate exception rather than the
+  monochrome rule quietly slipping: `Palette.hardware()` is the console with the power just switched on
+  and everything else in the sequence still asks it, but a machine running a **colour test across its own
+  name** is a different statement from a machine wearing somebody's mood — it is the hardware showing
+  what it can do before any software has chosen anything. The two palettes are used in the same frame
+  and never for the same thing.
+  - **It is `Palette.bootRainbow()`, so ground rule 7 is untouched.** Six hues on the six roles the
+    runner's star already cycles, in the same order, snapped to the 5-bit grid by `GbaColor.web` like
+    everything else. `BootScreen` names a `PaletteRole` and calls `Palette.mix`, exactly as it does for
+    the console's own colours — it just asks a different palette, which is the same arrangement
+    `hardware()` established. **Cycling roles through `hardware()` instead would give six greys**, and a
+    title "cycling" between them is a static white title that no screenshot would flag.
+  - **`TITLE_RAINBOW_HZ` is 0.4** — one full sweep every two and a half seconds, so 2.4 colour changes a
+    second against §8b's 3 Hz cap, and deliberately slower than the star's `RAINBOW_HZ` of 1.6: the star
+    is a power-up going off mid-race and this is a title being *read*. Interpolated rather than stepped,
+    so it never flashes.
+  - **It resolves to white rather than stopping.** From `TITLE_WHITE_IN` (= `LOADING_IN`) it eases to the
+    console's own `TEXT_PRIMARY`, a true `#ffffff`, arriving exactly at `FADE_OUT` — so the colour
+    finishes at the instant the blackout starts and the sound runs out. A rainbow cut off mid-sweep at
+    the fade reads as an effect interrupted rather than one that ended.
+  - **The test for the settle is an envelope, not a monotonic distance from white**, and getting that
+    wrong first was informative: the rainbow goes on cycling *underneath* the settle and the six hues are
+    not equally far from white — yellow is much closer than blue — so the measured distance genuinely
+    wobbles while the settle never reverses. What the interpolation guarantees is that the room the hue
+    has left shrinks to nothing, and that is what `theSettleIsMonotonic` asserts.
+  - Visible in `docs/screenshots/sdmk-boot-title.png` (yellow-green, mid-fade), `-boot-hold` (green, full
+    strength), `-boot-loading` (pale yellow, half settled) and `-boot-fade` (neutral, all colour gone).
 - **A seam of light, and it had to be moved.** A line at the centre that opens sideways is the cheapest
   dramatic reveal there is and the only one that suits hard edges - one rectangle, no blur. But it sits
   at the height of the middle of the title block, so while both were half-way up **the line ran straight
@@ -931,7 +1004,8 @@ com.eia.superdwarfkart
 │                 SpotifyEvents, SpotifyTrack, SpotifySession
 ├── persistence/  Repository<T> (interface), LibraryRepository, ScoreRepository
 ├── assets/       AssetRegistry, SpriteSheet, SpriteAnimation, RacerFrame
-├── mood/         Palette (+ hardware(), the console's black and white), PaletteRole (enum),
+├── mood/         Palette (+ hardware(), the console's black and white,
+│                 + bootRainbow(), the colour test the start-up title cycles), PaletteRole (enum),
 │                 GbaColor                                        ← built in M4
 │                 PaletteCss                                       ← M9
 │                 Mood, Moods, MoodLayer (sealed), LayerStyle, ZBand,
@@ -2653,6 +2727,20 @@ tests, up from 1017. Each has its own section above; in one line each:
 | **A shutdown screen**, so quitting no longer looks like a hang | §"the shutdown screen" |
 | **Add from Spotify out of the library**, with album, genre and a rating | §M10, "As built (2026-08-17)" |
 
+**Then two more the same day, both asked for directly.** 1068 tests, up from 1059 as measured (this
+section said 1060, which was a count off by one).
+
+| Change | Where |
+|---|---|
+| **The application launches into true fullscreen**, with a `< >` title-bar button and `Esc` to leave — and `F7 MINI` takes it out first | §"There are two fullscreens and they are not the same thing" |
+| **The start-up title cycles a rainbow and settles to white** as the fanfare dies, through `Palette.bootRainbow()` | §"the boot screen" |
+
+**The second is the one worth reading the reasoning on**, because it looks like the monochrome rule
+being abandoned and is not: the boot screen stays on `Palette.hardware()` for everything, and the title
+gets a *second* palette rather than a handful of literals — the same arrangement `hardware()` itself
+established. A machine running a colour test across its own name is a different statement from a
+machine wearing somebody's mood.
+
 **Two of them are findings rather than features, and both are ground rule 6 again.** `Stage.setFullScreen`
 enters a nested event loop and deadlocks a synchronous smoke test; and Spotify has quietly stopped sending
 `genres` on the artist object while still documenting it, which is why the add dialog's genre comes from
@@ -3500,8 +3588,19 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
 - **A hex literal anywhere outside `mood/`** — it looks harmless per site and turns M11 into a
   find-and-replace across a finished UI, which is where the feature gets abandoned. **A second palette
   is not a second place for literals**: `Palette.hardware()` is how the boot and shutdown screens get to
-  be black and white without putting a colour in `ui/` — they still name a role and still ask a palette,
-  they just ask a different one.
+  be black and white without putting a colour in `ui/`, and `Palette.bootRainbow()` is how the start-up
+  title gets to have a hue — they still name a role and still ask a palette, they just ask a different
+  one. **The tell that a new palette is legitimate is that no drawing code changed**: `titleColor` calls
+  `Palette.mix(role, role, t)` exactly as the runner's star does.
+- **Cycling palette roles is only a rainbow if the palette has hues in it.** The six roles the star walks
+  are monochrome in `Palette.hardware()`, so a boot title "cycling" them is a static white title —
+  nothing throws, the code reads correctly, and every screenshot looks like a title that is simply white.
+  That is why `bootRainbow()` exists and why `theTitleCycles` measures saturation rather than trusting
+  the loop.
+- **A colour that eases towards another while still cycling does not approach it monotonically.** The
+  distance from white wobbles because the hues are not equally far from it, so a "it only ever gets
+  closer" assertion is false against correct code. Assert the *envelope* — the room the hue has left —
+  which is what the interpolation actually guarantees.
 - **Smoothed pixel art.** JavaFX interpolates by default; the sprites turn to mush and it reads
   as a bug in the art, not in the code. `setImageSmoothing(false)`, integer scale factors.
 - **Moods: the four protected roles are the whole risk.** A mood that makes coins and bumps the
