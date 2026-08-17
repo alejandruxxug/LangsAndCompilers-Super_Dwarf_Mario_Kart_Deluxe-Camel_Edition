@@ -324,6 +324,39 @@ so they are two flags rather than one — `App.windowFullscreen` and `App.fullsc
 
   Confirmed after the fix, at the real fullscreen geometry (stage 1800x1130, `fullScreen=true`), by
   driving the gesture with real mouse events: `short drag: refused`, `full drag: SEATED`.
+- **And deferring it by one pulse was not enough, which is a different fault with the same cause.**
+  Reported as *"why does it sometimes not launch as fullscreen — closing and opening back to back; if
+  I wait it boots up correctly"*, and the wait is the whole diagnosis. `setFullScreen` reaches AppKit's
+  `toggleFullScreen:`, which is a **request rather than a setter**: the window server builds a Space
+  and animates into it, and a request arriving while the application is already mid-transition is
+  **discarded in silence** — no exception, no log, no property change. Two transitions are in flight
+  exactly there: the zoom `setMaximized(true)` starts at `show()`, and on a relaunch that follows a
+  quit closely, the *previous* instance's fullscreen Space still being torn down. A `Platform.runLater`
+  is one pulse, about 8 ms, which is nowhere near either. `LAUNCH_FULLSCREEN_SETTLE` is 400 ms and
+  costs nothing anybody can see — the boot sequence behind it runs for fifteen seconds — and
+  `LAUNCH_FULLSCREEN_RETRY` asks **once** more, bounded rather than looping, because `setFullScreen` is
+  the call this project has measured wedging the interface thread and a loop would turn an intermittent
+  freeze into a reliable one.
+- **The real bug underneath it was that this class never asked the window anything.**
+  `setWindowFullscreen` set the flag, stripped the frame and flipped the button's caption and *then*
+  called `setFullScreen` — so a refused request left a state no user could make sense of: a merely
+  **maximised** window, with **no border**, and a `< >` button reading as though it were already
+  filling the display. Pressing it appeared to do nothing, because its `setFullScreen(false)` is a
+  no-op on a window that was never fullscreen, and only the **second** press worked. Nothing threw and
+  nothing was logged, so it read as the launch being unreliable rather than as one boolean being out of
+  step. `syncFullscreenFromStage` reconciles against `mainStage.isFullScreen()` after every request and
+  from a listener on `fullScreenProperty`, which is also how a change the platform makes on its own
+  arrives.
+- **It must never confuse a fullscreen race with a fullscreen window, and without a guard it would.**
+  `enterFullscreenRace` sets its own flag and then puts the *stage* fullscreen, so the property change
+  would come back and be recorded as the user having asked for a fullscreen **window** —
+  `exitFullscreenRace` would then hand the display straight back to itself through
+  `setFullScreen(windowFullscreen)`, and `F11` would have become a one-way door. The two modes nest,
+  which is exactly why they are two flags; `syncFullscreenFromStage` returns early on `fullscreenRace`.
+- **None of this is reachable by the smoke test**, which skips `setFullScreen` outright — so
+  `[smoke] window fullscreen` proves only that the guard did not break what was already asserted. What
+  the fix addresses is a platform race that needs a real window server, and it is verified by launching
+  twice in quick succession rather than by any check in the run.
 - **The launch into it is skipped whole during a smoke test**, which is a stronger exemption than the
   `setFullScreen` one below. The frame comes off in this mode, so launching into it would take the
   border out of *every screenshot the run photographs* and leave the layout checks measuring a window
@@ -3135,6 +3168,22 @@ exists to prevent, arriving by the mechanism that constant's own comment describ
 **A constant that is safe at its default is not the same as a constant that is safe**, and the tell
 was that nothing about the old code changed or looked wrong — only what could now be passed to it.
 
+**Then one more, reported rather than asked for: the launch sometimes came up windowed.** 1102 tests,
+unchanged — this one is a platform race and there is nothing in it a headless test can reach.
+
+| Change | Where |
+|---|---|
+| **The launch asks for the display 400 ms in rather than one pulse in, asks once more if refused, and believes the window rather than itself** | §"There are two fullscreens and they are not the same thing" |
+
+**The finding is that `Stage.setFullScreen` is a request, not a setter.** macOS discards it outright when
+the application is already mid-transition — and the launch makes it during two of them, the maximise zoom
+and, on a quick relaunch, the previous instance's fullscreen Space being torn down. The symptom was
+reported as *"if I wait it boots up correctly"*, which is the entire diagnosis in one sentence. What made
+it worse than a miss is that `setWindowFullscreen` stripped the frame and flipped the button's caption
+*before* asking and never read the answer back, so a refusal left a maximised, borderless window claiming
+to be fullscreen. **A boolean that is only ever written is not state, it is a hope** — and this one had
+been write-only since the mode was built.
+
 **Stop after each milestone and report exactly how to test it before continuing.**
 
 ---
@@ -3966,6 +4015,16 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
   tried to click rather than as a frozen thread — here, "the cartridge won't drag". Defer it with
   `Platform.runLater`. The rule is not "not during a smoke test", it is **not while anything is holding
   the interface thread**.
+- **`Stage.setFullScreen` is a request the platform may silently refuse, so asking is not getting.**
+  On macOS it reaches AppKit's `toggleFullScreen:`, which discards the request if the application is
+  already mid-transition — the maximise zoom at `show()`, or the previous instance's Space still being
+  torn down after a quick relaunch. Nothing throws, nothing is logged and the property does not change.
+  Any code that sets its own flag *before* the call and never reads `isFullScreen()` back is then
+  describing a window that does not exist: here that was a maximised window with the frame stripped off
+  and a button whose caption said the opposite of the truth, which reads as an unreliable launch rather
+  than as a desynced boolean. Reconcile after the call **and** listen to `fullScreenProperty` — and
+  guard the reconcile against the *other* fullscreen mode, or entering a race silently converts itself
+  into a fullscreen window and leaving one becomes impossible.
 - **The fullscreen launch still freezes sometimes, it did so before any of this was written, and it is
   not understood.** `Stage.setFullScreen` blocks in a nested event loop until macOS finishes its own
   transition, and on this machine that transition intermittently never finishes — leaving the interface

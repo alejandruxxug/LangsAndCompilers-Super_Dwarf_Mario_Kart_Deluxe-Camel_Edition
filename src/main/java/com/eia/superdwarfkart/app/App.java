@@ -279,6 +279,35 @@ public class App extends Application {
      */
     private static final Duration HANDOVER_FADE = Duration.millis(650);
 
+    /**
+     * How long the launch waits before asking for the display at all.
+     *
+     * <p><strong>macOS drops a fullscreen request made during another transition, silently.</strong>
+     * {@code Stage.setFullScreen} reaches AppKit's {@code toggleFullScreen:}, which is a <em>request</em>
+     * rather than a setter: the window server builds a Space and animates into it, and if the
+     * application is already mid-transition the request is discarded with no error, no exception and no
+     * property change. Two transitions are in flight exactly here - the zoom {@code setMaximized(true)}
+     * starts at {@code show()}, and, on a launch that follows a quit closely, the <em>previous</em>
+     * instance's fullscreen Space still being torn down. A single {@code Platform.runLater} is one pulse,
+     * about 8 ms, which is nowhere near either.
+     *
+     * <p>This is the "sometimes it does not launch fullscreen, and if I wait it is fine" report, and the
+     * wait is the whole diagnosis. Nobody sees the delay: the boot sequence that follows runs for fifteen
+     * seconds.
+     */
+    private static final Duration LAUNCH_FULLSCREEN_SETTLE = Duration.millis(400);
+
+    /**
+     * How long after a refused launch request the application asks once more.
+     *
+     * <p><strong>Once, and bounded, rather than a loop.</strong> {@code setFullScreen} is the call this
+     * project has measured wedging the interface thread in {@code MacApplication._enterNestedEventLoopImpl}
+     * - see {@code fadeWindowIn} - so retrying it is not free, and a loop that kept asking would turn an
+     * intermittent freeze into a reliable one. One more attempt covers the case this exists for, which is
+     * a Space that was still closing when the first one went out.
+     */
+    private static final Duration LAUNCH_FULLSCREEN_RETRY = Duration.millis(700);
+
     private Library library;
     private Repository<Song> libraryRepository;
     private AssetRegistry assets;
@@ -795,11 +824,37 @@ public class App extends Application {
         // arrive already over. Started after, the console comes up on the screen it is going to stay
         // on. The call itself is left exactly as it was; see fadeWindowIn for what is and is not known
         // about the intermittent freeze that lives in it.
+        // The stage is the authority on whether this window has the display, and until this listener
+        // existed nothing here ever asked it - see syncFullscreenFromStage. The platform can change it
+        // without being told to by this application, and it can decline to change it when it is.
+        stage.fullScreenProperty().addListener((observable, was, is) -> syncFullscreenFromStage());
+
+        // A PauseTransition rather than a Platform.runLater, and it is doing two jobs at once. The first
+        // is the original one: this must not run from inside start(), because setFullScreen enters a
+        // nested event loop that cannot finish while the launcher still holds the thread - measured, the
+        // FX thread sat RUNNABLE in MacApplication._enterNestedEventLoopImpl for as long as the
+        // application was left open, and the window drew perfectly and then accepted no input at all.
+        // The second is LAUNCH_FULLSCREEN_SETTLE's: one pulse is not enough time for the platform's own
+        // transitions to be out of the way, and a request made during one is discarded in silence.
         if (!Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
-            Platform.runLater(() -> {
+            PauseTransition settle = new PauseTransition(LAUNCH_FULLSCREEN_SETTLE);
+            settle.setOnFinished(event -> {
                 setWindowFullscreen(true);
+                // The fade starts after the first attempt returns, not after the retry: setFullScreen
+                // blocks for the length of the platform's transition, so a fade started before it would
+                // spend most of its length behind a window being flung onto a display of its own and
+                // arrive already over. Waiting for a retry that usually never happens would delay the
+                // picture on every launch to fix the one that stumbled.
                 fadeWindowIn();
+                if (!mainStage.isFullScreen()) {
+                    // Refused. syncFullscreenFromStage has already put the flag, the frame and the
+                    // button's caption back to the truth, so this is an ordinary first attempt again.
+                    PauseTransition retry = new PauseTransition(LAUNCH_FULLSCREEN_RETRY);
+                    retry.setOnFinished(again -> setWindowFullscreen(true));
+                    retry.play();
+                }
             });
+            settle.play();
         }
 
         if (Boolean.getBoolean(SMOKE_TEST_PROPERTY)) {
@@ -1571,6 +1626,47 @@ public class App extends Application {
             // Skipped during a smoke test for the reason smokeTest() gives: on macOS this enters a
             // nested event loop that can never finish while a synchronous run holds the thread.
             mainStage.setFullScreen(on);
+            // And then believe the window rather than this method. Everything above ran on the
+            // assumption that asking is the same as getting, which on macOS it is not.
+            syncFullscreenFromStage();
+        }
+    }
+
+    /**
+     * Puts this class's idea of the mode back in step with the window's.
+     *
+     * <p><strong>Everything above was write-only until this existed, and that is the bug it fixes.</strong>
+     * {@link #setWindowFullscreen(boolean)} sets the flag, strips the frame and flips the button's caption
+     * and <em>then</em> asks the platform - so a request macOS declined left the application in a state no
+     * user could make sense of: a merely maximised window, with no border, and a {@code < >} button reading
+     * as though it were already filling the display. Pressing it then appeared to do nothing, because its
+     * {@code setFullScreen(false)} was a no-op on a window that was never fullscreen, and only the
+     * <em>second</em> press worked. Nothing threw and nothing was logged, which is why it read as the
+     * launch being unreliable rather than as one boolean being out of step.
+     *
+     * <p>It is also how the platform's own changes arrive. A fullscreen transition can complete or be
+     * undone without this application asking - the listener in {@code start()} is what carries that back.
+     *
+     * <p><strong>A fullscreen race is not a fullscreen window, and this must never confuse the two.</strong>
+     * {@link #enterFullscreenRace()} sets its own flag and then puts the <em>stage</em> fullscreen, so
+     * without the guard the property change would arrive here and be recorded as the user having asked for
+     * a fullscreen window. {@link #exitFullscreenRace()} would then hand the display straight back to
+     * itself - {@code setFullScreen(windowFullscreen)} - and F11 would have become a one-way door. The two
+     * modes nest, which is exactly why they are two flags.
+     *
+     * <p>Skipped during a smoke test, where {@code setFullScreen} is never called at all: the stage's
+     * answer is a flat {@code false} there, so reconciling against it would immediately undo the very
+     * state {@code reportWindowFullscreen} sets up in order to assert it.
+     */
+    private void syncFullscreenFromStage() {
+        if (mainStage == null || smokeTest() || fullscreenRace
+                || windowFullscreen == mainStage.isFullScreen()) {
+            return;
+        }
+        windowFullscreen = mainStage.isFullScreen();
+        updateWindowFrame();
+        if (fullscreenToggle != null) {
+            fullscreenToggle.setText(windowFullscreen ? FULLSCREEN_ON_CAPTION : FULLSCREEN_OFF_CAPTION);
         }
     }
 
