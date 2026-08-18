@@ -508,10 +508,10 @@ Built by:
 
 | | |
 |---|---|
-| [@mariajsosafdez](https://github.com/mariajsosafdez) | |
-| [@SamuelBhoop](https://github.com/SamuelBhoop) | |
+| [@mariajsosafdez](https://github.com/mariajsosafdez) | Maria Jose Sosa |
+| [@SamuelBhoop](https://github.com/SamuelBhoop) | Samuel Buelvas |
 | Claude | Anthropic's Claude Opus, pair-programming throughout |
-| [@alejandruxxug](https://github.com/alejandruxxug) | |
+| [@alejandruxxug](https://github.com/alejandruxxug) | Alejandro Urrego |
 
 The same four names are the first thing the application shows — the boot sequence puts them on
 screen before the title, where a console names whoever made the hardware.
