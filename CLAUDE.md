@@ -188,7 +188,10 @@ a particular track rather than of the scoring rules, so nothing but driving one 
 **Then it drives the runner with real key events and times a frame.** `steering` and `jump` fire
 `LEFT` and `SPACE` at the scene and report what the kart actually did — a control that never reaches
 the game is a routing fault, invisible to both a screenshot and a unit test, and this found exactly
-that twice. `entities drawn` is what is on screen against what the course holds, and `frame cost` is
+that twice. **`stopped steering` asks the opposite question**, and has to set the state up rather
+than wait for it: it stops the music, presses both arrows and reads the *running order*, because the
+fault it exists for is an arrow the road declined to claim reaching the transport and skipping the
+song. `entities drawn` is what is on screen against what the course holds, and `frame cost` is
 the average of 120 repaints. Read those two together before believing the game is slow: a projection
 that makes things crawl and then rush looks laggy at 0.2 ms a frame.
 
@@ -264,8 +267,8 @@ tooltips and dialogs are all rebuilt as hard-edged beveled blocks.
 | `< >` / `> <` *(title bar)* | give the whole display to the **application**, and hand the window back. **This is not `F11`** — see below |
 | any key *(boot screen, cartridge already in)* | skip the rest of the fifteen-second start-up sequence. `Esc` still quits rather than skipping |
 | `→` / `Space` *(tree view focused)* | step through one edge of a traversal |
-| `←` / `→` / `A` / `D` *(road focused)* | change lane |
-| `Space` / `↑` / `W` *(road focused)* | jump |
+| `←` / `→` / `A` / `D` *(road on screen)* | change lane — **claimed whether or not the music is running**, so an arrow can never reach the transport from the road |
+| `Space` / `↑` / `W` *(road on screen)* | jump — the one driving key that still falls through to play/pause while the music is stopped |
 | `F3` *(road on screen)* | cycle the frame-pacing readout: off → drawn → printed only |
 
 ### There are two fullscreens and they are not the same thing
@@ -431,11 +434,31 @@ is exactly what a broken control looks like. The filter runs before anything els
 what has focus. The cost is that the transport shortcuts are unavailable during a race; the buttons
 at the top still work and `F6` hands the keys back.
 
-The runner **only claims the keys while the music is running**, and it asks the engine outright
+The runner **only moves the kart while the music is running**, and it asks the engine outright
 rather than reading a flag the frame loop maintains — that flag is stale for a frame after every
 resume, which left the controls dead exactly when they were first pressed. Steering a frozen kart to
 line up an obstacle that cannot reach it is not a control, and `Space` has to reach the transport
 while paused or the play key stops working when it is the only one wanted.
+
+**But moving the kart and claiming the key are two different questions, and answering them with one
+`return` skipped the song.** The whole filter used to give up when the music was stopped, so the
+arrows fell through to the transport — and an arrow pressed at a *paused* kart, on a screen drawing
+`LEFT/RIGHT STEER` across the middle of itself, changed the track. **On a streamed song that reaches
+Spotify:** go-librespot is a Connect device, so the running order moving is a skip on the phone, the
+desktop client and everything else signed into the account. Reported exactly that way — *"when I
+press right on a running race the librespot player is called to skip the song, so on the Spotify app
+it is getting skipped"*.
+
+So `←` `→` `A` `D` are now **consumed whether or not there is anything to steer**, and only `Space`
+still falls through. That is also the more honest reading of the two: while the road is on screen the
+arrows are the steering keys and nothing else — `F6` and `Esc` hand them back, and the transport's own
+buttons are a click away — so an arrow arriving at the road has already been answered, and passing it
+on can only be a second, unrelated thing happening to one press. The kart still does not move.
+
+**`[smoke] stopped steering` is the check, and it has to set the state up rather than wait for it.**
+It stops the music, presses both arrows at the real scene and reads the *running order* rather than
+the lane — the existing `steering` line runs while the music is going, which is the one state where
+the old code was right. Confirmed to fail against the old early return.
 
 **`Tab` no longer moves focus between controls.** That is the deliberate cost of binding it; the
 interface is mouse-driven and every control is reachable by clicking.
@@ -3175,6 +3198,21 @@ unchanged — this one is a platform race and there is nothing in it a headless 
 |---|---|
 | **The launch asks for the display 400 ms in rather than one pulse in, asks once more if refused, and believes the window rather than itself** | §"There are two fullscreens and they are not the same thing" |
 
+**Then two more, both reported rather than asked for, both about Spotify.** 1104 tests, up from 1102.
+
+| Change | Where |
+|---|---|
+| **A pause holds the audio the daemon runs on and hands it to the card on resume**, instead of dropping it and skipping most of a second of the song | §M10, "As built (2026-08-18)" |
+| **The road's arrows are claimed whether or not the music is running**, so an arrow can no longer fall through to the transport and skip the track on every device signed into Spotify | §"Keyboard shortcuts" |
+
+**The finding in this batch is that the first fix for the pipe left the second half of the bug in
+place, and made it unreportable.** "The reader must never park" is right, and it says nothing about
+what to *do* with a block once it has been read. Discarding it was the smallest change that
+satisfied the rule — and then `advanceBase` moved the clock past the discarded audio, so the
+position, the road, the meters and the beatmap all agreed with each other about a second of music
+that had never been played. **A quantity corrected to match a fault is the hardest kind to find**,
+because every cross-check passes; what reported it in the end was a person listening.
+
 **The finding is that `Stage.setFullScreen` is a request, not a setter.** macOS discards it outright when
 the application is already mid-transition — and the launch makes it during two of them, the maximise zoom
 and, on a quick relaunch, the previous instance's fullscreen Space being torn down. The symptom was
@@ -3800,6 +3838,57 @@ working on a live Premium account the same day.**
   audio moved.
 - 698 tests, up from 696.
 
+### As built (2026-08-18) — a pause no longer throws the next second of the song away
+
+**Reported as "when I pause a Spotify song and resume it skips a bit of the song", and it was the
+other half of the deadlock above.** The fix for that one made the reader consume the pipe in every
+state, which is correct and necessary; what it then did with what it read while stopped was throw it
+away. The daemon is only ever paced by our reads, so the instant `playing` goes false it is free to
+run at decode speed — **measured at some twenty-four times realtime** — until it acts on
+`/player/pause` a round trip later. Every one of those blocks was dropped, and a resume carries on
+from where the *daemon* reached rather than from where the sound stopped. **Measured against the
+real reader: 1462 ms of music written off**, and `advanceBase` moved the clock past it so nothing
+anywhere disagreed.
+
+- **They are held now, not dropped.** `SpotifyAudioSource.hold` is a plain byte ring — no allocation
+  per block, and the card is written to out of it directly — that fills only while playback is
+  stopped and is empty for the whole of ordinary playback, because during playback the card is what
+  paces the reader and a block is read and written in the same turn of the loop.
+- **Three consecutive stretches of one track, in the order they were decoded**: the card's own
+  retained buffer, then the hold, then the live pipe. Which is why `pause()` **stops the line and
+  deliberately does not flush it** — what the card is still holding is the next thing the listener is
+  owed, and `start()` plays it out ahead of the hold. Flushing there would move the skip rather than
+  remove it.
+- **The read is only allowed to block when nothing is waiting for the card.** With audio held —
+  the first turns after a resume — a blocking read would starve the speakers of music already in
+  hand for as long as the daemon happened to be quiet, so the pipe is only taken from when
+  `available()` says it has something. Ordinarily the hold is empty and this is the plain
+  read-then-write loop it always was.
+- **One block at a time out of the hold, never the whole of it.** A resume with a second of audio in
+  hand still has to come back to the pipe every twenty-three milliseconds: the daemon must be able
+  to place a block that often or its API stops answering, which is the deadlock above arriving from
+  the other direction.
+- **The taps still see every block exactly once, at the moment it comes off the pipe.** That is what
+  keeps a streamed beatmap's novelty curve continuous across a pause, which the previous
+  arrangement also managed and is worth not losing: a hole in that curve is worse than no curve,
+  because nothing downstream can tell. It is also why the fix is a hold rather than **a corrective
+  seek on resume** — that was the obvious alternative, it costs a round trip and shows up as a
+  backwards jump on every Spotify client, and the re-fetched audio would reach the taps twice.
+- **`HOLD_SECONDS` is 6 and the cap is the point of it.** What has to fit is a round trip at
+  twenty-four times realtime plus whatever `settle()` then watches go by — a few hundred
+  milliseconds — so six seconds is an order of magnitude clear and costs about a megabyte. Past it
+  the audio genuinely is lost and `advanceBase` moves the clock past it exactly as it used to, so a
+  daemon that never acts on a pause cannot turn a bounded fault into an unbounded one.
+- **The hold is thrown away wherever `stale` is raised** — a seek, a new track, a stop. It is audio
+  from before the move, and playing it afterwards is the very thing `stale` exists to prevent.
+- **Verified by shrinking the hold to one block and watching the test fail**, which is the old
+  behaviour exactly: `expected: <0> but was: <1462>` ms of music on the clock and none of it in
+  anybody's ears. `SpotifyAudioSourceTest` holds both halves — nothing written off while the hold has
+  room, and only the overflow written off once it does not.
+- **Not verified by ear.** The mechanism is pinned against a real FIFO and a real socket; whether a
+  resume *sounds* seamless on a live Premium account is a thing only listening can establish.
+- 1104 tests, up from 1102.
+
 ### M10 notes — kept as the record of *why*, now that it is built
 
 *Superseded where it disagrees with "As built (M10)" above: the binary resolution order gained a
@@ -3912,6 +4001,19 @@ shipping a Linux one in the jar would bloat it for every user who never touches 
   restarting the reader, the two waited on each other for good. The symptom was
   `"go-librespot would not resume playback"`, which is a 5 s `COMMAND_TIMEOUT` being reported as a
   refusal. `SpotifyAudioSource` now reads in every state; `SpotifyAudioSourceTest` pins it.
+- **Draining the pipe is not the same as keeping what came off it.** The rule above forces the reader
+  to consume in every state; what it does with a block while playback is stopped is a separate
+  decision, and dropping it loses music nobody will ever hear — a resume carries on from where the
+  *daemon* decoded to, not from where the sound stopped. Measured on the real reader: **1462 ms
+  written off at a pause**, with `advanceBase` moving the clock past it so no reading anywhere
+  disagreed and no screenshot could show it. Held instead; see §"a pause no longer throws the next
+  second of the song away". **A number that is corrected to match a fault is not the same as a
+  number that is right.**
+- **go-librespot is a Spotify Connect device, so anything that moves this application's running order
+  is a skip on every other device signed into the account.** That makes a stray keystroke reaching
+  the transport externally visible in a way it never is for a local file — which is how an arrow key
+  falling through from the road came to light at all. Any control that duplicates a transport key
+  needs to be sure about what it does *not* pass on, not only about what it does.
 - **The daemon's `/status` position is not the clock.** It assumes the output consumes audio at the
   speed it is heard, which a pipe does not; it runs ahead by however far the pipe is buffered. Read
   `SourceDataLine.getLongFramePosition()`, as everywhere else.

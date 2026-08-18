@@ -57,6 +57,17 @@ import java.util.logging.Logger;
  * playback is stopped the daemon has been told to pause, so there is nothing left for it to race
  * through.
  *
+ * <p><strong>Pausing throws audio away unless something catches it, and this is what catches
+ * it.</strong> The daemon is only ever paced by our reads, so the instant playback stops it is free
+ * to run at decode speed - measured at some twenty-four times realtime - until it notices the pause
+ * a round trip later. Every one of those blocks has to be taken off the pipe or the API wedges, and
+ * the version of this class that simply dropped them lost most of a second of music at every pause:
+ * the daemon resumed from where <em>it</em> had got to, which is a good way past where the listener
+ * was. So they are put by instead - see {@link #hold} - and handed to the sound card when play is
+ * pressed, ahead of whatever the daemon sends next. The two join exactly, because the card's own
+ * retained buffer, the hold and the live pipe are three consecutive stretches of one track in the
+ * order they were decoded.
+ *
  * <p><strong>A pipe holds stale audio, and a file does not.</strong> After a seek or a track change
  * the pipe still contains up to a bufferful of the previous moment, and playing it would put a
  * fraction of a second of the wrong music at the front of every track. The reader drops it instead -
@@ -79,6 +90,30 @@ public class SpotifyAudioSource implements AudioSource {
     /** Blocks the sound card buffers ahead. Small, so the taps stay level with the sound. */
     private static final int LINE_BUFFER_BLOCKS = 4;
 
+    /**
+     * How much decoded-but-unheard audio a pause may put by before it has to start discarding.
+     *
+     * <p>Generous on purpose, and bounded on purpose. What has to fit is everything the daemon
+     * emits between {@code playing} going false and it acting on {@code /player/pause} - a round
+     * trip at twenty-four times realtime, so a few hundred milliseconds - plus whatever
+     * {@link #settle()} then watches go by. Six seconds is an order of magnitude clear of that and
+     * costs about a megabyte, which is nothing beside losing a second of the song every time
+     * somebody pauses. The cap is what stops a daemon that never actually pauses from turning a
+     * bounded fault into an unbounded one; past it, the excess is discarded exactly as it used to
+     * be and {@link #advanceBase} keeps the clock honest about it.
+     */
+    private static final double HOLD_SECONDS = 6;
+
+    /**
+     * {@link #HOLD_SECONDS} in bytes, rounded up to a whole number of blocks.
+     *
+     * <p>Package private so {@code SpotifyAudioSourceTest} can write past it rather than write a
+     * second copy of this arithmetic down and watch the two drift.
+     */
+    static final int HOLD_CAPACITY_BYTES = (int) Math.ceil(
+            HOLD_SECONDS * AppConfig.SAMPLE_RATE * AppConfig.BYTES_PER_FRAME / (double) BLOCK_BYTES)
+            * BLOCK_BYTES;
+
     /** How long {@link #close()} waits for the reader thread to notice and stop. */
     private static final long THREAD_JOIN_MILLIS = 500;
 
@@ -96,6 +131,24 @@ public class SpotifyAudioSource implements AudioSource {
     private final SpotifyApi api;
     private final Object readerLock = new Object();
     private final Object clockLock = new Object();
+    private final Object holdLock = new Object();
+
+    /**
+     * Audio taken off the pipe and not yet handed to the sound card.
+     *
+     * <p>A plain byte ring rather than a queue of blocks: nothing is allocated per block, and the
+     * card is written to from it directly. Empty for the whole of ordinary playback - the card is
+     * what paces the reader, so a block is normally read and written in the same turn of the loop -
+     * and it fills only while playback is stopped. Its capacity is a whole number of blocks, so a
+     * frame can never straddle the wrap.
+     */
+    private final byte[] hold = new byte[HOLD_CAPACITY_BYTES];
+
+    /** Where the next byte the card is owed sits in {@link #hold}. */
+    private int holdHead;
+
+    /** How much of {@link #hold} is waiting. Guarded by {@link #holdLock}. */
+    private int holdSize;
     private final List<PcmListener> listeners = new CopyOnWriteArrayList<>();
 
     /** The read end of the pipe, opened once and held for the life of this source. */
@@ -194,6 +247,8 @@ public class SpotifyAudioSource implements AudioSource {
                     + " - is Spotify connected?");
         }
         settle();
+        // Whatever the last track left waiting for the card belongs to the last track.
+        clearHeld();
         stale = false;
         rebase(0);
         publishSilence();
@@ -314,10 +369,19 @@ public class SpotifyAudioSource implements AudioSource {
         // Only the writing to the sound card stops. The reader goes on draining the pipe, or the
         // daemon blocks inside write() and its whole API stops answering - including the
         // /player/resume that would have undone this. See startReader().
+        //
+        // What it drains is put by rather than thrown away. The daemon is free to run at decode
+        // speed the moment the card stops pacing it, and it goes on doing so until it acts on the
+        // command below - so everything between here and there is music that was decoded, never
+        // heard, and would never be heard again, because a resume carries on from where the daemon
+        // got to. That was measured as most of a second missing at every pause. See hold().
         playing = false;
         api.pause();
         SourceDataLine open = line;
         if (open != null) {
+            // Stopped, deliberately not flushed: what the card is still holding is the next thing
+            // the listener is owed, and start() plays it out ahead of the hold. The card's buffer,
+            // the hold and the live pipe are three consecutive stretches of the same track.
             open.stop();
         }
         // Settled before the meters are cleared, so the last blocks the daemon emitted before it
@@ -351,8 +415,10 @@ public class SpotifyAudioSource implements AudioSource {
         if (!api.seek(targetMillis)) {
             LOG.warning("go-librespot refused a seek to " + targetMillis + " ms");
         }
-        // Order matters: the daemon has moved, so what is still in the pipe is from where it was.
+        // Order matters: the daemon has moved, so what is still in the pipe - and whatever a pause
+        // left waiting for the card - is from where it was.
         settle();
+        clearHeld();
         stale = false;
         rebase(Math.round(targetMillis / 1000d * AppConfig.SAMPLE_RATE));
         publishSilence();
@@ -439,16 +505,25 @@ public class SpotifyAudioSource implements AudioSource {
      *
      * <ul>
      *   <li><strong>Stale</strong> - the daemon has just been repositioned, so what is in the pipe
-     *       belongs to where it used to be. Dropped without reaching the taps.</li>
-     *   <li><strong>Paused</strong> - published to the taps but not written to the sound card. The
-     *       taps are what {@code StreamBeatmapBuilder} folds into its novelty curve, and that curve
-     *       is a position in the track measured in samples: dropping the blocks the daemon emits
-     *       before it notices the pause would leave a hole in it, and a hole is worse than no curve
-     *       because nothing downstream can tell. The frames are added to the clock's base instead,
-     *       so {@link #position()} still reports where the track really is.</li>
-     *   <li><strong>Playing</strong> - published and written, and {@code write} is what paces the
-     *       daemon.</li>
+     *       belongs to where it used to be. Dropped without reaching the taps or the hold.</li>
+     *   <li><strong>Paused</strong> - published to the taps and put in {@link #hold}, but not
+     *       written to the sound card. The taps are what {@code StreamBeatmapBuilder} folds into its
+     *       novelty curve, and that curve is a position in the track measured in samples: dropping
+     *       the blocks the daemon emits before it notices the pause would leave a hole in it, and a
+     *       hole is worse than no curve because nothing downstream can tell. <strong>Holding them
+     *       rather than discarding them is what stops a resume skipping ahead</strong> - the daemon
+     *       carries on from where it had decoded to, which is a good way past where the listener
+     *       was, so anything dropped here is music nobody ever hears. Only what will not fit is
+     *       written off, and {@link #advanceBase} moves the clock past that much.</li>
+     *   <li><strong>Playing</strong> - published, held, and handed straight back out to the card,
+     *       whose {@code write} is what paces the daemon.</li>
      * </ul>
+     *
+     * <p><strong>The read is only allowed to block when nothing is waiting for the card.</strong>
+     * Ordinarily the hold is empty and this is the plain read-then-write loop it always was. With
+     * audio held - the first turns after a resume - blocking on a quiet pipe would starve the
+     * speakers of music that is already in hand, so the pipe is only taken from when it has
+     * something to give.
      */
     private void readerLoop() {
         byte[] block = new byte[BLOCK_BYTES];
@@ -459,48 +534,51 @@ public class SpotifyAudioSource implements AudioSource {
                 return;
             }
 
+            SourceDataLine sink = line;
+            boolean toTheCard = playing && sink != null;
+
             // The daemon runs ahead of the speakers by however much the pipe holds, so its
             // "stopped" arrives while the last of the track is still in flight. Playing that out
             // before announcing the end is the difference between a clean transition and every
             // streamed track being clipped - up to a pipe buffer plus a card buffer, which is
-            // getting on for half a second and is plainly audible.
-            if (finishing && available(source) <= 0) {
+            // getting on for half a second and is plainly audible. The hold is in flight for
+            // exactly the same reason and is waited for on exactly the same terms.
+            if (finishing && available(source) <= 0 && heldBytes() <= 0) {
                 finish();
                 continue;
             }
 
-            int read;
-            try {
-                read = source.read(block, 0, block.length);
-            } catch (IOException e) {
-                if (!closed) {
-                    LOG.log(Level.WARNING,
-                            "Playback stopped: could not read the Spotify audio pipe", e);
+            if (!toTheCard || heldBytes() <= 0 || available(source) > 0) {
+                int read;
+                try {
+                    read = source.read(block, 0, block.length);
+                } catch (IOException e) {
+                    if (!closed) {
+                        LOG.log(Level.WARNING,
+                                "Playback stopped: could not read the Spotify audio pipe", e);
+                    }
+                    return;
                 }
-                return;
-            }
-            if (read < 0) {
-                // Only reachable once our own keep-alive writer is gone, which is close().
-                return;
-            }
-            if (read == 0) {
-                continue;
+                if (read < 0) {
+                    // Only reachable once our own keep-alive writer is gone, which is close().
+                    return;
+                }
+                if (read > 0 && !stale) {
+                    // Tap first, then hold. The tap must never consume the block, and it sees every
+                    // block exactly once whether or not the card has had it yet - which is what
+                    // keeps a streamed beatmap's novelty curve continuous across a pause.
+                    publish(block, read);
+                    int kept = hold(block, read);
+                    if (kept < read) {
+                        // The hold is full, so this much genuinely is lost - the daemon resumes
+                        // from after it. Banked, or the clock falls behind the music by that much.
+                        advanceBase((read - kept) / AppConfig.BYTES_PER_FRAME);
+                    }
+                }
             }
 
-            if (stale) {
-                continue;
-            }
-
-            // Tap first, then forward. The tap must never consume the block.
-            publish(block, read);
-
-            SourceDataLine sink = line;
-            if (playing && sink != null) {
-                writeFully(sink, block, read);
-            } else {
-                // Analysed but never heard, so the card's frame counter cannot account for it.
-                // Banked, or the clock falls behind the track by whatever each pause discarded.
-                advanceBase(read / AppConfig.BYTES_PER_FRAME);
+            if (toTheCard) {
+                writeOneHeldBlock(sink, block);
             }
         }
     }
@@ -518,26 +596,112 @@ public class SpotifyAudioSource implements AudioSource {
     }
 
     /**
-     * Writes one block, giving up on the remainder if playback stops part-way through.
+     * Hands the card at most one block of what is being held, giving up if playback stops part-way.
      *
-     * <p>What is left is dropped rather than held onto: this thread's first duty is to get back to
-     * reading the pipe, and a block half-written when the user hit pause is a block they are not
-     * going to hear anyway.
+     * <p>Only what the card actually took is dropped from the hold. What is left stays exactly
+     * where it is: this thread's first duty is to get back to reading the pipe, and the block the
+     * user was part-way through when they pressed pause is the very next thing they will hear when
+     * they press play. One block at a time rather than the whole hold, so that a resume with a
+     * second of audio in hand still comes back to the pipe every twenty-three milliseconds - the
+     * daemon has to be able to place a block that often or its API stops answering.
      *
-     * @param sink   the open line
-     * @param block  the bytes to write
-     * @param length how many of them
+     * @param sink    the open line
+     * @param scratch working space, at least {@link #BLOCK_BYTES} long
      */
-    private void writeFully(SourceDataLine sink, byte[] block, int length) {
+    private void writeOneHeldBlock(SourceDataLine sink, byte[] scratch) {
+        int length = peekHeld(scratch);
         int written = 0;
         while (written < length && playing && !closed) {
-            int count = sink.write(block, written, length - written);
+            int count = sink.write(scratch, written, length - written);
             if (count <= 0) {
                 break;
             }
             written += count;
         }
-        advanceBase((length - written) / AppConfig.BYTES_PER_FRAME);
+        dropHeld(written);
+    }
+
+    // ------------------------------------------------------------------
+    // The hold
+    // ------------------------------------------------------------------
+
+    /**
+     * @return how much audio is waiting for the sound card
+     */
+    private int heldBytes() {
+        synchronized (holdLock) {
+            return holdSize;
+        }
+    }
+
+    /**
+     * Puts audio by until the card is willing to take it.
+     *
+     * @param block  the bytes just read
+     * @param length how many of them
+     * @return how many were kept; anything short of {@code length} means the hold is full
+     */
+    private int hold(byte[] block, int length) {
+        synchronized (holdLock) {
+            int keep = Math.min(hold.length - holdSize, length);
+            // Frame aligned, so a full hold can never leave half a sample behind - the ring's own
+            // capacity is a whole number of blocks, so the wrap cannot split one either.
+            keep -= keep % AppConfig.BYTES_PER_FRAME;
+            int tail = (holdHead + holdSize) % hold.length;
+            int first = Math.min(keep, hold.length - tail);
+            System.arraycopy(block, 0, hold, tail, first);
+            System.arraycopy(block, first, hold, 0, keep - first);
+            holdSize += keep;
+            return keep;
+        }
+    }
+
+    /**
+     * Copies out the front of the hold without consuming it.
+     *
+     * <p>Not consumed here because the card may refuse part of it, and what it refused has still
+     * not been heard. {@link #dropHeld} is called with what it actually took.
+     *
+     * @param into where to copy, and how much to copy is its length
+     * @return how many bytes were copied
+     */
+    private int peekHeld(byte[] into) {
+        synchronized (holdLock) {
+            int take = Math.min(holdSize, into.length);
+            take -= take % AppConfig.BYTES_PER_FRAME;
+            int first = Math.min(take, hold.length - holdHead);
+            System.arraycopy(hold, holdHead, into, 0, first);
+            System.arraycopy(hold, 0, into, first, take - first);
+            return take;
+        }
+    }
+
+    /**
+     * @param bytes how much of the front of the hold has now been heard
+     */
+    private void dropHeld(int bytes) {
+        if (bytes <= 0) {
+            return;
+        }
+        synchronized (holdLock) {
+            int drop = Math.min(bytes, holdSize);
+            holdHead = (holdHead + drop) % hold.length;
+            holdSize -= drop;
+        }
+    }
+
+    /**
+     * Throws the hold away, because what is in it no longer belongs to where the daemon is.
+     *
+     * <p>Called wherever {@link #stale} is - a seek, a new track, a stop. The hold is audio from
+     * before the move, and playing it afterwards would put a fraction of a second of the previous
+     * moment at the front of the new one, which is the very thing {@code stale} exists to prevent.
+     */
+    private void clearHeld() {
+        synchronized (holdLock) {
+            holdHead = 0;
+            holdSize = 0;
+        }
     }
 
     /**
@@ -693,11 +857,12 @@ public class SpotifyAudioSource implements AudioSource {
     }
 
     /**
-     * Banks frames the daemon produced that the sound card never played.
+     * Banks frames the daemon produced that the sound card will never play.
      *
-     * <p>Whatever the reader drops while paused is time the track genuinely advanced by - the
-     * daemon resumes from after it - so leaving it out would put {@link #position()} behind the
-     * music by that much at every pause, and the runner's whole lookahead reads off that clock.
+     * <p>Only reached when {@link #hold} is full, which is a daemon that has not acted on a pause
+     * after six seconds of audio. What is dropped there is time the track genuinely advanced by -
+     * the daemon resumes from after it - so leaving it out would put {@link #position()} behind the
+     * music by that much, and the runner's whole lookahead reads off that clock.
      *
      * @param frames how many frames were dropped; zero or fewer is ignored
      */
@@ -815,6 +980,7 @@ public class SpotifyAudioSource implements AudioSource {
             }
         }
 
+        clearHeld();
         listeners.clear();
         trackUri = null;
     }

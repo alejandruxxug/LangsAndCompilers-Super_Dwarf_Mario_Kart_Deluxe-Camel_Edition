@@ -2138,7 +2138,7 @@ public class App extends Application {
         reportBeatmap();
         reportStreamedBeatmap();
         reportCourse();
-        reportRunner(scene);
+        boolean runnerOk = reportRunner(scene);
         boolean companionOk = reportCompanion();
         System.out.println("[smoke] assets found      : " + assets.size());
         System.out.println("[smoke] asset manifest    : " + assets.manifestFile());
@@ -2207,6 +2207,9 @@ public class App extends Application {
         }
         if (!foldOk) {
             failures.add("dsa fold");
+        }
+        if (!runnerOk) {
+            failures.add("stopped steering");
         }
         if (!companionOk) {
             failures.add("companion window");
@@ -3602,7 +3605,7 @@ public class App extends Application {
      *
      * @param scene the scene to deliver keys to
      */
-    private void reportRunner(Scene scene) {
+    private boolean reportRunner(Scene scene) {
         toggleRace();
         layoutNow(scene);
         runner.previewAt(screenshotMoment());
@@ -3644,7 +3647,48 @@ public class App extends Application {
                 perFrame, 1000 / perFrame,
                 perFrame < 16.6 ? "- comfortably inside a 60 fps frame" : "- TOO SLOW FOR 60 FPS");
 
+        boolean arrowsStayed = reportStoppedSteering(scene);
+
         toggleRace();
+        return arrowsStayed;
+    }
+
+    /**
+     * Presses the arrows at a stopped race and checks the running order did not move.
+     *
+     * <p><strong>This is the one state the fault lived in, and it is a different question from
+     * whether steering works.</strong> The driving filter used to return early whenever the music
+     * was stopped, which handed the arrows straight back to the transport - so an arrow pressed at
+     * a paused kart, on a screen drawing its own steering prompt across the middle, changed the
+     * track. On a streamed song that reaches Spotify itself: go-librespot is a Connect device, so
+     * the running order moving is a skip on every other device signed into the account. Reported as
+     * "pressing right on a running race skips the Spotify song".
+     *
+     * <p>Nothing about the road's picture reports it and no unit test reaches it, for the reason
+     * every other check in this method exists: it lives entirely in how the scene routes an event.
+     * So the state is set up on purpose - the music is stopped rather than waited for - and what is
+     * read afterwards is the running order rather than the lane.
+     *
+     * @param scene the scene to deliver keys to
+     * @return whether the arrows stayed with the road
+     */
+    private boolean reportStoppedSteering(Scene scene) {
+        boolean wasPlaying = engine.isPlaying();
+        engine.pause();
+
+        Song before = player.current();
+        fireKey(scene, KeyCode.LEFT);
+        fireKey(scene, KeyCode.RIGHT);
+        boolean stayed = player.current() == before;
+
+        System.out.println("[smoke] stopped steering  : " + (stayed
+                ? "the arrows stayed with the road"
+                : "AN ARROW CHANGED THE SONG at a stopped race"));
+
+        if (wasPlaying) {
+            engine.play();
+        }
+        return stayed;
     }
 
     /**

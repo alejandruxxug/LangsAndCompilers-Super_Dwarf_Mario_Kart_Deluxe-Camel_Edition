@@ -896,23 +896,25 @@ public class RunnerView extends BorderPane {
             event.consume();
             return;
         }
-        if (!isRunningWithAudio()) {
-            // The music is stopped, so the run is stopped. Steering a frozen kart to line up an
-            // obstacle that cannot reach it is not a control, it is an exploit - and space has to
-            // reach the transport while paused, or the play key stops working exactly when it is
-            // the only one the user wants.
-            return;
-        }
+        // The music being stopped stops the run, so nothing here moves the kart. What it does not
+        // do is hand the steering keys to anything else - see the two cases below, which differ.
+        boolean running = isRunningWithAudio();
         switch (event.getCode()) {
             case LEFT, A -> {
-                game.moveLeft();
+                steer(running, Lane.LEFT);
                 event.consume();
             }
             case RIGHT, D -> {
-                game.moveRight();
+                steer(running, Lane.RIGHT);
                 event.consume();
             }
             case SPACE, UP, W -> {
+                // Deliberately not claimed while the music is stopped: space is also the play key,
+                // and it has to reach the transport at exactly the moment it is the only one the
+                // user wants. Nothing else answers an arrow, so nothing else needs one.
+                if (!running) {
+                    return;
+                }
                 game.jump();
                 if (diagnostics != null) {
                     diagnostics.jumpPressed(game.now());
@@ -924,6 +926,40 @@ public class RunnerView extends BorderPane {
             }
         }
     };
+
+    /**
+     * Answers one steering key, and swallows it whether or not there was anything to steer.
+     *
+     * <p><strong>Consumed unconditionally, and that is the fix for an arrow skipping the song.</strong>
+     * These used to fall through to the transport whenever the music was stopped, because the whole
+     * filter returned early - so an arrow pressed at a paused kart, on a screen that is drawing
+     * {@code LEFT/RIGHT STEER} across the middle of it, changed the track instead. On a streamed
+     * track that reaches Spotify itself: go-librespot is a Connect device, so the running order
+     * moving is a skip on every other device signed into the account. Reported as
+     * "pressing right on a running race skips the Spotify song".
+     *
+     * <p>It is also the more honest reading of the two possible ones. While the road is on screen
+     * the arrows are the steering keys and nothing else - {@code F6} and {@code Esc} hand them back,
+     * and the transport's own buttons are a click away - so an arrow arriving here has already been
+     * answered, and passing it on can only be a second, unrelated thing happening to the same press.
+     *
+     * <p>The kart still does not move while the music is stopped. Steering a frozen kart to line up
+     * an obstacle that cannot reach it is not a control, it is a way of driving the course with the
+     * clock switched off.
+     *
+     * @param running whether the music - and therefore the run - is going
+     * @param towards which way the press asked for
+     */
+    private void steer(boolean running, Lane towards) {
+        if (!running) {
+            return;
+        }
+        if (towards == Lane.LEFT) {
+            game.moveLeft();
+        } else {
+            game.moveRight();
+        }
+    }
 
     // ------------------------------------------------------------------
     // The frame loop

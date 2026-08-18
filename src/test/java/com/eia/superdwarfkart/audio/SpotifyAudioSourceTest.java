@@ -41,6 +41,13 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * tests write far more than any FIFO buffer holds while the source is stopped, and a reader that
  * parks fails them by hanging rather than by disagreeing.
  *
+ * <p><strong>Draining it is not the same as keeping it, and the second bug was the other half of
+ * the first.</strong> The reader consumed the pipe correctly and then discarded everything it read
+ * while stopped, banking the frames onto the clock. That is most of a second of music the listener
+ * never hears at every pause, because the daemon resumes from where it had decoded to rather than
+ * from where the sound stopped - reported as "when I pause a Spotify song and resume it skips a bit
+ * of the song". It is held now, and the clock stays where the sound did.
+ *
  * <p>A real FIFO and a real socket rather than seams, for the reason {@code SpotifyApiTest} gives:
  * what breaks here is the behaviour of a pipe, and a mock would agree with whatever the code did.
  */
@@ -115,7 +122,7 @@ class SpotifyAudioSourceTest {
         // parked in. The daemon is told nothing more after this.
         source.load("spotify:track:0000000000000000000000");
 
-        writeToPipeOnItsOwnThread();
+        writeToPipe(TOTAL_BYTES);
 
         assertTrue(everything.await(DRAIN_TIMEOUT_SECONDS, TimeUnit.SECONDS),
                 "A stopped source must go on reading the pipe, or go-librespot blocks inside "
@@ -124,8 +131,8 @@ class SpotifyAudioSourceTest {
     }
 
     @Test
-    @DisplayName("audio decoded but never heard still moves the clock")
-    void droppedAudioIsBankedOntoThePosition() throws Exception {
+    @DisplayName("audio decoded while stopped is kept for the card, not written off the clock")
+    void audioDecodedWhileStoppedIsHeldRatherThanSkipped() throws Exception {
         CountDownLatch everything = new CountDownLatch(1);
         AtomicLong received = new AtomicLong();
         source.addPcmListener((buffer, offset, length) -> {
@@ -137,33 +144,67 @@ class SpotifyAudioSourceTest {
         source.load("spotify:track:0000000000000000000000");
         assertEquals(0, source.position().toMillis(), "a freshly loaded track starts at zero");
 
-        writeToPipeOnItsOwnThread();
+        writeToPipe(TOTAL_BYTES);
         assertTrue(everything.await(DRAIN_TIMEOUT_SECONDS, TimeUnit.SECONDS),
                 "the reader did not consume the pipe");
 
-        // The daemon resumes from after whatever it emitted, so frames that were dropped rather
-        // than played are still time the track advanced by. Left out, the clock falls behind the
-        // music at every pause - and the runner's lookahead reads off this clock.
+        // This is the pause skip, in the one place it can be measured without a sound card. The
+        // daemon is only paced by our reads, so it runs at decode speed the moment playback stops
+        // and empties several hundred milliseconds of music into the pipe before it acts on the
+        // pause. That music has to come off the pipe or the daemon's whole API wedges - and the
+        // version of this class that then threw it away lost every byte of it, because a resume
+        // carries on from where the daemon reached rather than from where the listener was.
+        // Held instead, so the clock stays where the music stopped and the card gets it on resume.
+        assertEquals(0, source.position().toMillis(),
+                "audio waiting for the sound card is not audio the listener has missed, so the "
+                        + "clock must not run past it - that gap is exactly the resume skip");
+    }
+
+    @Test
+    @DisplayName("what will not fit in the hold is written off the clock, so it cannot fall behind")
+    void audioBeyondTheHoldIsBankedOntoThePosition() throws Exception {
+        int overflow = 16 * BLOCK_BYTES;
+        int total = SpotifyAudioSource.HOLD_CAPACITY_BYTES + overflow;
+
+        CountDownLatch everything = new CountDownLatch(1);
+        AtomicLong received = new AtomicLong();
+        source.addPcmListener((buffer, offset, length) -> {
+            if (received.addAndGet(length) >= total) {
+                everything.countDown();
+            }
+        });
+
+        source.load("spotify:track:0000000000000000000000");
+        writeToPipe(total);
+        assertTrue(everything.await(DRAIN_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "the reader did not consume the pipe: got " + received.get() + " of " + total);
+
+        // The hold is bounded on purpose - a daemon that never acts on a pause must not be able to
+        // turn a fault this class can absorb into one it cannot. Past the cap the audio genuinely
+        // is lost, and the daemon resumes from after it, so the clock has to move past it too or
+        // the runner's lookahead reads a position behind the music for the rest of the track.
         long expectedMillis = Math.round(
-                TOTAL_BYTES / (double) AppConfig.BYTES_PER_FRAME / AppConfig.SAMPLE_RATE * 1000);
+                overflow / (double) AppConfig.BYTES_PER_FRAME / AppConfig.SAMPLE_RATE * 1000);
         long actualMillis = source.position().toMillis();
         assertTrue(Math.abs(actualMillis - expectedMillis) <= 5,
-                "position should have advanced by the dropped audio: expected about "
-                        + expectedMillis + " ms, got " + actualMillis + " ms");
+                "only the overflow should reach the clock: expected about " + expectedMillis
+                        + " ms, got " + actualMillis + " ms");
     }
 
     /**
-     * Writes the test's audio into the FIFO from a thread of its own.
+     * Writes audio into the FIFO from a thread of its own.
      *
      * <p>On its own thread because that is the failure being checked: with nothing reading, this
      * write blocks once the kernel buffer fills, and a blocked write on the test thread would hang
      * the run rather than fail it.
+     *
+     * @param bytes how much to write, a whole number of blocks
      */
-    private void writeToPipeOnItsOwnThread() {
+    private void writeToPipe(int bytes) {
         Thread writer = new Thread(() -> {
             try (OutputStream out = new FileOutputStream(fifo.toFile())) {
                 byte[] block = new byte[BLOCK_BYTES];
-                for (int i = 0; i < BLOCKS; i++) {
+                for (int i = 0; i < bytes / BLOCK_BYTES; i++) {
                     // Anything non-zero; the content is irrelevant, the flow is the point.
                     java.util.Arrays.fill(block, (byte) (i + 1));
                     out.write(block);
