@@ -34,8 +34,15 @@ public final class AppConfig {
     /** Name of the per-user configuration and cache directory, created under the home directory. */
     public static final String APP_DIR = ".superdwarfkart";
 
-    /** Application version, reported in the about box. */
-    public static final String APP_VERSION = "1.0-SNAPSHOT";
+    /**
+     * Application version, drawn on the boot screen, the shutdown screen, the title bar and the
+     * settings page.
+     *
+     * <p>Kept in step with the {@code <version>} in {@code pom.xml} by hand. This is the copy that
+     * matters: the build's version is read by Maven and the one on the start-up splash is read by
+     * whoever is watching, so a stale {@code SNAPSHOT} here is the one that gets noticed.
+     */
+    public static final String APP_VERSION = "1.0.0";
 
     // ------------------------------------------------------------------
     // Resources bundled in the jar

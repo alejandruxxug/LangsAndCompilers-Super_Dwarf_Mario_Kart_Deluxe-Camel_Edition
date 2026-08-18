@@ -6,10 +6,22 @@
 
     <groupId>com.eia</groupId>
     <artifactId>super-dwarf-mario-kart-deluxe-camel-edition</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>1.0.0</version>
     <!-- The display name is deliberate: underscores and hyphen included. See AppConfig.APP_NAME. -->
     <name>Super_Dwarf_Mario_Kart_Deluxe-Camel_Edition</name>
     <description>JavaFX music player with hand-written data structures and a beat-synced rhythm game</description>
+
+    <!-- Kept in step with AppConfig.APP_VERSION by hand, which is what the boot screen, the shutdown
+         screen, the title bar and the settings page all draw. Two places, and the one nobody sees is
+         this one - a stale "SNAPSHOT" on the start-up splash is the version that gets noticed. -->
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

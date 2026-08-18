@@ -518,3 +518,20 @@ screen before the title, where a console names whoever made the hardware.
 
 **Press Start 2P** by CodeMan38, bundled under the SIL Open Font License 1.1. The full licence
 text ships alongside the font at `src/main/resources/fonts/OFL.txt`.
+
+---
+
+## Licence
+
+[MIT](LICENSE). Use it, fork it, hand it in as an example — the only condition is that the
+copyright notice travels with it.
+
+Two things in this repository are **not** covered by that licence and carry their own:
+
+| | |
+|---|---|
+| **Press Start 2P** (`src/main/resources/fonts/`) | SIL Open Font License 1.1, text bundled beside it |
+| **go-librespot** | Not distributed here at all. It is fetched or installed by the user, and it is [GPL-3.0](https://github.com/devgianlu/go-librespot). This application talks to it over a pipe and an HTTP API as a separate process, and works fully without it. |
+
+The artwork in `src/main/resources/assets/` was drawn for this project by its authors and is
+covered by the same MIT licence as the code.
